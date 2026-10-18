@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+
+# Datasets and Experiments (非常重要，防止把 FBX 推送到 GitHub)
+mixamo_dataset/
+experiment_assets/
+data/
+outputs/
