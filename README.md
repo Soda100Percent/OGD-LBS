@@ -2,7 +2,7 @@
 
 # OGD-LBS
 
-> Code of Paper: **"Ordered Guided Decomposition: Example-Driven Mesh Simplification and Cross-Model Adaptation for LBS Characters"**
+> Code of Paper: **"OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters"**
 
 本项目包含了 OGD-LBS 论文的官方实现代码。
 
