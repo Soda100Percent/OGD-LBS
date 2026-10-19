@@ -1,0 +1,12 @@
+{
+    "Example_Group_1_VDB": {
+        "source_meshes": ["Head", "Torso"],
+        "voxel_size": 0.05,
+        "offset": 0.01
+    },
+    "Example_Group_2_VDB": {
+        "source_meshes": ["Armor"],
+        "voxel_size": 0.1,
+        "offset": 0.05
+    }
+}

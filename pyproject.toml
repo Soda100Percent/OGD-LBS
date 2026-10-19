@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ogd-lbs"
 version = "0.1.0"
-description = "Code of Paper: Ordered Guided Decomposition: Example-Driven Mesh Simplification and Cross-Model Adaptation for LBS Characters"
+description = "Code of Paper: OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters"
 authors = [
     {name = "Soda100Percent", email = "soda100percent@gmail.com"}
 ]
@@ -13,7 +13,8 @@ dependencies = [
     "numpy",
     "datasets==2.18.0",
     "huggingface_hub",
-    "pandas"
+    "pandas",
+    "PyYAML"
 ]
 requires-python = ">=3.9"
 
