@@ -38,9 +38,22 @@ def main():
     bpy.ops.wm.open_mainfile(filepath=str(input_path))
     ensure_object_mode()
 
-    # 强制 Armature 进入 REST Pose
+    # 从 manifest 读取生成 SDF 时的目标帧
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        manifest = json.load(f)
+    target_frame = manifest.get("target_frame", -1)
+
+    # 强制 Armature 对齐到目标姿态，方便 GUI 检查时完美重合
+    print(f"\n🛑 Aligning scene to target_frame = {target_frame}...")
     for arm in [obj for obj in bpy.data.objects if obj.type == 'ARMATURE']:
-        arm.data.pose_position = 'REST'
+        if target_frame >= 0:
+            arm.data.pose_position = 'POSE'
+        else:
+            arm.data.pose_position = 'REST'
+            
+    if target_frame >= 0:
+        bpy.context.scene.frame_set(target_frame)
+    bpy.context.view_layer.update()
 
     # 1. 原始网格大一统 (Original_Source_Mesh)
     original_meshes = [obj for obj in bpy.data.objects if obj.type == 'MESH']
@@ -66,9 +79,6 @@ def main():
 
     # 2. 导入 5.x 生成的 OBJ
     print(f"\n📥 Importing fused meshes from manifest: {manifest_path}")
-    with open(manifest_path, 'r', encoding='utf-8') as f:
-        manifest = json.load(f)
-        
     imported_mesh_names = []
     for target_name, obj_file in manifest.get("exports", {}).items():
         if not Path(obj_file).exists():
