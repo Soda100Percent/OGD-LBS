@@ -6,7 +6,7 @@ import math
 import pickle
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import bpy
 import numpy as np
@@ -32,6 +32,22 @@ KEY_BAKED_NORMALS = "baked_animation_vertex_normals"
 KEY_VERTEX_BONE_WEIGHTS = "vertex_bone_weights"
 
 
+def to_jsonable(obj: Any) -> Any:
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+
+    if isinstance(obj, np.generic):
+        return obj.item()
+
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(x) for x in obj]
+
+    return obj
+
+
 def save_data(path: str | Path, obj: dict[str, Any], fmt: str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,7 +56,7 @@ def save_data(path: str | Path, obj: dict[str, Any], fmt: str) -> None:
 
     if fmt == "json":
         with path.open("w", encoding="utf-8") as f:
-            json.dump(obj, f, indent=4)
+            json.dump(to_jsonable(obj), f, indent=4)
         return
 
     if fmt == "pkl":
@@ -63,8 +79,6 @@ def get_nla_frame_range(armature: bpy.types.Object) -> tuple[int, int]:
     Old plugin logic used:
         frame_start = ceil(strip.frame_start)
         frame_end   = ceil(strip.frame_end) + 1
-
-    We preserve that semantic.
     """
     frame_start = sys.maxsize
     frame_end = -sys.maxsize - 1
@@ -127,9 +141,9 @@ def export_animation(
     out_path: str | Path,
     *,
     fmt: str = "pkl",
-    frame_range: tuple[int, int] | None = None,
+    frames: Sequence[int] | None = None,
     progress_every: int = 100,
-) -> tuple[int, int]:
+) -> list[int]:
     if armature is None or armature.type != "ARMATURE":
         raise RuntimeError("export_animation expects an ARMATURE object.")
 
@@ -142,20 +156,27 @@ def export_animation(
         mat = armature.matrix_world @ armature.data.bones[bone_name].matrix_local.copy()
         rest_pose[bone_idx] = np.array(matrix_without_scale(mat), dtype=np.float64)
 
-    if frame_range is None:
+    if frames is None:
         frame_start, frame_end = get_nla_frame_range(armature)
+        export_frames = list(range(frame_start, frame_end))
     else:
-        frame_start, frame_end = int(frame_range[0]), int(frame_range[1])
+        export_frames = [int(frame) for frame in frames]
 
-    if frame_end <= frame_start:
-        raise RuntimeError(f"Invalid frame_range for export_animation: {frame_start}..{frame_end}")
+    if not export_frames:
+        raise RuntimeError("export_animation received an empty frame list.")
 
-    frame_count = int(frame_end - frame_start)
+    frame_count = len(export_frames)
     animation_poses = np.zeros((frame_count, bone_count, 4, 4), dtype=np.float64)
 
     print(
         f"   exporting animation: armature={armature.name}, "
-        f"frames={frame_count}, range={frame_start}..{frame_end - 1}, bones={bone_count}",
+        f"frames={frame_count}, first_scene_frame={export_frames[0]}, "
+        f"last_scene_frame={export_frames[-1]}, bones={bone_count}",
+        flush=True,
+    )
+    print(
+        "      note: rest_pose is exported separately; "
+        "animation_poses[0] is the first retained scene frame, not rest_pose.",
         flush=True,
     )
 
@@ -164,7 +185,7 @@ def export_animation(
 
     depsgraph = bpy.context.evaluated_depsgraph_get()
 
-    for frame_idx, frame in enumerate(range(frame_start, frame_end)):
+    for frame_idx, frame in enumerate(export_frames):
         if (
             frame_idx == 0
             or frame_idx == frame_count - 1
@@ -190,24 +211,33 @@ def export_animation(
                 continue
 
             mat = armature.matrix_world @ pose_bone.matrix.copy()
-            animation_poses[frame_idx, bone_idx] = np.array(matrix_without_scale(mat), dtype=np.float64)
+            animation_poses[frame_idx, bone_idx] = np.array(
+                matrix_without_scale(mat),
+                dtype=np.float64,
+            )
 
     armature.data.pose_position = old_pose_position
 
     data = {
         "bone_names": bone_names,
-        "rest_pose": rest_pose.tolist(),
-        "animation_poses": animation_poses.tolist(),
+        "rest_pose": rest_pose if fmt == "pkl" else rest_pose.tolist(),
+        "animation_poses": animation_poses if fmt == "pkl" else animation_poses.tolist(),
+        "scene_frames": np.array(export_frames, dtype=np.int64) if fmt == "pkl" else list(export_frames),
+        "rest_pose_semantics": (
+            "rest_pose is separate from animation_poses; animation_poses[0] "
+            "corresponds to scene_frames[0], not rest_pose."
+        ),
     }
 
     save_data(out_path, data, fmt)
     print(
         f"   saved animation: {out_path} "
-        f"(frames={frame_count}, bones={bone_count}, range={frame_start}..{frame_end - 1})",
+        f"(frames={frame_count}, bones={bone_count}, "
+        f"first={export_frames[0]}, last={export_frames[-1]})",
         flush=True,
     )
 
-    return frame_start, frame_end
+    return export_frames
 
 
 def safe_normalize_rows(arr: np.ndarray) -> np.ndarray:
@@ -216,9 +246,13 @@ def safe_normalize_rows(arr: np.ndarray) -> np.ndarray:
     return arr / norms
 
 
-def collect_mesh_static_data(mesh_obj: bpy.types.Object, bone_names: list[str]) -> dict[str, Any]:
+def collect_mesh_static_data(
+    mesh_obj: bpy.types.Object,
+    bone_names: list[str],
+    *,
+    fmt: str,
+) -> dict[str, Any]:
     vertices = np.array([mesh_obj.matrix_world @ v.co for v in mesh_obj.data.vertices], dtype=np.float64)
-
     faces = [list(poly.vertices) for poly in mesh_obj.data.polygons]
 
     raw_normals = np.array(
@@ -256,6 +290,19 @@ def collect_mesh_static_data(mesh_obj: bpy.types.Object, bone_names: list[str]) 
             if bone_idx is not None:
                 vertex_bone_weights[int(vertex.index), bone_idx] = float(assignment.weight)
 
+    if fmt == "pkl":
+        return {
+            "name": mesh_obj.name,
+            "vertices": vertices,
+            "faces": faces,
+            "vertex_normals": vertex_normals,
+            "face_uvs": face_uvs,
+            "vertex_bone_weights": vertex_bone_weights,
+            "face_materials": face_materials,
+            "material_names": material_names,
+            "bone_names": bone_names,
+        }
+
     return {
         "name": mesh_obj.name,
         "vertices": vertices.tolist(),
@@ -272,20 +319,21 @@ def collect_mesh_static_data(mesh_obj: bpy.types.Object, bone_names: list[str]) 
 def collect_baked_mesh_animation(
     mesh_obj: bpy.types.Object,
     *,
-    frame_range: tuple[int, int],
+    frames: Sequence[int],
     progress_every: int = 25,
 ) -> tuple[np.ndarray, np.ndarray]:
-    frame_start, frame_end = int(frame_range[0]), int(frame_range[1])
+    export_frames = [int(frame) for frame in frames]
 
-    if frame_end <= frame_start:
-        raise RuntimeError(f"Invalid frame_range for collect_baked_mesh_animation: {frame_start}..{frame_end}")
+    if not export_frames:
+        raise RuntimeError("collect_baked_mesh_animation received an empty frame list.")
 
-    frame_count = int(frame_end - frame_start)
+    frame_count = len(export_frames)
     vertex_count = len(mesh_obj.data.vertices)
 
     print(
         f"   baking mesh animation: mesh={mesh_obj.name}, "
-        f"verts={vertex_count}, frames={frame_count}, range={frame_start}..{frame_end - 1}",
+        f"verts={vertex_count}, frames={frame_count}, "
+        f"first_scene_frame={export_frames[0]}, last_scene_frame={export_frames[-1]}",
         flush=True,
     )
 
@@ -294,7 +342,7 @@ def collect_baked_mesh_animation(
 
     depsgraph = bpy.context.evaluated_depsgraph_get()
 
-    for frame_idx, frame in enumerate(range(frame_start, frame_end)):
+    for frame_idx, frame in enumerate(export_frames):
         if (
             frame_idx == 0
             or frame_idx == frame_count - 1
@@ -342,7 +390,7 @@ def export_mesh(
     out_path: str | Path,
     *,
     fmt: str = "pkl",
-    frame_range: tuple[int, int],
+    frames: Sequence[int],
     progress_every: int = 25,
 ) -> None:
     if mesh_obj is None or mesh_obj.type != "MESH":
@@ -351,24 +399,32 @@ def export_mesh(
     if reference_armature is None or reference_armature.type != "ARMATURE":
         raise RuntimeError("export_mesh expects an ARMATURE reference object.")
 
+    fmt = fmt.lower()
     bone_names = [bone.name for bone in reference_armature.data.bones]
 
     print(
         f"   exporting mesh: {mesh_obj.name} "
-        f"(verts={len(mesh_obj.data.vertices)}, faces={len(mesh_obj.data.polygons)}, ref_bones={len(bone_names)})",
+        f"(verts={len(mesh_obj.data.vertices)}, faces={len(mesh_obj.data.polygons)}, "
+        f"ref_bones={len(bone_names)})",
         flush=True,
     )
 
-    data = collect_mesh_static_data(mesh_obj, bone_names)
+    data = collect_mesh_static_data(mesh_obj, bone_names, fmt=fmt)
 
     baked_v, baked_n = collect_baked_mesh_animation(
         mesh_obj,
-        frame_range=frame_range,
+        frames=frames,
         progress_every=progress_every,
     )
 
-    data["baked_animation_vertices"] = baked_v.tolist()
-    data["baked_animation_vertex_normals"] = baked_n.tolist()
+    if fmt == "pkl":
+        data["baked_animation_vertices"] = baked_v
+        data["baked_animation_vertex_normals"] = baked_n
+        data["scene_frames"] = np.array([int(x) for x in frames], dtype=np.int64)
+    else:
+        data["baked_animation_vertices"] = baked_v.tolist()
+        data["baked_animation_vertex_normals"] = baked_n.tolist()
+        data["scene_frames"] = [int(x) for x in frames]
 
     save_data(out_path, data, fmt)
     print(f"   saved mesh: {out_path}", flush=True)
