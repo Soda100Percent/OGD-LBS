@@ -435,7 +435,9 @@ def main() -> None:
 
     out_original = out_root / "fitbox_original"
     out_vdb = out_root / "fitbox_vdb"
-    out_reduced_root = out_root / "bone_reduced_versions"
+    # Reduced skeleton variants live inside fitbox_vdb so that the whole
+    # fitbox_vdb directory can be used directly as SSDR data0_json/data0.
+    out_reduced_root = out_vdb / "bone_reduced_versions"
 
     out_original.mkdir(parents=True, exist_ok=True)
     out_vdb.mkdir(parents=True, exist_ok=True)
@@ -568,7 +570,7 @@ def main() -> None:
         "outputs": {
             "fitbox_original": str(out_original),
             "fitbox_vdb": str(out_vdb),
-            "bone_reduced_versions": str(out_reduced_root),
+            "fitbox_vdb_bone_reduced_versions": str(out_reduced_root),
         },
         "rest_pose_semantics": (
             "Fitbox animation_data stores rest_pose separately. "
