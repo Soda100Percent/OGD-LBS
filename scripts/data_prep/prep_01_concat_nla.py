@@ -4,26 +4,24 @@
 """
 Prep 01: Concatenate all Actions into one NLA track.
 
-Default path behavior:
-    required:
-        --input_blend
+Staged data-prep behavior:
 
-    optional:
-        --output_blend
+    --input_dir <data_prep_work_dir>
+        reads : <data_prep_work_dir>/data_prep_00/<raw_asset>.blend
+        writes: <data_prep_work_dir>/data_prep_01/<asset>_prep_01.blend
 
-If --output_blend is omitted, the output is placed next to --input_blend:
+    --input_dir <data_prep_work_dir>/data_prep_00
+        reads : <data_prep_work_dir>/data_prep_00/<raw_asset>.blend
+        writes: <data_prep_work_dir>/data_prep_01/<asset>_prep_01.blend
 
-    <work_dir>/<base_stem>_prep_01.blend
+    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+        reads : <custom_input_tree>/<raw_asset>.blend
+        writes: <custom_output_tree>/<asset>_prep_01.blend
 
-Examples:
-
-    python scripts/data_prep/prep_01_concat_nla.py \\
-        --input_blend /workspace/data/dataset/Griffin_A2/Blender/Griffin_A2.blend
-
-    python scripts/data_prep/prep_01_concat_nla.py \\
-        --input_blend /workspace/data/dataset/Griffin_A2/Blender/Griffin_A2.blend \\
-        --output_blend /tmp/Griffin_A2_prep_01_test.blend \\
-        --gap 10
+Raw .blend discovery:
+    - Search direct children of input_tree.
+    - Exclude known staged files such as *_prep_01.blend.
+    - Exactly one raw .blend must exist; otherwise fail-fast.
 """
 
 from __future__ import annotations
@@ -33,9 +31,9 @@ import sys
 from pathlib import Path
 
 
-def ensure_repo_src_in_syspath() -> None:
+def ensure_repo_paths_in_syspath() -> None:
     """
-    Make src/ importable before importing ogd_lbs.
+    Make src/ and scripts/data_prep/ importable before importing ogd_lbs.
 
     This keeps the script robust in both:
         - editable install environments
@@ -46,13 +44,16 @@ def ensure_repo_src_in_syspath() -> None:
     for parent in [this_file.parent, *this_file.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src").exists():
             src_dir = parent / "src"
-            src_s = str(src_dir)
-            if src_s not in sys.path:
-                sys.path.insert(0, src_s)
+            data_prep_dir = parent / "scripts" / "data_prep"
+
+            for item in [src_dir, data_prep_dir]:
+                item_s = str(item)
+                if item_s not in sys.path:
+                    sys.path.insert(0, item_s)
             return
 
 
-ensure_repo_src_in_syspath()
+ensure_repo_paths_in_syspath()
 
 import bpy  # noqa: E402
 
@@ -64,7 +65,14 @@ from ogd_lbs.blender.object import (  # noqa: E402
 )
 from ogd_lbs.blender.animation import concat_all_actions_to_nla  # noqa: E402
 
-from paths import make_data_prep_context, prep_01_output_blend_rel  # noqa: E402
+from paths import (  # noqa: E402
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    print_data_prep_resolution_info,
+    discover_raw_input_blend,
+    extract_asset_base_stem,
+    prep_01_output_blend_name,
+)
 
 
 def parse_exclude_names(text: str) -> list[str]:
@@ -74,22 +82,39 @@ def parse_exclude_names(text: str) -> list[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
+def save_blend(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n💾 Saving to: {path}", flush=True)
+    save_result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
+    if save_result != {"FINISHED"}:
+        raise RuntimeError(f"Failed to save blend file: {path}, result={save_result}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prep 01: concatenate all actions into a single NLA track."
     )
 
     parser.add_argument(
-        "--input_blend",
+        "-i",
+        "--input_dir",
         type=str,
         required=True,
-        help="Path to the raw purchased .blend file.",
+        help=(
+            "Data-prep work_dir or data_prep_00 input tree. "
+            "The script discovers exactly one raw .blend inside data_prep_00."
+        ),
     )
     parser.add_argument(
-        "--output_blend",
+        "-o",
+        "--output_dir",
         type=str,
         default=None,
-        help="Optional output .blend path. Default: <work_dir>/<base_stem>_prep_01.blend.",
+        help=(
+            "Optional explicit output tree. If omitted, writes to "
+            "<work_dir>/data_prep_01."
+        ),
     )
     parser.add_argument(
         "--gap",
@@ -106,24 +131,37 @@ def main() -> None:
 
     args = parser.parse_args(script_argv())
 
-    ctx = make_data_prep_context(args.input_blend)
-
-    input_path = ctx.resolve_input(
-        "input_blend",
-        args.input_blend,
-        None,
-        expected_type="file",
-    )
-    output_path = ctx.resolve_output(
-        "output_blend",
-        args.output_blend,
-        prep_01_output_blend_rel(ctx),
-        expected_type="file",
+    resolution = resolve_data_prep_stage_dirs(
+        step_id="01",
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        step_title="Prep 01: NLA Concatenation",
     )
 
-    ctx.print_and_validate("Prep 01: NLA Concatenation")
+    print_data_prep_resolution_info(resolution)
 
-    print(f"📂 Loading: {input_path}", flush=True)
+    try:
+        validate_data_prep_stage_resolution(resolution)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    input_path = discover_raw_input_blend(resolution.input_tree)
+    base_stem = extract_asset_base_stem(input_path)
+    output_path = resolution.output_tree / prep_01_output_blend_name(base_stem)
+
+    if output_path.resolve(strict=False) == input_path.resolve(strict=False):
+        raise RuntimeError(
+            f"Output blend would overwrite input blend: {output_path}"
+        )
+
+    resolution.output_tree.mkdir(parents=True, exist_ok=True)
+
+    print("\n📋 Prep 01 resolved files:", flush=True)
+    print(f"   input_blend : {input_path}", flush=True)
+    print(f"   base_stem   : {base_stem}", flush=True)
+    print(f"   output_blend: {output_path}", flush=True)
+
+    print(f"\n📂 Loading: {input_path}", flush=True)
     result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
     if result != {"FINISHED"}:
         raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
@@ -159,10 +197,7 @@ def main() -> None:
         flush=True,
     )
 
-    print(f"\n💾 Saving to: {output_path}", flush=True)
-    save_result = bpy.ops.wm.save_as_mainfile(filepath=str(output_path))
-    if save_result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to save blend file: {output_path}, result={save_result}")
+    save_blend(output_path)
 
     print("🎉 Prep 01 done.", flush=True)
 

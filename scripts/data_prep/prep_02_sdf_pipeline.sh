@@ -6,8 +6,25 @@ set -euo pipefail
 #   02a: Blender 5.x SDF Grid fusion
 #   02b: Blender 4.x import fused OBJ and create Source_<VDB>
 #
-# This wrapper intentionally stays in scripts/data_prep because it is a CLI
-# orchestration layer, not reusable library code.
+# Staged data-prep behavior:
+#
+#   --input_dir <data_prep_work_dir>
+#       reads : <data_prep_work_dir>/data_prep_01/*_prep_01.blend
+#       writes: <data_prep_work_dir>/data_prep_02/
+#
+#   --input_dir <data_prep_work_dir>/data_prep_01
+#       reads : that stage input dir
+#       writes: <data_prep_work_dir>/data_prep_02/
+#
+#   --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+#       reads : <custom_input_tree>/*_prep_01.blend
+#       writes: <custom_output_tree>/
+#
+# This wrapper delegates actual work to:
+#   scripts/data_prep/prep_02a_sdf_fuse_5x.py
+#   scripts/data_prep/prep_02b_import_fused_4x.py
+#
+# Both sub-steps are called in staged directory mode.
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,10 +34,9 @@ cd "${PROJECT_ROOT}"
 BPY5_ENV="ogd-bpy52"
 BPY4_ENV="lao-lbs"
 
-INPUT_BLEND=""
+INPUT_DIR=""
+OUTPUT_DIR=""
 CONFIG=""
-OUT_DIR=""
-OUTPUT_BLEND=""
 
 TARGET_FRAME=""
 VOXEL_SIZE=""
@@ -40,17 +56,28 @@ print_usage() {
     cat << 'USAGE'
 Usage:
   bash scripts/data_prep/prep_02_sdf_pipeline.sh \
-      --input_blend /path/to/Asset_prep_01.blend \
+      --input_dir /path/to/data_prep_work_dir \
+      [--output_dir /path/to/custom_data_prep_02] \
       [--config /path/to/prep_02_sdf_merge_config.json] \
-      [--out_dir /path/to/sdf_exports] \
-      [--output_blend /path/to/Asset_prep_02.blend] \
       [--bpy5_env ogd-bpy52] \
       [--bpy4_env lao-lbs] \
       [Prep 02a options...]
 
 Required:
-  --input_blend PATH
-      Input Prep 01 .blend.
+  --input_dir PATH
+      Data-prep work_dir or data_prep_01 stage directory.
+
+      If PATH is work_dir:
+          input  = PATH/data_prep_01
+          output = PATH/data_prep_02
+
+      If PATH is work_dir/data_prep_01:
+          input  = PATH
+          output = work_dir/data_prep_02
+
+      If --output_dir is explicit and PATH is not a standard stage dir:
+          input  = PATH
+          output = --output_dir
 
 Environment:
   --bpy5_env NAME
@@ -62,20 +89,14 @@ Environment:
       Default: lao-lbs
 
 Path options:
+  --output_dir PATH
+      Optional explicit output tree.
+      If omitted, writes to <work_dir>/data_prep_02.
+
   --config PATH
-      Prep 02a SDF config.
+      Optional Prep 02a SDF config override.
       If omitted, Prep 02a uses:
           <work_dir>/prep_02_sdf_merge_config.json
-
-  --out_dir PATH
-      Prep 02a export directory.
-      If omitted, Prep 02a uses:
-          <work_dir>/<base_stem>_prep_01_sdf_exports/
-
-  --output_blend PATH
-      Prep 02b output blend.
-      If omitted, Prep 02b uses:
-          <work_dir>/<base_stem>_prep_02.blend
 
 Prep 02a runtime options:
   --target_frame N
@@ -96,21 +117,9 @@ Other:
   --dry_run
       Print commands but do not execute.
 
-Examples:
-
-  # Explicit test paths, recommended during migration:
+Example:
   bash scripts/data_prep/prep_02_sdf_pipeline.sh \
-      --input_blend /workspace/data/dataset/Griffin_A2/Blender/Griffin_A2_prep_01_stage02_test.blend \
-      --config configs/prep_02_sdf_merge_config_griffin.json \
-      --out_dir /workspace/data/dataset/Griffin_A2/Blender/Griffin_A2_prep_01_stage03_sdf_exports_pipeline \
-      --output_blend /workspace/data/dataset/Griffin_A2/Blender/Griffin_A2_prep_02_stage03_pipeline_test.blend \
-      --offset 15 \
-      --no_auto_offset
-
-  # Folder-convention mode:
-  # Put prep_02_sdf_merge_config.json next to Asset_prep_01.blend.
-  bash scripts/data_prep/prep_02_sdf_pipeline.sh \
-      --input_blend /path/to/Asset_prep_01.blend \
+      --input_dir "$DP" \
       --offset 15 \
       --no_auto_offset
 USAGE
@@ -127,24 +136,19 @@ require_value() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --input_blend)
+        --input_dir|-i)
             require_value "$1" "${2:-}"
-            INPUT_BLEND="$2"
+            INPUT_DIR="$2"
+            shift 2
+            ;;
+        --output_dir|-o)
+            require_value "$1" "${2:-}"
+            OUTPUT_DIR="$2"
             shift 2
             ;;
         --config)
             require_value "$1" "${2:-}"
             CONFIG="$2"
-            shift 2
-            ;;
-        --out_dir)
-            require_value "$1" "${2:-}"
-            OUT_DIR="$2"
-            shift 2
-            ;;
-        --output_blend)
-            require_value "$1" "${2:-}"
-            OUTPUT_BLEND="$2"
             shift 2
             ;;
         --bpy5_env)
@@ -226,16 +230,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${INPUT_BLEND}" ]]; then
-    echo "ERROR: --input_blend is required." >&2
+if [[ -z "${INPUT_DIR}" ]]; then
+    echo "ERROR: --input_dir is required." >&2
     echo >&2
     print_usage >&2
     exit 2
-fi
-
-if [[ ! -f "${INPUT_BLEND}" ]]; then
-    echo "ERROR: input blend does not exist: ${INPUT_BLEND}" >&2
-    exit 1
 fi
 
 if ! command -v conda >/dev/null 2>&1; then
@@ -255,63 +254,128 @@ if ! conda env list | awk '{print $1}' | grep -Fxq "${BPY4_ENV}"; then
     exit 1
 fi
 
-# Resolve expected manifest path. If --out_dir is explicit, manifest is there.
-# Otherwise mirror scripts/data_prep/paths.py base-stem convention.
-MANIFEST_PATH="$(
-python - "${INPUT_BLEND}" "${OUT_DIR}" << 'PY'
+# Resolve staged paths using scripts/data_prep/paths.py.
+eval "$(
+python - "${INPUT_DIR}" "${OUTPUT_DIR}" "${CONFIG}" << 'PY'
 from __future__ import annotations
-from pathlib import Path
+
+import shlex
 import sys
+from pathlib import Path
 
-input_blend = Path(sys.argv[1]).expanduser().resolve(strict=False)
-out_dir_arg = sys.argv[2]
+repo = Path.cwd()
+src = repo / "src"
+data_prep = repo / "scripts" / "data_prep"
 
-if out_dir_arg:
-    print(str((Path(out_dir_arg).expanduser().resolve(strict=False) / "manifest.json")))
-    raise SystemExit(0)
+for item in [src, data_prep]:
+    item_s = str(item)
+    if item_s not in sys.path:
+        sys.path.insert(0, item_s)
 
-suffixes = (
-    "_prep_04a_bone_pruning",
-    "_prep_03_LBS_baseline",
-    "_prep_03",
-    "_prep_02",
-    "_prep_01",
+from paths import (  # noqa: E402
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    discover_unique_blend,
+    extract_asset_base_stem,
+    prep_02b_output_blend_name,
 )
 
-stem = input_blend.stem
-for suffix in sorted(suffixes, key=len, reverse=True):
-    if stem.endswith(suffix):
-        stem = stem[:-len(suffix)]
-        break
+input_dir_arg = sys.argv[1]
+output_dir_arg = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].strip() else None
+config_arg = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3].strip() else None
 
-print(str((input_blend.parent / f"{stem}_prep_01_sdf_exports" / "manifest.json").resolve(strict=False)))
+res = resolve_data_prep_stage_dirs(
+    step_id="02",
+    input_dir=input_dir_arg,
+    output_dir=output_dir_arg,
+    step_title="Prep 02: SDF Fusion + Import",
+)
+validate_data_prep_stage_resolution(res)
+
+input_blend = discover_unique_blend(
+    res.input_tree,
+    pattern="*_prep_01.blend",
+    role="Prep 02 input blend",
+)
+
+base_stem = extract_asset_base_stem(input_blend)
+
+if config_arg:
+    config_path = Path(config_arg).expanduser().resolve(strict=False)
+    config_source = "EXPLICIT_OVERRIDE"
+else:
+    config_path = (res.work_dir / "prep_02_sdf_merge_config.json").resolve(strict=False)
+    config_source = "WORK_DIR_DEFAULT"
+
+out_dir = (res.output_tree / "sdf_exports").resolve(strict=False)
+manifest_path = (out_dir / "manifest.json").resolve(strict=False)
+output_blend = (res.output_tree / prep_02b_output_blend_name(base_stem)).resolve(strict=False)
+
+items = {
+    "RES_STEP_ID": res.step_id,
+    "RES_MODE": res.mode,
+    "RES_WORK_DIR": str(res.work_dir),
+    "RES_INPUT_TREE": str(res.input_tree),
+    "RES_OUTPUT_TREE": str(res.output_tree),
+    "RES_INPUT_SOURCE": res.input_source,
+    "RES_OUTPUT_SOURCE": res.output_source,
+    "RES_INPUT_STAGE_DIR": res.input_stage_dir_name,
+    "RES_OUTPUT_STAGE_DIR": res.output_stage_dir_name,
+    "RES_INPUT_BLEND": str(input_blend),
+    "RES_BASE_STEM": str(base_stem),
+    "RES_CONFIG": str(config_path),
+    "RES_CONFIG_SOURCE": config_source,
+    "RES_OUT_DIR": str(out_dir),
+    "RES_MANIFEST": str(manifest_path),
+    "RES_OUTPUT_BLEND": str(output_blend),
+}
+
+for key, value in items.items():
+    print(f"{key}={shlex.quote(value)}")
 PY
 )"
+
+if [[ ! -f "${RES_INPUT_BLEND}" ]]; then
+    echo "ERROR: resolved input blend does not exist: ${RES_INPUT_BLEND}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${RES_CONFIG}" ]]; then
+    echo "ERROR: resolved config does not exist: ${RES_CONFIG} (${RES_CONFIG_SOURCE})" >&2
+    exit 1
+fi
+
+mkdir -p "${RES_OUTPUT_TREE}" "${RES_OUT_DIR}"
 
 echo "================================================================================"
 echo "Prep 02 SDF pipeline"
 echo "PROJECT_ROOT        : ${PROJECT_ROOT}"
-echo "input_blend         : ${INPUT_BLEND}"
-echo "config              : ${CONFIG:-<Prep 02a default>}"
-echo "out_dir             : ${OUT_DIR:-<Prep 02a default>}"
-echo "manifest_for_02b    : ${MANIFEST_PATH}"
-echo "output_blend        : ${OUTPUT_BLEND:-<Prep 02b default>}"
+echo "step_id             : ${RES_STEP_ID}"
+echo "mode                : ${RES_MODE}"
+echo "work_dir            : ${RES_WORK_DIR}"
+echo "input_tree          : ${RES_INPUT_TREE} (${RES_INPUT_SOURCE})"
+echo "output_tree         : ${RES_OUTPUT_TREE} (${RES_OUTPUT_SOURCE})"
+echo "input_stage_dir     : ${RES_INPUT_STAGE_DIR}"
+echo "output_stage_dir    : ${RES_OUTPUT_STAGE_DIR}"
+echo "input_blend         : ${RES_INPUT_BLEND}"
+echo "base_stem           : ${RES_BASE_STEM}"
+echo "config              : ${RES_CONFIG} (${RES_CONFIG_SOURCE})"
+echo "out_dir             : ${RES_OUT_DIR}"
+echo "manifest_for_02b    : ${RES_MANIFEST}"
+echo "output_blend        : ${RES_OUTPUT_BLEND}"
 echo "bpy5_env            : ${BPY5_ENV}"
 echo "bpy4_env            : ${BPY4_ENV}"
+echo "dry_run             : ${DRY_RUN}"
 echo "================================================================================"
 
 PREP02A_CMD=(
     conda run --no-capture-output -n "${BPY5_ENV}"
     python scripts/data_prep/prep_02a_sdf_fuse_5x.py
-    --input_blend "${INPUT_BLEND}"
+    --input_dir "${RES_INPUT_TREE}"
+    --output_dir "${RES_OUTPUT_TREE}"
+    --config "${RES_CONFIG}"
 )
 
-if [[ -n "${CONFIG}" ]]; then
-    PREP02A_CMD+=(--config "${CONFIG}")
-fi
-if [[ -n "${OUT_DIR}" ]]; then
-    PREP02A_CMD+=(--out_dir "${OUT_DIR}")
-fi
 if [[ -n "${TARGET_FRAME}" ]]; then
     PREP02A_CMD+=(--target_frame "${TARGET_FRAME}")
 fi
@@ -348,13 +412,9 @@ fi
 PREP02B_CMD=(
     conda run --no-capture-output -n "${BPY4_ENV}"
     python scripts/data_prep/prep_02b_import_fused_4x.py
-    --input_blend "${INPUT_BLEND}"
-    --manifest "${MANIFEST_PATH}"
+    --input_dir "${RES_INPUT_TREE}"
+    --output_dir "${RES_OUTPUT_TREE}"
 )
-
-if [[ -n "${OUTPUT_BLEND}" ]]; then
-    PREP02B_CMD+=(--output_blend "${OUTPUT_BLEND}")
-fi
 
 echo
 echo "================================================================================"
@@ -372,15 +432,15 @@ fi
 echo
 echo "================================================================================"
 echo "Checking manifest after Prep 02a:"
-echo "  ${MANIFEST_PATH}"
+echo "  ${RES_MANIFEST}"
 echo "================================================================================"
 
 if [[ "${DRY_RUN}" -eq 0 ]]; then
-    if [[ ! -f "${MANIFEST_PATH}" ]]; then
-        echo "ERROR: manifest was not created or not found: ${MANIFEST_PATH}" >&2
+    if [[ ! -f "${RES_MANIFEST}" ]]; then
+        echo "ERROR: manifest was not created or not found: ${RES_MANIFEST}" >&2
         exit 1
     fi
-    ls -lh "${MANIFEST_PATH}"
+    ls -lh "${RES_MANIFEST}"
 else
     echo "[DRY_RUN] skipped manifest existence check"
 fi
@@ -400,11 +460,25 @@ fi
 
 echo
 echo "================================================================================"
-echo "Prep 02 SDF pipeline done."
-echo "manifest     : ${MANIFEST_PATH}"
-if [[ -n "${OUTPUT_BLEND}" ]]; then
-    echo "output_blend : ${OUTPUT_BLEND}"
+echo "Checking output blend after Prep 02b:"
+echo "  ${RES_OUTPUT_BLEND}"
+echo "================================================================================"
+
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+    if [[ ! -f "${RES_OUTPUT_BLEND}" ]]; then
+        echo "ERROR: output blend was not created or not found: ${RES_OUTPUT_BLEND}" >&2
+        exit 1
+    fi
+    ls -lh "${RES_OUTPUT_BLEND}"
 else
-    echo "output_blend : <Prep 02b default>"
+    echo "[DRY_RUN] skipped output blend existence check"
 fi
+
+echo
+echo "================================================================================"
+echo "Prep 02 SDF pipeline done."
+echo "work_dir     : ${RES_WORK_DIR}"
+echo "input_blend  : ${RES_INPUT_BLEND}"
+echo "manifest     : ${RES_MANIFEST}"
+echo "output_blend : ${RES_OUTPUT_BLEND}"
 echo "================================================================================"

@@ -4,36 +4,43 @@
 """
 Prep 03: Manifest-driven Surface Deform binding + LBS weight transfer.
 
+Staged data-prep behavior:
+
+    --input_dir <data_prep_work_dir>
+        reads:
+            <data_prep_work_dir>/data_prep_02/*_prep_02.blend
+            <data_prep_work_dir>/data_prep_02/sdf_exports/manifest.json
+        writes:
+            <data_prep_work_dir>/data_prep_03/<asset>_prep_03_surface_drive_mode.blend
+            <data_prep_work_dir>/data_prep_03/<asset>_prep_03_lbs_drive_mode.blend
+
+    --input_dir <data_prep_work_dir>/data_prep_02
+        reads:
+            <data_prep_work_dir>/data_prep_02/*_prep_02.blend
+            <data_prep_work_dir>/data_prep_02/sdf_exports/manifest.json
+        writes:
+            <data_prep_work_dir>/data_prep_03/...
+
+    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+        reads:
+            <custom_input_tree>/*_prep_02.blend
+            <custom_input_tree>/sdf_exports/manifest.json
+        writes:
+            <custom_output_tree>/...
+
 Default drive mode:
     BOTH
 
 When --drive_mode BOTH:
     - bind / transfer once
     - save Surface-driven blend:
-        <work_dir>/<base_stem>_prep_03_surface_drive_mode.blend
+        <output_tree>/<asset>_prep_03_surface_drive_mode.blend
     - switch modifiers to LBS mode
     - save LBS-driven blend:
-        <work_dir>/<base_stem>_prep_03_lbs_drive_mode.blend
+        <output_tree>/<asset>_prep_03_lbs_drive_mode.blend
 
 When --drive_mode SURFACE or LBS:
-    - save only one blend
-    - --output_blend may override the single output path
-
-Path behavior:
-    required:
-        --input_blend
-
-    optional:
-        --manifest
-            If omitted:
-                <work_dir>/<base_stem>_prep_01_sdf_exports/manifest.json
-
-        --output_blend
-            Valid only for single-output modes SURFACE / LBS.
-
-        --output_blend_surface
-        --output_blend_lbs
-            Valid only for --drive_mode BOTH.
+    - save only one blend under output_tree.
 """
 
 from __future__ import annotations
@@ -43,19 +50,24 @@ import sys
 from pathlib import Path
 
 
-def ensure_repo_src_in_syspath() -> None:
+def ensure_repo_paths_in_syspath() -> None:
     this_file = Path(__file__).resolve(strict=False)
 
     for parent in [this_file.parent, *this_file.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src").exists():
             src_dir = parent / "src"
-            src_s = str(src_dir)
-            if src_s not in sys.path:
-                sys.path.insert(0, src_s)
+            data_prep_dir = parent / "scripts" / "data_prep"
+
+            for item in [src_dir, data_prep_dir]:
+                item_s = str(item)
+                if item_s not in sys.path:
+                    sys.path.insert(0, item_s)
             return
 
+    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
 
-ensure_repo_src_in_syspath()
+
+ensure_repo_paths_in_syspath()
 
 import bpy  # noqa: E402
 
@@ -69,11 +81,13 @@ from ogd_lbs.blender.surface_deform import (  # noqa: E402
 )
 
 from paths import (  # noqa: E402
-    make_data_prep_context,
-    prep_02_manifest_rel,
-    prep_03_output_blend_rel,
-    prep_03_surface_output_blend_rel,
-    prep_03_lbs_output_blend_rel,
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    print_data_prep_resolution_info,
+    discover_unique_blend,
+    extract_asset_base_stem,
+    prep_03_surface_output_blend_name,
+    prep_03_lbs_output_blend_name,
     validate_drive_mode,
 )
 from manifest import (  # noqa: E402
@@ -81,6 +95,14 @@ from manifest import (  # noqa: E402
     require_vdb_mapping,
     get_source_objects_mapping,
 )
+
+
+def require_file(path: Path, *, role: str) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing required {role}: {path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"Required {role} is not a file: {path}")
+    return path
 
 
 def find_required_mesh(name: str) -> bpy.types.Object:
@@ -96,6 +118,8 @@ def find_required_mesh(name: str) -> bpy.types.Object:
 
 
 def save_blend(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     print(f"\n💾 Saving to: {path}", flush=True)
     result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
     if result != {"FINISHED"}:
@@ -107,31 +131,25 @@ def main() -> None:
         description="Prep 03: manifest-driven Surface Deform + LBS transfer."
     )
 
-    parser.add_argument("--input_blend", type=str, required=True)
     parser.add_argument(
-        "--manifest",
+        "-i",
+        "--input_dir",
         type=str,
-        default=None,
-        help="Manifest from Prep 02a/02b. Default: <work_dir>/<base_stem>_prep_01_sdf_exports/manifest.json",
-    )
-
-    parser.add_argument(
-        "--output_blend",
-        type=str,
-        default=None,
-        help="Single-output override. Valid only when --drive_mode is SURFACE or LBS.",
+        required=True,
+        help=(
+            "Data-prep work_dir or data_prep_02 input tree. "
+            "The script discovers exactly one *_prep_02.blend inside the input tree."
+        ),
     )
     parser.add_argument(
-        "--output_blend_surface",
+        "-o",
+        "--output_dir",
         type=str,
         default=None,
-        help="Surface output override. Valid only when --drive_mode BOTH.",
-    )
-    parser.add_argument(
-        "--output_blend_lbs",
-        type=str,
-        default=None,
-        help="LBS output override. Valid only when --drive_mode BOTH.",
+        help=(
+            "Optional explicit output tree. If omitted, writes to "
+            "<work_dir>/data_prep_03."
+        ),
     )
 
     parser.add_argument(
@@ -155,64 +173,63 @@ def main() -> None:
 
     drive_mode = validate_drive_mode(args.drive_mode)
 
-    if drive_mode == "BOTH" and args.output_blend is not None:
-        raise RuntimeError(
-            "--output_blend is only valid for single-output modes SURFACE or LBS. "
-            "Use --output_blend_surface and/or --output_blend_lbs with --drive_mode BOTH."
-        )
-
-    if drive_mode != "BOTH" and (args.output_blend_surface is not None or args.output_blend_lbs is not None):
-        raise RuntimeError(
-            "--output_blend_surface and --output_blend_lbs are only valid with --drive_mode BOTH."
-        )
-
-    ctx = make_data_prep_context(args.input_blend)
-
-    input_path = ctx.resolve_input(
-        "input_blend",
-        args.input_blend,
-        None,
-        expected_type="file",
-    )
-    manifest_path = ctx.resolve_input(
-        "manifest",
-        args.manifest,
-        prep_02_manifest_rel(ctx),
-        expected_type="file",
+    resolution = resolve_data_prep_stage_dirs(
+        step_id="03",
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        step_title="Prep 03: Surface Deform + LBS Drive Modes",
     )
 
-    output_surface_path: Path | None = None
-    output_lbs_path: Path | None = None
-    output_single_path: Path | None = None
+    print_data_prep_resolution_info(resolution)
 
-    if drive_mode == "BOTH":
-        output_surface_path = ctx.resolve_output(
-            "output_blend_surface",
-            args.output_blend_surface,
-            prep_03_surface_output_blend_rel(ctx),
-            expected_type="file",
-        )
-        output_lbs_path = ctx.resolve_output(
-            "output_blend_lbs",
-            args.output_blend_lbs,
-            prep_03_lbs_output_blend_rel(ctx),
-            expected_type="file",
-        )
+    try:
+        validate_data_prep_stage_resolution(resolution)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    input_path = discover_unique_blend(
+        resolution.input_tree,
+        pattern="*_prep_02.blend",
+        role="Prep 03 input blend",
+    )
+
+    base_stem = extract_asset_base_stem(input_path)
+
+    manifest_path = (resolution.input_tree / "sdf_exports" / "manifest.json").resolve(strict=False)
+    require_file(manifest_path, role="Prep 03 manifest")
+
+    output_surface_path = (
+        resolution.output_tree / prep_03_surface_output_blend_name(base_stem)
+    ).resolve(strict=False)
+    output_lbs_path = (
+        resolution.output_tree / prep_03_lbs_output_blend_name(base_stem)
+    ).resolve(strict=False)
+
+    if drive_mode == "SURFACE":
+        output_single_path = output_surface_path
+    elif drive_mode == "LBS":
+        output_single_path = output_lbs_path
     else:
-        output_single_path = ctx.resolve_output(
-            "output_blend",
-            args.output_blend,
-            prep_03_output_blend_rel(ctx, drive_mode=drive_mode),
-            expected_type="file",
-        )
+        output_single_path = None
 
-    ctx.print_and_validate("Prep 03: Surface Deform + LBS Drive Modes")
+    resolution.output_tree.mkdir(parents=True, exist_ok=True)
+
+    print("\n📋 Prep 03 resolved files:", flush=True)
+    print(f"   input_blend         : {input_path}", flush=True)
+    print(f"   base_stem           : {base_stem}", flush=True)
+    print(f"   manifest            : {manifest_path}", flush=True)
+    print(f"   drive_mode          : {drive_mode}", flush=True)
+    if drive_mode == "BOTH":
+        print(f"   output_blend_surface: {output_surface_path}", flush=True)
+        print(f"   output_blend_lbs    : {output_lbs_path}", flush=True)
+    else:
+        print(f"   output_blend        : {output_single_path}", flush=True)
 
     manifest_obj = load_manifest(manifest_path)
     vdb_mapping = require_vdb_mapping(manifest_obj)
     source_objects = get_source_objects_mapping(manifest_obj, vdb_mapping)
 
-    print(f"📂 Loading: {input_path}", flush=True)
+    print(f"\n📂 Loading: {input_path}", flush=True)
     result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
     if result != {"FINISHED"}:
         raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
@@ -269,9 +286,6 @@ def main() -> None:
     update_view_layer()
 
     if drive_mode == "BOTH":
-        if output_surface_path is None or output_lbs_path is None:
-            raise RuntimeError("Internal error: BOTH outputs were not resolved.")
-
         print("\n🎛️ Applying SURFACE drive mode to all VDB targets...", flush=True)
         for target_mesh in target_meshes:
             apply_drive_mode_to_target(target_mesh, drive_mode="SURFACE")
@@ -292,7 +306,7 @@ def main() -> None:
 
     else:
         if output_single_path is None:
-            raise RuntimeError("Internal error: single output was not resolved.")
+            raise RuntimeError("Internal error: single output path was not resolved.")
 
         print(f"\n🎛️ Applying {drive_mode} drive mode to all VDB targets...", flush=True)
         for target_mesh in target_meshes:

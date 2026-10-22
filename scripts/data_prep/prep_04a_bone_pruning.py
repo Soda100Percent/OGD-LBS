@@ -4,6 +4,28 @@
 """
 Prep 04a: Create an animation-preserving cleaned-full armature branch.
 
+Staged data-prep behavior:
+
+    --input_dir <data_prep_work_dir>
+        reads:
+            <data_prep_work_dir>/data_prep_03/*_prep_03_lbs_drive_mode.blend
+        writes:
+            <data_prep_work_dir>/data_prep_04/<asset>_prep_04a_cleaned_full.blend
+            <data_prep_work_dir>/data_prep_04/bone_reduced_versions/
+
+    --input_dir <data_prep_work_dir>/data_prep_03
+        reads:
+            <data_prep_work_dir>/data_prep_03/*_prep_03_lbs_drive_mode.blend
+        writes:
+            <data_prep_work_dir>/data_prep_04/...
+
+    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+        reads:
+            <custom_input_tree>/*_prep_03_lbs_drive_mode.blend
+        writes:
+            <custom_output_tree>/<asset>_prep_04a_cleaned_full.blend
+            <custom_output_tree>/bone_reduced_versions/
+
 Important terminology:
     Armature_Cleaned_Full
         Automatically cleaned full armature created by Prep 04a.
@@ -15,30 +37,17 @@ Important terminology:
         Blender Edit Mode Delete to remove bones manually.
 
         Suggested default file:
-            <work_dir>/bone_reduced_versions/bone_reduced_001.blend
+            <output_tree>/bone_reduced_versions/bone_reduced_001.blend
 
         In that file, the automatically cleaned-full armature is renamed to:
             Armature_Bone_Reduced_001
 
         A sidecar manifest is written:
-            <work_dir>/bone_reduced_versions/manifest.json
+            <output_tree>/bone_reduced_versions/manifest.json
 
         It records template generation time and original file metadata. Later
         export can skip the template if it remains unmodified, and include it if
         mtime/size indicates human edits.
-
-Path behavior:
-    required:
-        --input_blend
-
-    optional:
-        --output_blend
-            If omitted:
-                <work_dir>/<base_stem>_prep_04a_cleaned_full.blend
-
-        --manual_versions_dir
-            If omitted:
-                <work_dir>/bone_reduced_versions/
 """
 
 from __future__ import annotations
@@ -52,19 +61,24 @@ from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_src_in_syspath() -> None:
+def ensure_repo_paths_in_syspath() -> None:
     this_file = Path(__file__).resolve(strict=False)
 
     for parent in [this_file.parent, *this_file.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src").exists():
             src_dir = parent / "src"
-            src_s = str(src_dir)
-            if src_s not in sys.path:
-                sys.path.insert(0, src_s)
+            data_prep_dir = parent / "scripts" / "data_prep"
+
+            for item in [src_dir, data_prep_dir]:
+                item_s = str(item)
+                if item_s not in sys.path:
+                    sys.path.insert(0, item_s)
             return
 
+    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
 
-ensure_repo_src_in_syspath()
+
+ensure_repo_paths_in_syspath()
 
 import bpy  # noqa: E402
 
@@ -78,9 +92,12 @@ from ogd_lbs.blender.bone_pruning import (  # noqa: E402
 )
 
 from paths import (  # noqa: E402
-    make_data_prep_context,
-    prep_04a_output_blend_rel,
-    prep_04b_manual_versions_dir_rel,
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    print_data_prep_resolution_info,
+    discover_unique_blend,
+    extract_asset_base_stem,
+    prep_04a_output_blend_name,
 )
 
 
@@ -171,7 +188,7 @@ def update_manual_template_manifest(
         "armature_name": template_armature_name,
         "generated_at_utc": utc_now_iso(),
         "generated_at_unix": time.time(),
-        "generated_from_cleaned_full_blend": str(cleaned_full_blend_path.resolve()),
+        "generated_from_cleaned_full_blend": str(cleaned_full_blend_path.resolve(strict=False)),
         "cleaned_full_armature_name": cleaned_full_armature_name,
         "original_armature_name": original_armature_name,
         "initial_file_metadata": meta,
@@ -307,18 +324,25 @@ def main() -> None:
         description="Prep 04a: create cleaned-full armature branch and editable manual template."
     )
 
-    parser.add_argument("--input_blend", type=str, required=True)
     parser.add_argument(
-        "--output_blend",
+        "-i",
+        "--input_dir",
         type=str,
-        default=None,
-        help="Output cleaned-full blend. Default: <work_dir>/<base_stem>_prep_04a_cleaned_full.blend",
+        required=True,
+        help=(
+            "Data-prep work_dir or data_prep_03 input tree. "
+            "The script discovers exactly one *_prep_03_lbs_drive_mode.blend inside the input tree."
+        ),
     )
     parser.add_argument(
-        "--manual_versions_dir",
+        "-o",
+        "--output_dir",
         type=str,
         default=None,
-        help="Directory for optional manual 4b reduced versions. Default: <work_dir>/bone_reduced_versions/",
+        help=(
+            "Optional explicit output tree. If omitted, writes to "
+            "<work_dir>/data_prep_04."
+        ),
     )
 
     parser.add_argument("--weight_eps", type=float, default=1e-8)
@@ -352,30 +376,40 @@ def main() -> None:
 
     args = parser.parse_args(script_argv())
 
-    ctx = make_data_prep_context(args.input_blend)
-
-    input_path = ctx.resolve_input(
-        "input_blend",
-        args.input_blend,
-        None,
-        expected_type="file",
-    )
-    output_path = ctx.resolve_output(
-        "output_blend",
-        args.output_blend,
-        prep_04a_output_blend_rel(ctx),
-        expected_type="file",
-    )
-    manual_versions_dir = ctx.resolve_output(
-        "manual_versions_dir",
-        args.manual_versions_dir,
-        prep_04b_manual_versions_dir_rel(ctx),
-        expected_type="dir",
+    resolution = resolve_data_prep_stage_dirs(
+        step_id="04a",
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        step_title="Prep 04a: Cleaned-Full Armature Preparation",
     )
 
-    ctx.print_and_validate("Prep 04a: Cleaned-Full Armature Preparation")
+    print_data_prep_resolution_info(resolution)
 
-    print(f"📂 Loading: {input_path}", flush=True)
+    try:
+        validate_data_prep_stage_resolution(resolution)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    input_path = discover_unique_blend(
+        resolution.input_tree,
+        pattern="*_prep_03_lbs_drive_mode.blend",
+        role="Prep 04a input LBS drive-mode blend",
+    )
+
+    base_stem = extract_asset_base_stem(input_path)
+    output_path = (resolution.output_tree / prep_04a_output_blend_name(base_stem)).resolve(strict=False)
+    manual_versions_dir = (resolution.output_tree / "bone_reduced_versions").resolve(strict=False)
+
+    resolution.output_tree.mkdir(parents=True, exist_ok=True)
+    manual_versions_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\n📋 Prep 04a resolved files:", flush=True)
+    print(f"   input_blend        : {input_path}", flush=True)
+    print(f"   base_stem          : {base_stem}", flush=True)
+    print(f"   output_blend       : {output_path}", flush=True)
+    print(f"   manual_versions_dir: {manual_versions_dir}", flush=True)
+
+    print(f"\n📂 Loading: {input_path}", flush=True)
     result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
     if result != {"FINISHED"}:
         raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")

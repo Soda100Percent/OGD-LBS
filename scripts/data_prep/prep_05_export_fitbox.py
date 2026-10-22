@@ -4,32 +4,58 @@
 """
 Prep 05: Manifest-driven Fitbox export with SSDR-style frame sampling.
 
+Staged data-prep behavior:
+
+    --input_dir <data_prep_work_dir>
+        reads:
+            <data_prep_work_dir>/data_prep_04/*_prep_04a_cleaned_full.blend
+            <data_prep_work_dir>/data_prep_02/sdf_exports/manifest.json
+            <data_prep_work_dir>/data_prep_04/bone_reduced_versions/
+        writes:
+            <data_prep_work_dir>/data_prep_05/
+
+    --input_dir <data_prep_work_dir>/data_prep_04
+        reads:
+            <data_prep_work_dir>/data_prep_04/*_prep_04a_cleaned_full.blend
+            <data_prep_work_dir>/data_prep_02/sdf_exports/manifest.json
+            <data_prep_work_dir>/data_prep_04/bone_reduced_versions/
+        writes:
+            <data_prep_work_dir>/data_prep_05/
+
+    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+        reads:
+            <custom_input_tree>/*_prep_04a_cleaned_full.blend
+            <work_dir>/data_prep_02/sdf_exports/manifest.json
+            <custom_input_tree>/bone_reduced_versions/
+        writes:
+            <custom_output_tree>/
+
 Output layout:
 
-    <out_dir>/
+    <output_tree>/
     ├── export_summary.json
     ├── fitbox_original/
     │   ├── skeleton_hierarchy_data.pkl
     │   ├── animation_data.pkl
     │   └── Source_<VDB>.pkl
-    ├── fitbox_vdb/
-    │   ├── skeleton_hierarchy_data.pkl
-    │   ├── animation_data.pkl
-    │   ├── <VDB>.pkl
-    │   └── <unmerged>.pkl
-    └── bone_reduced_versions/
-        ├── cleaned_full/
-        │   ├── skeleton_hierarchy_data.pkl
-        │   └── animation_data.pkl
-        ├── bone_reduced_001/
-        │   ├── skeleton_hierarchy_data.pkl
-        │   └── animation_data.pkl
-        └── ...
+    └── fitbox_vdb/
+        ├── skeleton_hierarchy_data.pkl
+        ├── animation_data.pkl
+        ├── <VDB>.pkl
+        ├── <unmerged>.pkl
+        └── bone_reduced_versions/
+            ├── cleaned_full/
+            │   ├── skeleton_hierarchy_data.pkl
+            │   └── animation_data.pkl
+            ├── bone_reduced_001/
+            │   ├── skeleton_hierarchy_data.pkl
+            │   └── animation_data.pkl
+            └── ...
 
 Important:
     - fitbox_original and fitbox_vdb use Armature_Original.
     - bone_reduced_versions/cleaned_full uses Armature_Cleaned_Full.
-    - manual variants are discovered from <work_dir>/bone_reduced_versions/*.blend.
+    - manual variants are discovered from <input_tree>/bone_reduced_versions/*.blend.
     - generated templates with unchanged size/mtime_ns are skipped by default.
     - rest_pose is stored separately; animation_poses[0] is NOT rest_pose.
 """
@@ -43,19 +69,24 @@ from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_src_in_syspath() -> None:
+def ensure_repo_paths_in_syspath() -> None:
     this_file = Path(__file__).resolve(strict=False)
 
     for parent in [this_file.parent, *this_file.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src").exists():
             src_dir = parent / "src"
-            src_s = str(src_dir)
-            if src_s not in sys.path:
-                sys.path.insert(0, src_s)
+            data_prep_dir = parent / "scripts" / "data_prep"
+
+            for item in [src_dir, data_prep_dir]:
+                item_s = str(item)
+                if item_s not in sys.path:
+                    sys.path.insert(0, item_s)
             return
 
+    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
 
-ensure_repo_src_in_syspath()
+
+ensure_repo_paths_in_syspath()
 
 import bpy  # noqa: E402
 
@@ -70,16 +101,24 @@ from ogd_lbs.fitbox.sampling import resolve_sampled_frames  # noqa: E402
 from ogd_lbs.utils.work_dir import parse_idx_ranges  # noqa: E402
 
 from paths import (  # noqa: E402
-    make_data_prep_context,
-    prep_02_manifest_rel,
-    prep_05_out_dir_rel,
-    prep_04b_manual_versions_dir_rel,
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    print_data_prep_resolution_info,
+    discover_unique_blend,
 )
 from manifest import (  # noqa: E402
     load_manifest,
     require_vdb_mapping,
     get_source_objects_mapping,
 )
+
+
+def require_file(path: Path, *, role: str) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing required {role}: {path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"Required {role} is not a file: {path}")
+    return path
 
 
 def find_armature(name: str, *, required: bool = True) -> bpy.types.Object | None:
@@ -260,7 +299,6 @@ def find_manual_variant_armature(
             f"Manual variant {variant_name!r} preferred armature not found: {preferred_name}"
         )
 
-    expected_suffix = variant_name.replace("bone_reduced_", "")
     candidates_by_prefix = [
         obj for obj in bpy.data.objects
         if obj.type == "ARMATURE" and obj.name.startswith("Armature_Bone_Reduced")
@@ -309,12 +347,30 @@ def export_armature_only_fitbox(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prep 05: Fitbox export with frame sampling and bone variants.")
+    parser = argparse.ArgumentParser(
+        description="Prep 05: Fitbox export with frame sampling and bone variants."
+    )
 
-    parser.add_argument("--input_blend", type=str, required=True)
-    parser.add_argument("--manifest", type=str, default=None)
-    parser.add_argument("--manual_versions_dir", type=str, default=None)
-    parser.add_argument("--out_dir", type=str, default=None)
+    parser.add_argument(
+        "-i",
+        "--input_dir",
+        type=str,
+        required=True,
+        help=(
+            "Data-prep work_dir or data_prep_04 input tree. "
+            "The script discovers exactly one *_prep_04a_cleaned_full.blend inside the input tree."
+        ),
+    )
+    parser.add_argument(
+        "-o",
+        "--output_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional explicit output tree. If omitted, writes to "
+            "<work_dir>/data_prep_05."
+        ),
+    )
     parser.add_argument("--format", choices=["pkl", "json"], default="pkl")
 
     parser.add_argument("--debug_frame_max", type=int, default=-1)
@@ -341,30 +397,56 @@ def main() -> None:
 
     args = parser.parse_args(script_argv())
 
-    ctx = make_data_prep_context(args.input_blend)
-
-    input_path = ctx.resolve_input("input_blend", args.input_blend, None, expected_type="file")
-    manifest_path = ctx.resolve_input("manifest", args.manifest, prep_02_manifest_rel(ctx), expected_type="file")
-    out_root = ctx.resolve_output(
-        "out_dir",
-        args.out_dir,
-        prep_05_out_dir_rel(ctx, debug_frame_max=int(args.debug_frame_max)),
-        expected_type="dir",
+    resolution = resolve_data_prep_stage_dirs(
+        step_id="05",
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        step_title="Prep 05: Fitbox Export",
     )
 
-    manual_dir = ctx.add_info_path(
-        "manual_versions_dir",
-        Path(args.manual_versions_dir) if args.manual_versions_dir else ctx.work_dir / prep_04b_manual_versions_dir_rel(ctx),
-        expected_type="dir",
-        note="optional input directory; missing directory means no manual variants",
+    print_data_prep_resolution_info(resolution)
+
+    try:
+        validate_data_prep_stage_resolution(resolution)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    input_path = discover_unique_blend(
+        resolution.input_tree,
+        pattern="*_prep_04a_cleaned_full.blend",
+        role="Prep 05 input cleaned-full blend",
     )
 
-    ctx.print_and_validate("Prep 05: Fitbox Export")
+    manifest_path = (
+        resolution.work_dir / "data_prep_02" / "sdf_exports" / "manifest.json"
+    ).resolve(strict=False)
+    require_file(manifest_path, role="Prep 05 manifest")
+
+    manual_dir = (resolution.input_tree / "bone_reduced_versions").resolve(strict=False)
+    out_root = resolution.output_tree.resolve(strict=False)
 
     fmt = args.format
     ext = fmt
 
-    print(f"📂 Loading main Prep 04a blend: {input_path}", flush=True)
+    out_original = out_root / "fitbox_original"
+    out_vdb = out_root / "fitbox_vdb"
+    out_reduced_root = out_vdb / "bone_reduced_versions"
+
+    out_original.mkdir(parents=True, exist_ok=True)
+    out_vdb.mkdir(parents=True, exist_ok=True)
+    out_reduced_root.mkdir(parents=True, exist_ok=True)
+
+    print("\n📋 Prep 05 resolved files:", flush=True)
+    print(f"   input_blend        : {input_path}", flush=True)
+    print(f"   manifest           : {manifest_path}", flush=True)
+    print(f"   manual_versions_dir: {manual_dir} (exists={manual_dir.exists()})", flush=True)
+    print(f"   output_root        : {out_root}", flush=True)
+    print(f"   fitbox_original    : {out_original}", flush=True)
+    print(f"   fitbox_vdb         : {out_vdb}", flush=True)
+    print(f"   reduced_root       : {out_reduced_root}", flush=True)
+    print(f"   format             : {fmt}", flush=True)
+
+    print(f"\n📂 Loading main Prep 04a blend: {input_path}", flush=True)
     result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
     if result != {"FINISHED"}:
         raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
@@ -408,6 +490,9 @@ def main() -> None:
     assert arm_orig is not None
     assert arm_cleaned_full is not None
 
+    original_bone_count = len(arm_orig.data.bones)
+    cleaned_full_bone_count = len(arm_cleaned_full.data.bones)
+
     candidate_start, candidate_end = resolve_candidate_frame_range(
         armature=arm_orig,
         frame_start_arg=args.frame_start,
@@ -432,16 +517,6 @@ def main() -> None:
     print(f"   first: {frames[0]}", flush=True)
     print(f"   last : {frames[-1]}", flush=True)
     print("   rest_pose note: rest_pose is separate; animation_poses[0] is not rest_pose.", flush=True)
-
-    out_original = out_root / "fitbox_original"
-    out_vdb = out_root / "fitbox_vdb"
-    # Reduced skeleton variants live inside fitbox_vdb so that the whole
-    # fitbox_vdb directory can be used directly as SSDR data0_json/data0.
-    out_reduced_root = out_vdb / "bone_reduced_versions"
-
-    out_original.mkdir(parents=True, exist_ok=True)
-    out_vdb.mkdir(parents=True, exist_ok=True)
-    out_reduced_root.mkdir(parents=True, exist_ok=True)
 
     print("\n🚀 Exporting fitbox_original...", flush=True)
     export_skeleton(arm_orig, out_original / f"skeleton_hierarchy_data.{ext}", fmt=fmt)
@@ -543,9 +618,10 @@ def main() -> None:
         )
 
     summary = {
-        "schema": "ogd_lbs_prep05_fitbox_export_v2",
+        "schema": "ogd_lbs_prep05_fitbox_export_v3_staged",
         "input_blend": str(input_path),
         "manifest": str(manifest_path),
+        "manual_versions_dir": str(manual_dir),
         "out_dir": str(out_root),
         "format": fmt,
         "frame_sampling": sampling.stats,
@@ -557,11 +633,11 @@ def main() -> None:
         "armatures": {
             "original": {
                 "name": "Armature_Original",
-                "bones": len(arm_orig.data.bones),
+                "bones": int(original_bone_count),
             },
             "cleaned_full": {
                 "name": "Armature_Cleaned_Full",
-                "bones": len(arm_cleaned_full.data.bones),
+                "bones": int(cleaned_full_bone_count),
                 "output_dir": str(cleaned_full_dir),
             },
             "manual_variants_exported": manual_export_summaries,
@@ -571,6 +647,15 @@ def main() -> None:
             "fitbox_original": str(out_original),
             "fitbox_vdb": str(out_vdb),
             "fitbox_vdb_bone_reduced_versions": str(out_reduced_root),
+        },
+        "ssdr_handoff": {
+            "copy_source": str(out_vdb),
+            "copy_target_example": "<ssdr_work_dir>/data0_json",
+            "recommended_command": (
+                "rsync -a --delete "
+                "\"<data_prep_work_dir>/data_prep_05/fitbox_vdb/\" "
+                "\"<ssdr_work_dir>/data0_json/\""
+            ),
         },
         "rest_pose_semantics": (
             "Fitbox animation_data stores rest_pose separately. "
@@ -584,13 +669,13 @@ def main() -> None:
         json.dump(summary, f, indent=4, ensure_ascii=False)
 
     print("\n🎉 Prep 05 Fitbox export done.", flush=True)
-    print(f"   original:       {out_original}", flush=True)
-    print(f"   vdb:            {out_vdb}", flush=True)
-    print(f"   reduced root:   {out_reduced_root}", flush=True)
-    print(f"   summary:        {summary_path}", flush=True)
-    print(f"   sampled frames: {len(frames)}", flush=True)
-    print(f"   manual exported:{len(manual_export_summaries)}", flush=True)
-    print(f"   manual skipped: {len(skipped_manual_variants)}", flush=True)
+    print(f"   original:        {out_original}", flush=True)
+    print(f"   vdb:             {out_vdb}", flush=True)
+    print(f"   reduced root:    {out_reduced_root}", flush=True)
+    print(f"   summary:         {summary_path}", flush=True)
+    print(f"   sampled frames:  {len(frames)}", flush=True)
+    print(f"   manual exported: {len(manual_export_summaries)}", flush=True)
+    print(f"   manual skipped:  {len(skipped_manual_variants)}", flush=True)
 
 
 if __name__ == "__main__":

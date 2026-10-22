@@ -1,103 +1,710 @@
-
-
 # OGD-LBS
 
-> Code of Paper: **"OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters"**
+> Code of Paper: **“OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters”**
 
-本项目包含了 OGD-LBS 论文的官方实现代码。针对商业级、多组件、预绑定（Pre-Bound）的复杂 LBS 角色资产，本项目提供了一套完整的自动化数据预处理与轻量化管线。
+本项目包含 OGD-LBS 论文的官方实现代码。针对商业级、多组件、预绑定（Pre-Bound）的复杂 LBS 角色资产，本项目提供了一套自动化数据预处理、Fitbox 导出、SSDR 前置处理与后续轻量化实验管线。
 
-## 📂 项目结构
+---
+
+## 1. 项目结构
 
 ```text
 OGD-LBS/
-├── configs/                # 预处理管线配置文件 (如 SDF 融合参数)
+├── configs/
+│   ├── prep_02_sdf_merge_config_example.json
+│   ├── prep_02_merge_config_example.json
+│   └── prep_02_sdf_merge_config_griffin.json
+├── scripts/
+│   ├── data_prep/
+│   │   ├── prep_01_concat_nla.py
+│   │   ├── prep_02_sdf_pipeline.sh
+│   │   ├── prep_02a_sdf_fuse_5x.py
+│   │   ├── prep_02b_import_fused_4x.py
+│   │   ├── prep_03_surface_deform.py
+│   │   ├── prep_04a_bone_pruning.py
+│   │   ├── prep_05_export_fitbox.py
+│   │   ├── paths.py
+│   │   ├── manifest.py
+│   │   └── tests/
+│   └── ssdr/
+│       ├── 00_convert_json_to_pickle.py
+│       ├── 01_reduce_animation_frame.py
+│       ├── 02_reduce_bone_weight.py
+│       ├── paths.py
+│       └── tests/
 ├── src/
 │   └── ogd_lbs/
-│       ├── blender/        # Blender (bpy) 底层操控与渲染工具库
-│       └── utils/          # 通用工具（日志、IO、文件发现等）
-├── scripts/                # 自动化执行脚本 (CLI)
-│   ├── prep_01_concat_nla.py       # 动作序列自动拼接
-│   ├── prep_02a_sdf_fuse_5x.py     # 基于拓扑感知的 SDF 网格融合 (Blender 5.x)
-│   └── prep_02b_import_fused_4x.py # 融合网格导回与场景清理 (Blender 4.x)
-├── pyproject.toml          # Python 项目配置
+│       ├── blender/
+│       ├── fitbox/
+│       ├── ssdr/
+│       └── utils/
+├── pyproject.toml
+├── LICENSE
 └── README.md
 ```
 
-## 🛠️ 环境依赖
+---
 
-为了兼顾主线管线的稳定性与最新 SDF 几何节点的特性，本项目采用**双 Conda 环境**隔离策略：
+## 2. 环境依赖
 
-1. **主环境 (`lao-lbs`)**:  
-    用于运行 Prep 01、Prep 02b 以及后续的大部分处理。
-    
-    ```bash
-    conda activate lao-lbs
-    pip install -e .
-    ```
-    
-    _(依赖: `bpy==4.4.0` 及其他常规数据处理库)_
-    
-2. **SDF 融合环境 (`ogd-bpy52`)**:  
-    专用于运行 Prep 02a，利用 Blender 5.2 LTS 的原生 SDF Grid 节点进行精确的体素融合，并使用 `trimesh` 进行拓扑分析。
-    
-    ```bash
-    conda create -n ogd-bpy52 python=3.13 -y
-    conda activate ogd-bpy52
-    pip install bpy==5.2.2 trimesh networkx numpy
-    ```
-    
+项目目前使用两个 Conda 环境。
 
-## 🚀 数据预处理管线 (Data Pipeline)
+### 2.1 主环境：`lao-lbs`
 
-针对购买的商业 `.blend` 资产（包含复杂的骨架、零散的动作、多组件交叉网格），我们设计了以下自动化预处理管线：
+用于运行：
 
-### Step 1: 动作序列拼接 (NLA Concatenation)
+- Prep 01
+- Prep 02b
+- Prep 03
+- Prep 04a
+- Prep 05
+- SSDR Step 00 / 01 / 02
+- 常规 Python 测试
 
-将商业模型中零散的动作（Actions）提取并依次拼接为一条完整的非线性动画（NLA）轨道。
-
-- **环境**: `lao-lbs` (Blender 4.x)
+示例：
 
 ```bash
-python scripts/prep_01_concat_nla.py \
-    --input_blend /path/to/your/model.blend \
-    --gap 10
+conda activate lao-lbs
+pip install -e .
 ```
 
-- **特性**: 自动适配 Blender 4.4+ 的 Slotted Actions (动作插槽)，强制解除 Rest 锁定，输出 `*_prep_01.blend`。
+已验证环境包括：
 
-### Step 2a: 拓扑感知的 SDF 网格融合 (Topology-Aware SDF Fusion)
+```text
+Python 3.11
+bpy 4.x
+numpy
+```
 
-将多组件网格转化为水密（Watertight）、流形（Manifold）且无内部相交的单一网格。脚本内置了**自动调参（Auto-Tuning）**逻辑，通过内存直读评估网格的欧拉示性数（Euler Characteristic），自动寻找能消除孔洞（Genus g=0g=0g=0）的最佳膨胀偏移量。
+### 2.2 SDF 环境：`ogd-bpy52`
 
-- **环境**: `ogd-bpy52` (Blender 5.x)
+用于运行：
+
+- Prep 02a
+- Blender 5.x SDF Grid / VDB-like fusion
+
+示例：
 
 ```bash
-python scripts/prep_02a_sdf_fuse_5x.py \
-    --input_blend /path/to/your/model_prep_01.blend \
-    --config configs/prep_02_sdf_merge_config_griffin.json \
-    --auto_offset
+conda create -n ogd-bpy52 python=3.13 -y
+conda activate ogd-bpy52
+pip install bpy==5.2.2 trimesh networkx numpy
 ```
 
-- **特性**:
-    - 使用 Blender 5.x 原生 `Mesh to SDF Grid` 节点。
-    - 自动步进搜索 Offset，直至满足连通分量 C=1C=1C=1 且亏格 g=0g=0g=0。
-    - 导出融合后的静态 OBJ 及 `manifest.json`。
+已验证环境包括：
 
-### Step 2b: 融合网格导回与场景清理 (Import & Cleanup)
+```text
+Python 3.13
+bpy 5.2.2 LTS
+numpy
+trimesh
+networkx
+```
 
-读取 2a 阶段生成的 `manifest.json`，将完美的静态融合网格导回主干工程，并隐藏原始多组件网格。
+---
 
-- **环境**: `lao-lbs` (Blender 4.x)
+## 3. 推荐实验目录布局
+
+推荐将一次完整实验放在一个实验大目录中，并在下面拆分不同管线的工作目录。
+
+以 Griffin 为例：
+
+```text
+/workspace/ogd_experiments/Griffin_A2_exp01/
+├── data_prep_work_dir/
+└── ssdr_work_dir/
+```
+
+其中：
+
+```text
+data_prep_work_dir/
+```
+
+用于商业 `.blend` 到 Fitbox 的预处理。
+
+```text
+ssdr_work_dir/
+```
+
+用于 SSDR 前置阶段：
+
+```text
+data0_json -> data0 -> data1 -> data2
+```
+
+---
+
+## 4. Data Prep 工作目录约定
+
+`data_prep_work_dir` 内部使用 staged directory 约定：
+
+```text
+data_prep_work_dir/
+├── prep_02_sdf_merge_config.json
+│
+├── data_prep_00/
+│   └── Griffin_A2.blend
+│
+├── data_prep_01/
+│   └── Griffin_A2_prep_01.blend
+│
+├── data_prep_02/
+│   ├── Griffin_A2_prep_02.blend
+│   └── sdf_exports/
+│       ├── manifest.json
+│       ├── main_mesh_VDB.obj
+│       └── main_mesh_VDB.mtl
+│
+├── data_prep_03/
+│   ├── Griffin_A2_prep_03_surface_drive_mode.blend
+│   └── Griffin_A2_prep_03_lbs_drive_mode.blend
+│
+├── data_prep_04/
+│   ├── Griffin_A2_prep_04a_cleaned_full.blend
+│   └── bone_reduced_versions/
+│       ├── manifest.json
+│       └── bone_reduced_001.blend
+│
+└── data_prep_05/
+    ├── export_summary.json
+    ├── fitbox_original/
+    │   ├── skeleton_hierarchy_data.pkl
+    │   ├── animation_data.pkl
+    │   └── Source_main_mesh_VDB.pkl
+    └── fitbox_vdb/
+        ├── skeleton_hierarchy_data.pkl
+        ├── animation_data.pkl
+        ├── main_mesh_VDB.pkl
+        └── bone_reduced_versions/
+            ├── cleaned_full/
+            │   ├── skeleton_hierarchy_data.pkl
+            │   └── animation_data.pkl
+            └── bone_reduced_001/
+                ├── skeleton_hierarchy_data.pkl
+                └── animation_data.pkl
+```
+
+阶段语义：
+
+|阶段|输入目录|输出目录|说明|
+|---|---|---|---|
+|Prep 01|`data_prep_00`|`data_prep_01`|raw `.blend` → NLA concatenated `.blend`|
+|Prep 02a|`data_prep_01`|`data_prep_02/sdf_exports`|Blender 5.x SDF fusion|
+|Prep 02b|`data_prep_01` + `data_prep_02/sdf_exports`|`data_prep_02`|import fused OBJ into Blender 4.x|
+|Prep 03|`data_prep_02`|`data_prep_03`|Surface Deform + LBS drive mode|
+|Prep 04a|`data_prep_03`|`data_prep_04`|cleaned-full skeleton + manual template|
+|Prep 05|`data_prep_04`|`data_prep_05`|Fitbox export|
+
+`data_prep_05/fitbox_vdb/` 是 SSDR 的 `data0_json` 数据源。
+
+---
+
+## 5. Data Prep：人工运行流程
+
+下面流程是当前推荐的人工测试流程，已经按 Griffin 资产验证到 Data Prep → SSDR handoff。
+
+### 5.1 初始化实验目录
 
 ```bash
-python scripts/prep_02b_import_fused_4x.py \
-    --input_blend /path/to/your/model_prep_01.blend \
-    --manifest /path/to/your/manifest.json
+cd /workspace/git_projects/OGD-LBS
+
+EXP_ROOT=/workspace/ogd_experiments
+EXP="$EXP_ROOT/Griffin_A2_exp01_$(date +%Y%m%d_%H%M%S)"
+DP="$EXP/data_prep_work_dir"
+SSDR="$EXP/ssdr_work_dir"
+LOG="$EXP/logs"
+
+INPUT_BLEND=/workspace/data/dataset/Griffin_A2/Blender/Griffin_A2.blend
+CONFIG_SRC=/workspace/git_projects/OGD-LBS/configs/prep_02_sdf_merge_config_griffin.json
+ASSET=Griffin_A2
+
+mkdir -p "$DP/data_prep_00" "$SSDR" "$LOG"
+
+cp "$INPUT_BLEND" "$DP/data_prep_00/${ASSET}.blend"
+cp "$CONFIG_SRC" "$DP/prep_02_sdf_merge_config.json"
+
+echo "EXP  = $EXP"
+echo "DP   = $DP"
+echo "SSDR = $SSDR"
+echo "LOG  = $LOG"
 ```
 
-- **输出**: 最终生成干净、规范的 `*_prep_02.blend`，为后续的重拓扑（Remesh）与权重传递（Weight Transfer）做好准备。
+---
 
-## ⚠️ 核心兼容性说明
+### 5.2 Prep 01：NLA 拼接
 
-1. **Blender 4.4+ 动画系统**: 本项目已在底层适配 Blender 4.4+ 的新版动作插槽（Slotted Actions），解决了 NLA Strip 默认不评估的问题，确保多动作拼接后的依赖图（Depsgraph）能被正确驱动。
-2. **拓扑评估优化**: Prep 02a 摒弃了传统的 OBJ 临时导出方案，直接从 Blender 内存中读取 Evaluated Mesh 并构建拓扑图。这彻底解决了因 OBJ 导出导致的“法线/UV撕裂”引发的伪拓扑（Triangle Soup）问题，使自动调参既精准又极速。
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_01_concat_nla.py \
+    --input_dir "$DP" \
+    2>&1 | tee "$LOG/01_prep_01_concat_nla.log"
+```
+
+也可以直接指定当前阶段输入目录：
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_01_concat_nla.py \
+    --input_dir "$DP/data_prep_00"
+```
+
+输出：
+
+```text
+$DP/data_prep_01/Griffin_A2_prep_01.blend
+```
+
+Prep 01 会在 `data_prep_00` 中查找唯一 raw `.blend`。如果有多个 raw `.blend`，会 fail-fast，避免误选资产。
+
+---
+
+### 5.3 Prep 02：SDF 融合与导回
+
+Prep 02 是二阶段步骤，也可以使用 wrapper 一次运行。
+
+#### 5.3.1 推荐：使用 wrapper
+
+```bash
+bash scripts/data_prep/prep_02_sdf_pipeline.sh \
+    --input_dir "$DP" \
+    --offset 15 \
+    --no_auto_offset \
+    2>&1 | tee "$LOG/02_prep_02_sdf_pipeline.log"
+```
+
+输出：
+
+```text
+$DP/data_prep_02/sdf_exports/manifest.json
+$DP/data_prep_02/sdf_exports/main_mesh_VDB.obj
+$DP/data_prep_02/Griffin_A2_prep_02.blend
+```
+
+#### 5.3.2 手动分两步运行
+
+如果需要调试 02a / 02b，可分开运行。
+
+Prep 02a：
+
+```bash
+conda run --no-capture-output -n ogd-bpy52 \
+    python scripts/data_prep/prep_02a_sdf_fuse_5x.py \
+    --input_dir "$DP" \
+    --offset 15 \
+    --no_auto_offset \
+    2>&1 | tee "$LOG/02a_prep_02a_sdf_fuse_5x.log"
+```
+
+Prep 02b：
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_02b_import_fused_4x.py \
+    --input_dir "$DP" \
+    2>&1 | tee "$LOG/02b_prep_02b_import_fused_4x.log"
+```
+
+---
+
+### 5.4 Prep 03：Surface Deform + LBS drive mode
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_03_surface_deform.py \
+    --input_dir "$DP" \
+    --drive_mode BOTH \
+    2>&1 | tee "$LOG/03_prep_03_surface_deform.log"
+```
+
+输出：
+
+```text
+$DP/data_prep_03/Griffin_A2_prep_03_surface_drive_mode.blend
+$DP/data_prep_03/Griffin_A2_prep_03_lbs_drive_mode.blend
+```
+
+说明：
+
+- `surface_drive_mode`：VDB mesh 由 Surface Deform 驱动。
+- `lbs_drive_mode`：VDB mesh 由 LBS Armature modifier 驱动。
+
+Prep 04a 默认使用 LBS drive mode 版本继续处理。
+
+---
+
+### 5.5 Prep 04a：清理 full skeleton + 生成手工减骨模板
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_04a_bone_pruning.py \
+    --input_dir "$DP" \
+    2>&1 | tee "$LOG/04_prep_04a_bone_pruning.log"
+```
+
+输出：
+
+```text
+$DP/data_prep_04/Griffin_A2_prep_04a_cleaned_full.blend
+$DP/data_prep_04/bone_reduced_versions/bone_reduced_001.blend
+$DP/data_prep_04/bone_reduced_versions/manifest.json
+```
+
+`bone_reduced_001.blend` 是手动减骨模板。
+
+如果需要人工编辑减骨版本，可打开：
+
+```text
+$DP/data_prep_04/bone_reduced_versions/bone_reduced_001.blend
+```
+
+编辑并保存后，再运行 Prep 05。
+
+如果重跑 Prep 04a 并需要覆盖模板，可加：
+
+```bash
+--overwrite_manual_template
+```
+
+---
+
+### 5.6 Prep 05：导出 Fitbox
+
+Debug 60 帧示例：
+
+```bash
+DEBUG_FRAME_MAX=60
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_05_export_fitbox.py \
+    --input_dir "$DP" \
+    --debug_frame_max "$DEBUG_FRAME_MAX" \
+    --include_unmodified_templates \
+    2>&1 | tee "$LOG/05_prep_05_export_fitbox.log"
+```
+
+输出：
+
+```text
+$DP/data_prep_05/export_summary.json
+$DP/data_prep_05/fitbox_original/
+$DP/data_prep_05/fitbox_vdb/
+```
+
+其中：
+
+```text
+$DP/data_prep_05/fitbox_vdb/
+```
+
+是 SSDR 的输入源。
+
+如果保留：
+
+```bash
+--include_unmodified_templates
+```
+
+则即使 `bone_reduced_001.blend` 未人工修改，也会导出：
+
+```text
+$DP/data_prep_05/fitbox_vdb/bone_reduced_versions/bone_reduced_001/
+```
+
+这对于测试 SSDR Step 02 的显式 variant 很方便：
+
+```bash
+--variant bone_reduced_001
+```
+
+生产运行时，如果不希望导出未修改模板，可以去掉：
+
+```bash
+--include_unmodified_templates
+```
+
+---
+
+## 6. 从 Data Prep 同步到 SSDR
+
+SSDR 的输入目录是：
+
+```text
+ssdr_work_dir/data0_json/
+```
+
+需要把：
+
+```text
+data_prep_work_dir/data_prep_05/fitbox_vdb/
+```
+
+复制到：
+
+```text
+ssdr_work_dir/data0_json/
+```
+
+如果系统有 `rsync`，推荐：
+
+```bash
+mkdir -p "$SSDR/data0_json"
+
+rsync -a --delete \
+    "$DP/data_prep_05/fitbox_vdb/" \
+    "$SSDR/data0_json/"
+```
+
+注意：
+
+- 源路径末尾的 `/` 很重要。
+- `--delete` 只会删除目标目录中多余文件，不会删除源目录。
+
+如果系统没有 `rsync`，使用：
+
+```bash
+SRC="$DP/data_prep_05/fitbox_vdb"
+DST="$SSDR/data0_json"
+
+test -d "$SRC" || { echo "ERROR: source fitbox_vdb not found: $SRC"; exit 1; }
+
+rm -rf "$DST"
+mkdir -p "$DST"
+
+cp -a "$SRC/." "$DST/"
+```
+
+检查：
+
+```bash
+find "$SSDR/data0_json" -maxdepth 4 -type f | sort
+
+ls -lh \
+    "$SSDR/data0_json/skeleton_hierarchy_data.pkl" \
+    "$SSDR/data0_json/animation_data.pkl" \
+    "$SSDR/data0_json/main_mesh_VDB.pkl" \
+    "$SSDR/data0_json/bone_reduced_versions/cleaned_full/skeleton_hierarchy_data.pkl" \
+    "$SSDR/data0_json/bone_reduced_versions/cleaned_full/animation_data.pkl"
+```
+
+如果导出了 `bone_reduced_001`：
+
+```bash
+ls -lh \
+    "$SSDR/data0_json/bone_reduced_versions/bone_reduced_001/skeleton_hierarchy_data.pkl" \
+    "$SSDR/data0_json/bone_reduced_versions/bone_reduced_001/animation_data.pkl"
+```
+
+---
+
+## 7. SSDR 前置管线
+
+SSDR 工作目录保持原有约定：
+
+```text
+ssdr_work_dir/
+├── data0_json/
+├── data0/
+├── data1/
+└── data2/
+```
+
+### 7.1 Step 00：`data0_json -> data0`
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/00_convert_json_to_pickle.py \
+    --input_dir "$SSDR" \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/06_ssdr_00_convert_json_to_pickle.log"
+```
+
+默认：
+
+```text
+input : $SSDR/data0_json
+output: $SSDR/data0
+```
+
+Step 00 会：
+
+- `.json -> .pkl`
+- `.pkl -> copy`
+- 保持相对目录结构
+
+---
+
+### 7.2 Step 01：`data0 -> data1` 动态帧采样
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/01_reduce_animation_frame.py \
+    --input_dir "$SSDR" \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/07_ssdr_01_reduce_animation_frame.log"
+```
+
+默认：
+
+```text
+input : $SSDR/data0
+output: $SSDR/data1
+```
+
+动态帧采样规则：
+
+```text
+若 frame_count <= 210，则保留全部；
+若 frame_count > 210，则均匀采样到 200 帧。
+```
+
+---
+
+### 7.3 Step 02：`data1 -> data2` 骨骼权重映射
+
+如果 Prep 05 使用了：
+
+```bash
+--include_unmodified_templates
+```
+
+则可以显式选择：
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/02_reduce_bone_weight.py \
+    --input_dir "$SSDR" \
+    --variant bone_reduced_001 \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/08_ssdr_02_reduce_bone_weight.log"
+```
+
+如果没有导出 `bone_reduced_001`，可以不传 `--variant`，让 Step 02 自动选择可用 reduced variant：
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/02_reduce_bone_weight.py \
+    --input_dir "$SSDR" \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/08_ssdr_02_reduce_bone_weight.log"
+```
+
+默认：
+
+```text
+input : $SSDR/data1
+output: $SSDR/data2
+```
+
+输出：
+
+```text
+$SSDR/data2/skeleton_hierarchy_data.pkl
+$SSDR/data2/animation_data.pkl
+$SSDR/data2/main_mesh_VDB.pkl
+$SSDR/data2/step02_reduce_bone_weight_summary.json
+```
+
+---
+
+## 8. 当前 Griffin 测试参考命令
+
+下面是一组完整命令，可用于从头跑 Griffin 的 `data_prep -> ssdr 00/01/02`。
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+EXP_ROOT=/workspace/ogd_experiments
+EXP="$EXP_ROOT/Griffin_A2_exp01_$(date +%Y%m%d_%H%M%S)"
+DP="$EXP/data_prep_work_dir"
+SSDR="$EXP/ssdr_work_dir"
+LOG="$EXP/logs"
+
+INPUT_BLEND=/workspace/data/dataset/Griffin_A2/Blender/Griffin_A2.blend
+CONFIG_SRC=/workspace/git_projects/OGD-LBS/configs/prep_02_sdf_merge_config_griffin.json
+ASSET=Griffin_A2
+DEBUG_FRAME_MAX=60
+
+mkdir -p "$DP/data_prep_00" "$SSDR" "$LOG"
+
+cp "$INPUT_BLEND" "$DP/data_prep_00/${ASSET}.blend"
+cp "$CONFIG_SRC" "$DP/prep_02_sdf_merge_config.json"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_01_concat_nla.py \
+    --input_dir "$DP" \
+    2>&1 | tee "$LOG/01_prep_01_concat_nla.log"
+
+bash scripts/data_prep/prep_02_sdf_pipeline.sh \
+    --input_dir "$DP" \
+    --offset 15 \
+    --no_auto_offset \
+    2>&1 | tee "$LOG/02_prep_02_sdf_pipeline.log"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_03_surface_deform.py \
+    --input_dir "$DP" \
+    --drive_mode BOTH \
+    2>&1 | tee "$LOG/03_prep_03_surface_deform.log"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_04a_bone_pruning.py \
+    --input_dir "$DP" \
+    2>&1 | tee "$LOG/04_prep_04a_bone_pruning.log"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/data_prep/prep_05_export_fitbox.py \
+    --input_dir "$DP" \
+    --debug_frame_max "$DEBUG_FRAME_MAX" \
+    --include_unmodified_templates \
+    2>&1 | tee "$LOG/05_prep_05_export_fitbox.log"
+
+SRC="$DP/data_prep_05/fitbox_vdb"
+DST="$SSDR/data0_json"
+
+rm -rf "$DST"
+mkdir -p "$DST"
+cp -a "$SRC/." "$DST/"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/00_convert_json_to_pickle.py \
+    --input_dir "$SSDR" \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/06_ssdr_00_convert_json_to_pickle.log"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/01_reduce_animation_frame.py \
+    --input_dir "$SSDR" \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/07_ssdr_01_reduce_animation_frame.log"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/02_reduce_bone_weight.py \
+    --input_dir "$SSDR" \
+    --variant bone_reduced_001 \
+    --overwrite_output \
+    --max_workers 1 \
+    2>&1 | tee "$LOG/08_ssdr_02_reduce_bone_weight.log"
+```
+
+---
+
+## 9. 单测与编译检查
+
+### 9.1 data_prep 路径测试
+
+```bash
+python -m unittest discover -s scripts/data_prep/tests -p 'test_*.py' -v
+```
+
+### 9.2 SSDR 测试
+
+```bash
+python -m unittest discover -s scripts/ssdr/tests -p 'test_*.py' -v
+```

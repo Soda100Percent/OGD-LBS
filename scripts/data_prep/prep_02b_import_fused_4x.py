@@ -4,23 +4,31 @@
 """
 Prep 02b: Import fused VDB OBJ meshes into Blender 4.x mainline file.
 
-Path behavior:
-    required:
-        --input_blend
+Staged data-prep behavior:
+    --input_dir <data_prep_work_dir>
+        reads :
+            <data_prep_work_dir>/data_prep_01/*_prep_01.blend
+            <data_prep_work_dir>/data_prep_02/sdf_exports/manifest.json
+        writes:
+            <data_prep_work_dir>/data_prep_02/<asset>_prep_02.blend
 
-    optional:
-        --manifest
-            If omitted:
-                <work_dir>/<base_stem>_prep_01_sdf_exports/manifest.json
+    --input_dir <data_prep_work_dir>/data_prep_01
+        reads :
+            <data_prep_work_dir>/data_prep_01/*_prep_01.blend
+            <data_prep_work_dir>/data_prep_02/sdf_exports/manifest.json
+        writes:
+            <data_prep_work_dir>/data_prep_02/<asset>_prep_02.blend
 
-        --output_blend
-            If omitted:
-                <work_dir>/<base_stem>_prep_02.blend
+    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+        reads :
+            <custom_input_tree>/*_prep_01.blend
+            <custom_output_tree>/sdf_exports/manifest.json
+        writes:
+            <custom_output_tree>/<asset>_prep_02.blend
 
 Important:
-    - No --config fallback.
     - Manifest must contain vdb_mapping and exports.
-    - OBJ files referenced by manifest are registered as MANIFEST_REFERENCE inputs.
+    - OBJ files referenced by manifest are validated before scene modification.
 """
 
 from __future__ import annotations
@@ -31,19 +39,24 @@ from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_src_in_syspath() -> None:
+def ensure_repo_paths_in_syspath() -> None:
     this_file = Path(__file__).resolve(strict=False)
 
     for parent in [this_file.parent, *this_file.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src").exists():
             src_dir = parent / "src"
-            src_s = str(src_dir)
-            if src_s not in sys.path:
-                sys.path.insert(0, src_s)
+            data_prep_dir = parent / "scripts" / "data_prep"
+
+            for item in [src_dir, data_prep_dir]:
+                item_s = str(item)
+                if item_s not in sys.path:
+                    sys.path.insert(0, item_s)
             return
 
+    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
 
-ensure_repo_src_in_syspath()
+
+ensure_repo_paths_in_syspath()
 
 import bpy  # noqa: E402
 
@@ -55,9 +68,12 @@ from ogd_lbs.blender.object import (  # noqa: E402
 from ogd_lbs.blender.context import align_scene_pose_frame, update_view_layer  # noqa: E402
 
 from paths import (  # noqa: E402
-    make_data_prep_context,
-    prep_02_manifest_rel,
-    prep_02b_output_blend_rel,
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    print_data_prep_resolution_info,
+    discover_unique_blend,
+    extract_asset_base_stem,
+    prep_02b_output_blend_name,
 )
 from manifest import (  # noqa: E402
     load_manifest,
@@ -67,6 +83,23 @@ from manifest import (  # noqa: E402
     resolve_manifest_reference_path,
     source_object_name_for_vdb,
 )
+
+
+def require_file(path: Path, *, role: str) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing required {role}: {path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"Required {role} is not a file: {path}")
+    return path
+
+
+def save_blend(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n💾 Saving to: {path}", flush=True)
+    save_result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
+    if save_result != {"FINISHED"}:
+        raise RuntimeError(f"Failed to save blend file: {path}, result={save_result}")
 
 
 def ensure_source_armature_modifier(
@@ -262,76 +295,78 @@ def main() -> None:
         description="Prep 02b: import VDB fused meshes and create Source_<VDB> lineage meshes."
     )
 
-    parser.add_argument("--input_blend", type=str, required=True)
     parser.add_argument(
-        "--manifest",
+        "-i",
+        "--input_dir",
         type=str,
-        default=None,
-        help="Manifest from Prep 02a. Default: <work_dir>/<base_stem>_prep_01_sdf_exports/manifest.json",
+        required=True,
+        help=(
+            "Data-prep work_dir or data_prep_01 input tree. "
+            "The script discovers exactly one *_prep_01.blend inside the input tree."
+        ),
     )
     parser.add_argument(
-        "--output_blend",
+        "-o",
+        "--output_dir",
         type=str,
         default=None,
-        help="Output blend. Default: <work_dir>/<base_stem>_prep_02.blend",
+        help=(
+            "Optional explicit output tree. If omitted, writes to "
+            "<work_dir>/data_prep_02."
+        ),
     )
 
     args = parser.parse_args(script_argv())
 
-    ctx = make_data_prep_context(args.input_blend)
-
-    input_path = ctx.resolve_input(
-        "input_blend",
-        args.input_blend,
-        None,
-        expected_type="file",
-    )
-    manifest_path = ctx.resolve_input(
-        "manifest",
-        args.manifest,
-        prep_02_manifest_rel(ctx),
-        expected_type="file",
-    )
-    output_path = ctx.resolve_output(
-        "output_blend",
-        args.output_blend,
-        prep_02b_output_blend_rel(ctx),
-        expected_type="file",
+    resolution = resolve_data_prep_stage_dirs(
+        step_id="02b",
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        step_title="Prep 02b: Import Fused VDB OBJ",
     )
 
-    manifest_obj: dict[str, Any] | None = None
-    manifest_error: Exception | None = None
-    vdb_mapping: dict[str, list[str]] = {}
-    exports: dict[str, str] = {}
+    print_data_prep_resolution_info(resolution)
+
+    try:
+        validate_data_prep_stage_resolution(resolution)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    input_path = discover_unique_blend(
+        resolution.input_tree,
+        pattern="*_prep_01.blend",
+        role="Prep 02b input blend",
+    )
+
+    base_stem = extract_asset_base_stem(input_path)
+
+    manifest_path = (resolution.output_tree / "sdf_exports" / "manifest.json").resolve(strict=False)
+    output_path = (resolution.output_tree / prep_02b_output_blend_name(base_stem)).resolve(strict=False)
+
+    require_file(manifest_path, role="Prep 02a manifest")
+
+    manifest_obj: dict[str, Any] = load_manifest(manifest_path)
+    vdb_mapping = require_vdb_mapping(manifest_obj)
+    exports = require_exports_for_mapping(manifest_obj, vdb_mapping)
+
     export_paths: dict[str, Path] = {}
+    for vdb_name, ref_path in exports.items():
+        resolved_obj_path = resolve_manifest_reference_path(manifest_path, ref_path)
+        require_file(resolved_obj_path, role=f"VDB OBJ for {vdb_name}")
+        export_paths[vdb_name] = resolved_obj_path
 
-    if manifest_path.exists() and manifest_path.is_file():
-        try:
-            manifest_obj = load_manifest(manifest_path)
-            vdb_mapping = require_vdb_mapping(manifest_obj)
-            exports = require_exports_for_mapping(manifest_obj, vdb_mapping)
+    resolution.output_tree.mkdir(parents=True, exist_ok=True)
 
-            for vdb_name, ref_path in exports.items():
-                resolved_obj_path = resolve_manifest_reference_path(manifest_path, ref_path)
-                export_paths[vdb_name] = resolved_obj_path
-                ctx.add_manifest_reference_input(
-                    f"vdb_obj:{vdb_name}",
-                    ref_path,
-                    manifest_path=manifest_path,
-                    expected_type="file",
-                )
-        except Exception as exc:
-            manifest_error = exc
+    print("\n📋 Prep 02b resolved files:", flush=True)
+    print(f"   input_blend : {input_path}", flush=True)
+    print(f"   base_stem   : {base_stem}", flush=True)
+    print(f"   manifest    : {manifest_path}", flush=True)
+    print(f"   output_blend: {output_path}", flush=True)
+    print("   VDB OBJ exports:", flush=True)
+    for vdb_name, obj_path in sorted(export_paths.items()):
+        print(f"      {vdb_name}: {obj_path}", flush=True)
 
-    ctx.print_and_validate("Prep 02b: Import Fused VDB OBJ")
-
-    if manifest_error is not None:
-        raise RuntimeError(f"Invalid manifest: {manifest_path}: {manifest_error}") from manifest_error
-
-    if manifest_obj is None:
-        raise RuntimeError(f"Manifest was not loaded: {manifest_path}")
-
-    print(f"📂 Loading: {input_path}", flush=True)
+    print(f"\n📂 Loading: {input_path}", flush=True)
     result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
     if result != {"FINISHED"}:
         raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
@@ -404,11 +439,7 @@ def main() -> None:
     print(f"   Updated manifest: {manifest_path}", flush=True)
 
     update_view_layer()
-
-    print(f"\n💾 Saving to: {output_path}", flush=True)
-    save_result = bpy.ops.wm.save_as_mainfile(filepath=str(output_path))
-    if save_result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to save blend file: {output_path}, result={save_result}")
+    save_blend(output_path)
 
     print("🎉 Prep 02b done.", flush=True)
 

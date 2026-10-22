@@ -4,18 +4,25 @@
 """
 Prep 02a: SDF Grid fusion in Blender 5.x.
 
-Path behavior:
-    required:
-        --input_blend
+Staged data-prep behavior:
+    --input_dir <data_prep_work_dir>
+        reads : <data_prep_work_dir>/data_prep_01/*_prep_01.blend
+        writes: <data_prep_work_dir>/data_prep_02/sdf_exports/
 
-    optional path inputs / outputs:
-        --config
-            If omitted:
-                <work_dir>/prep_02_sdf_merge_config.json
+    --input_dir <data_prep_work_dir>/data_prep_01
+        reads : <data_prep_work_dir>/data_prep_01/*_prep_01.blend
+        writes: <data_prep_work_dir>/data_prep_02/sdf_exports/
 
-        --out_dir
-            If omitted:
-                <work_dir>/<base_stem>_prep_01_sdf_exports/
+    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
+        reads : <custom_input_tree>/*_prep_01.blend
+        writes: <custom_output_tree>/sdf_exports/
+
+Configuration:
+    Default:
+        <work_dir>/prep_02_sdf_merge_config.json
+
+    Override:
+        --config /path/to/config.json
 
 Configuration override rule:
     1. Load config JSON.
@@ -39,19 +46,24 @@ from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_src_in_syspath() -> None:
+def ensure_repo_paths_in_syspath() -> None:
     this_file = Path(__file__).resolve(strict=False)
 
     for parent in [this_file.parent, *this_file.parents]:
         if (parent / "pyproject.toml").exists() and (parent / "src").exists():
             src_dir = parent / "src"
-            src_s = str(src_dir)
-            if src_s not in sys.path:
-                sys.path.insert(0, src_s)
+            data_prep_dir = parent / "scripts" / "data_prep"
+
+            for item in [src_dir, data_prep_dir]:
+                item_s = str(item)
+                if item_s not in sys.path:
+                    sys.path.insert(0, item_s)
             return
 
+    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
 
-ensure_repo_src_in_syspath()
+
+ensure_repo_paths_in_syspath()
 
 import bpy  # noqa: E402
 
@@ -70,9 +82,10 @@ from ogd_lbs.blender.sdf_grid import (  # noqa: E402
 )
 
 from paths import (  # noqa: E402
-    make_data_prep_context,
-    prep_02a_config_rel,
-    prep_02a_out_dir_rel,
+    resolve_data_prep_stage_dirs,
+    validate_data_prep_stage_resolution,
+    print_data_prep_resolution_info,
+    discover_unique_blend,
 )
 
 
@@ -193,20 +206,36 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prep 02a: Blender 5.x SDF Grid fusion.")
 
     required = parser.add_argument_group("required arguments")
-    required.add_argument("--input_blend", type=str, required=True)
+    required.add_argument(
+        "-i",
+        "--input_dir",
+        type=str,
+        required=True,
+        help=(
+            "Data-prep work_dir or data_prep_01 input tree. "
+            "The script discovers exactly one *_prep_01.blend inside the input tree."
+        ),
+    )
 
     path_args = parser.add_argument_group("path arguments")
+    path_args.add_argument(
+        "-o",
+        "--output_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional explicit output tree. If omitted, writes to "
+            "<work_dir>/data_prep_02."
+        ),
+    )
     path_args.add_argument(
         "--config",
         type=str,
         default=None,
-        help="SDF merge config. Default: <work_dir>/prep_02_sdf_merge_config.json",
-    )
-    path_args.add_argument(
-        "--out_dir",
-        type=str,
-        default=None,
-        help="Output directory. Default: <work_dir>/<base_stem>_prep_01_sdf_exports/",
+        help=(
+            "SDF merge config override. If omitted, use "
+            "<work_dir>/prep_02_sdf_merge_config.json."
+        ),
     )
 
     run_args = parser.add_argument_group("runtime arguments")
@@ -254,30 +283,48 @@ def main() -> None:
 
     args = parser.parse_args(script_argv())
 
-    ctx = make_data_prep_context(args.input_blend)
-
-    input_path = ctx.resolve_input(
-        "input_blend",
-        args.input_blend,
-        None,
-        expected_type="file",
-    )
-    config_path = ctx.resolve_input(
-        "config",
-        args.config,
-        prep_02a_config_rel(ctx),
-        expected_type="file",
-    )
-    out_dir = ctx.resolve_output(
-        "out_dir",
-        args.out_dir,
-        prep_02a_out_dir_rel(ctx),
-        expected_type="dir",
+    resolution = resolve_data_prep_stage_dirs(
+        step_id="02a",
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        step_title="Prep 02a: SDF Grid Fusion",
     )
 
-    ctx.print_and_validate("Prep 02a: SDF Grid Fusion")
+    print_data_prep_resolution_info(resolution)
 
-    print(f"📂 Loading: {input_path}", flush=True)
+    try:
+        validate_data_prep_stage_resolution(resolution)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    input_path = discover_unique_blend(
+        resolution.input_tree,
+        pattern="*_prep_01.blend",
+        role="Prep 02a input blend",
+    )
+
+    if args.config is not None and str(args.config).strip():
+        config_path = Path(args.config).expanduser().resolve(strict=False)
+        config_source = "EXPLICIT_OVERRIDE"
+    else:
+        config_path = (resolution.work_dir / "prep_02_sdf_merge_config.json").resolve(strict=False)
+        config_source = "WORK_DIR_DEFAULT"
+
+    out_dir = (resolution.output_tree / "sdf_exports").resolve(strict=False)
+
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"Missing Prep 02a config: {config_path} (source={config_source})"
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\n📋 Prep 02a resolved files:", flush=True)
+    print(f"   input_blend : {input_path}", flush=True)
+    print(f"   config      : {config_path} ({config_source})", flush=True)
+    print(f"   out_dir     : {out_dir}", flush=True)
+
+    print(f"\n📂 Loading: {input_path}", flush=True)
     result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
     if result != {"FINISHED"}:
         raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
