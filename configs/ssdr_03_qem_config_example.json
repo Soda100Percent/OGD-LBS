@@ -1,0 +1,33 @@
+{
+    "global": {
+        "simp_rate_base": 0.1,
+        "min_target_faces": 100,
+        "maximum_error": "inf",
+
+        "qem_frames": "all",
+        "qem_sample_count": 16,
+        "qem_profile_detail": false,
+
+        "preserve_topology": false,
+        "preserve_boundary_mode": "soft",
+        "boundary_weight": 1000.0,
+        "preserve_normal": true,
+        "normal_flip_threshold": 0.0,
+        "quality_check": true,
+        "quality_thr": 0.3,
+        "hard_quality_check": false,
+        "attribute_merge": "edge_linear",
+        "cleanup_mesh": true,
+
+        "validate_output": true,
+        "weak_validate": false
+    },
+    "mesh_overrides": {
+        "main_mesh_VDB": {
+            "simp_rate_multiplier": 1.0
+        },
+        "example_direct_target_faces": {
+            "target_faces": 5000
+        }
+    }
+}

@@ -26,6 +26,10 @@ Step defaults:
     Step 02:
         input : <work_dir>/data1
         output: <work_dir>/data2
+
+    Step 03:
+        input : <work_dir>/data2
+        output: <work_dir>/data3
 """
 
 from __future__ import annotations
@@ -46,12 +50,14 @@ SSDR_STAGE_INPUT_DIR_BY_STEP: dict[str, str] = {
     "00": "data0_json",
     "01": "data0",
     "02": "data1",
+    "03": "data2",
 }
 
 SSDR_STAGE_OUTPUT_DIR_BY_STEP: dict[str, str] = {
     "00": "data0",
     "01": "data1",
     "02": "data2",
+    "03": "data3",
 }
 
 SSDR_KNOWN_STAGE_DIR_NAMES: tuple[str, ...] = (

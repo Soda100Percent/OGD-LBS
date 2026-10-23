@@ -428,3 +428,914 @@ def export_mesh(
 
     save_data(out_path, data, fmt)
     print(f"   saved mesh: {out_path}", flush=True)
+
+# -----------------------------------------------------------------------------
+# Fitbox / SSDR stage import helpers
+# -----------------------------------------------------------------------------
+# Plugin-aligned Blender import helpers.
+#
+# Reference tested plugins:
+#   - ImportShapeKeyAnimation20260808.py
+#   - SkdMeshArmatureImporter20260813.py
+#
+# Important compatibility decisions:
+#   1. shape_key mode follows ImportShapeKeyAnimation:
+#        - mesh + shape keys only
+#        - shape key names: frame_1, frame_2, ...
+#        - keyframes at frame_number - 1, frame_number, frame_number + 1
+#        - default playback frame is contiguous i + 1, NOT scene_frames
+#
+#   2. LBS mode follows SkdMeshArmatureImporter:
+#        - armature edit bone head from rest_pose translation
+#        - armature edit bone tail = location + rotation @ Vector((0, 0.5, 0))
+#        - pose_bone.matrix = Matrix(animation_frame[bone_idx])
+#        - keyframes at frame_idx + 1 by default
+#        - vertex_group.add(..., "REPLACE")
+#        - Armature modifier name: ArmatureMod
+#        - mesh object parent = armature object
+#
+# Optional use_scene_frames exists only for debugging sampled-frame timing; it is
+# disabled by default to match the tested plugins.
+# -----------------------------------------------------------------------------
+
+
+FITBOX_IMPORT_CORE_STEMS = {
+    "skeleton_hierarchy_data",
+    "animation_data",
+}
+
+FITBOX_IMPORT_SUMMARY_STEMS = {
+    "step00_convert_summary",
+    "step01_frame_sampling_summary",
+    "step02_reduce_bone_weight_summary",
+    "step03_qem_summary",
+}
+
+
+def normalize_fitbox_import_mode(value: str) -> str:
+    text = str(value).strip().lower().replace("-", "_")
+
+    if text in {"lbs", "l_b_s"}:
+        return "LBS"
+
+    if text in {"shape_key", "shapekey", "shape_keys", "shape"}:
+        return "shape_key"
+
+    raise ValueError(f"Unsupported import_mode={value!r}. Expected LBS or shape_key.")
+
+
+def load_fitbox_pkl(path: str | Path) -> Any:
+    path = Path(path)
+    with path.open("rb") as f:
+        return pickle.load(f)
+
+
+def require_fitbox_file(path: str | Path, *, role: str) -> Path:
+    path = Path(path).expanduser().resolve(strict=False)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Missing required {role}: {path}")
+
+    if not path.is_file():
+        raise FileNotFoundError(f"Required {role} is not a file: {path}")
+
+    return path
+
+
+def discover_fitbox_mesh_pkl(input_dir: str | Path, mesh_name: str | None = None) -> Path:
+    input_dir = Path(input_dir).expanduser().resolve(strict=False)
+
+    if mesh_name:
+        return require_fitbox_file(input_dir / f"{mesh_name}.pkl", role=f"mesh {mesh_name}")
+
+    candidates: list[Path] = []
+    for path in sorted(input_dir.glob("*.pkl"), key=lambda p: p.name):
+        if path.stem in FITBOX_IMPORT_CORE_STEMS:
+            continue
+        if path.stem in FITBOX_IMPORT_SUMMARY_STEMS:
+            continue
+        candidates.append(path)
+
+    if not candidates:
+        raise FileNotFoundError(f"No mesh .pkl file found under: {input_dir}")
+
+    if len(candidates) > 1:
+        raise RuntimeError(
+            "Multiple mesh .pkl files found. Please specify --mesh.\\n"
+            + "\\n".join(f"  - {p.name}" for p in candidates)
+        )
+
+    return candidates[0]
+
+
+def clear_blender_scene_for_fitbox_import() -> None:
+    try:
+        bpy.ops.object.mode_set(mode="OBJECT")
+    except Exception:
+        pass
+
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete()
+
+    for collection in [
+        bpy.data.meshes,
+        bpy.data.armatures,
+        bpy.data.materials,
+        bpy.data.actions,
+        bpy.data.cameras,
+        bpy.data.lights,
+    ]:
+        for datablock in list(collection):
+            if datablock.users == 0:
+                collection.remove(datablock)
+
+
+def _fitbox_load_stage_objects(
+    input_dir: str | Path,
+    mesh_name: str | None,
+) -> tuple[Path, Path, Path, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    input_dir = Path(input_dir).expanduser().resolve(strict=False)
+
+    if not input_dir.is_dir():
+        raise FileNotFoundError(f"Input directory does not exist or is not a directory: {input_dir}")
+
+    skeleton_path = require_fitbox_file(
+        input_dir / "skeleton_hierarchy_data.pkl",
+        role="skeleton_hierarchy_data.pkl",
+    )
+    animation_path = require_fitbox_file(
+        input_dir / "animation_data.pkl",
+        role="animation_data.pkl",
+    )
+    mesh_path = discover_fitbox_mesh_pkl(input_dir, mesh_name)
+
+    skeleton_obj = load_fitbox_pkl(skeleton_path)
+    animation_obj = load_fitbox_pkl(animation_path)
+    mesh_obj = load_fitbox_pkl(mesh_path)
+
+    if not isinstance(skeleton_obj, dict):
+        raise RuntimeError(f"Skeleton object must be dict: {skeleton_path}")
+    if not isinstance(animation_obj, dict):
+        raise RuntimeError(f"Animation object must be dict: {animation_path}")
+    if not isinstance(mesh_obj, dict):
+        raise RuntimeError(f"Mesh object must be dict: {mesh_path}")
+
+    return skeleton_path, animation_path, mesh_path, skeleton_obj, animation_obj, mesh_obj
+
+
+def get_fitbox_bone_names(skeleton_obj: dict[str, Any]) -> list[str]:
+    bone_names = [str(x) for x in skeleton_obj.get(KEY_BONE_NAMES, [])]
+
+    if not bone_names:
+        raise RuntimeError("skeleton_hierarchy_data missing non-empty bone_names.")
+
+    return bone_names
+
+
+def normalize_fitbox_parent_indices(
+    skeleton_obj: dict[str, Any],
+    bone_count: int,
+) -> list[int | None]:
+    raw = list(skeleton_obj.get("parent_indices", []))
+
+    if len(raw) != bone_count:
+        raise RuntimeError(
+            f"parent_indices length mismatch: {len(raw)} vs bone_count={bone_count}"
+        )
+
+    out: list[int | None] = []
+    for value in raw:
+        if value is None:
+            out.append(None)
+            continue
+
+        idx = int(value)
+        out.append(idx if idx >= 0 else None)
+
+    return out
+
+
+def get_fitbox_rest_pose_matrices(
+    animation_obj: dict[str, Any],
+    bone_count: int,
+) -> np.ndarray:
+    rest = animation_obj.get(KEY_REST_POSE)
+
+    if rest is None:
+        raise RuntimeError("animation_data missing rest_pose; plugin-aligned LBS import requires it.")
+
+    arr = np.asarray(rest, dtype=np.float64)
+
+    if arr.shape != (bone_count, 4, 4):
+        raise RuntimeError(
+            f"rest_pose shape mismatch: expected ({bone_count}, 4, 4), got {arr.shape}"
+        )
+
+    return arr
+
+
+def get_fitbox_animation_pose_matrices(
+    animation_obj: dict[str, Any],
+    bone_count: int,
+) -> np.ndarray:
+    poses = animation_obj.get(KEY_ANIMATION_POSES)
+
+    if poses is None:
+        raise RuntimeError("animation_data missing animation_poses.")
+
+    arr = np.asarray(poses, dtype=np.float64)
+
+    if arr.ndim != 4 or arr.shape[1:] != (bone_count, 4, 4):
+        raise RuntimeError(
+            f"animation_poses shape mismatch: expected (frames, {bone_count}, 4, 4), got {arr.shape}"
+        )
+
+    return arr
+
+
+def get_fitbox_import_frame_number(
+    *,
+    frame_idx: int,
+    animation_obj: dict[str, Any],
+    mesh_obj: dict[str, Any] | None,
+    frame_count: int,
+    use_scene_frames: bool,
+) -> int:
+    if not use_scene_frames:
+        return int(frame_idx) + 1
+
+    raw = None
+    if mesh_obj is not None and "scene_frames" in mesh_obj:
+        raw = mesh_obj.get("scene_frames")
+    elif "scene_frames" in animation_obj:
+        raw = animation_obj.get("scene_frames")
+
+    if raw is None:
+        return int(frame_idx) + 1
+
+    arr = np.asarray(raw, dtype=np.int64)
+
+    if arr.ndim == 1 and arr.shape[0] == int(frame_count):
+        return int(arr[int(frame_idx)])
+
+    print(
+        f"⚠️ scene_frames shape mismatch: got {arr.shape}, expected ({frame_count},). "
+        "Falling back to contiguous frame_idx + 1.",
+        flush=True,
+    )
+    return int(frame_idx) + 1
+
+
+def import_fitbox_uvs_plugin_style(
+    *,
+    obj: bpy.types.Object,
+    mesh_data: dict[str, Any],
+) -> None:
+    if KEY_FACE_UVS not in mesh_data:
+        return
+
+    raw = mesh_data.get(KEY_FACE_UVS)
+    arr = np.asarray(raw, dtype=object)
+
+    if arr.size == 0:
+        return
+
+    if arr.ndim != 3:
+        print(
+            f"⚠️ The uv of mesh {mesh_data.get('name', obj.name)} could not be imported. "
+            "Make sure the mesh is properly triangulated.",
+            flush=True,
+        )
+        return
+
+    if arr.shape[0] != len(obj.data.polygons):
+        print(
+            f"⚠️ The uv of mesh {mesh_data.get('name', obj.name)} could not be imported. "
+            f"faces={len(obj.data.polygons)}, face_uvs={arr.shape[0]}",
+            flush=True,
+        )
+        return
+
+    obj.data.uv_layers.new()
+    uv_layer = obj.data.uv_layers.active.data
+
+    for poly in obj.data.polygons:
+        if poly.index >= arr.shape[0]:
+            continue
+
+        for local_loop_i, loop_vertex_index in enumerate(poly.loop_indices):
+            if local_loop_i >= arr.shape[1]:
+                continue
+
+            # Plugin code used uv_layer[loop_vertex_index].uv. We preserve this
+            # convention when possible, but fall back to the actual loop index
+            # if the vertex index is out of the UV loop-data range.
+            target_i = int(loop_vertex_index)
+            if target_i < 0 or target_i >= len(uv_layer):
+                target_i = int(poly.loop_indices[local_loop_i])
+
+            uv_layer[target_i].uv = arr[poly.index, local_loop_i]
+
+
+def import_fitbox_materials_plugin_style(
+    *,
+    obj: bpy.types.Object,
+    mesh_data: dict[str, Any],
+) -> None:
+    if KEY_FACE_MATERIALS not in mesh_data:
+        return
+
+    raw_mats = mesh_data.get(KEY_FACE_MATERIALS)
+    face_materials = np.asarray(raw_mats)
+
+    if face_materials.size == 0:
+        return
+
+    material_names = list(mesh_data.get(KEY_MATERIAL_NAMES, []))
+    if not material_names:
+        material_names = [None]
+
+    for m_id in range(len(material_names)):
+        material_name = obj.data.name if len(material_names) == 1 else f"{obj.data.name}_mtl{m_id + 1}"
+        obj.data.materials.append(bpy.data.materials.new(material_name))
+
+    if len(obj.data.polygons) == face_materials.shape[0]:
+        for i, polygon in enumerate(obj.data.polygons):
+            polygon.material_index = int(face_materials[i])
+    else:
+        print(
+            f"⚠️ The face materials of mesh {mesh_data.get('name', obj.name)} could not be imported. "
+            f"The faces count {len(obj.data.polygons)} must equal to the face material count {face_materials.shape[0]}",
+            flush=True,
+        )
+
+
+def create_fitbox_mesh_object_plugin_style(
+    *,
+    mesh_obj: dict[str, Any],
+    object_name: str | None = None,
+) -> bpy.types.Object:
+    vertices = np.asarray(mesh_obj[KEY_VERTICES], dtype=np.float64)
+    faces = np.asarray(mesh_obj[KEY_FACES], dtype=np.int64)
+
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise RuntimeError(f"vertices must have shape (V, 3), got {vertices.shape}")
+
+    if faces.ndim != 2 or faces.shape[1] < 3:
+        raise RuntimeError(f"faces must have shape (F, K), K>=3, got {faces.shape}")
+
+    mesh_name = object_name or str(mesh_obj.get("name", "FitboxMesh"))
+
+    mesh = bpy.data.meshes.new(name=mesh_name)
+    obj = bpy.data.objects.new(mesh.name, mesh)
+    bpy.context.collection.objects.link(obj)
+
+    mesh.from_pydata(vertices.tolist(), [], faces.astype(int).tolist())
+    mesh.update(calc_edges=True)
+
+    import_fitbox_uvs_plugin_style(obj=obj, mesh_data=mesh_obj)
+    import_fitbox_materials_plugin_style(obj=obj, mesh_data=mesh_obj)
+
+    if len(obj.data.materials) == 0:
+        mat = bpy.data.materials.new("Fitbox_Debug_Material")
+        mat.diffuse_color = (0.72, 0.72, 0.78, 1.0)
+        obj.data.materials.append(mat)
+
+    print(
+        f"✅ Created mesh: {obj.name} "
+        f"(verts={len(mesh.vertices)}, faces={len(mesh.polygons)})",
+        flush=True,
+    )
+
+    return obj
+
+
+def add_fitbox_shape_keys_plugin_style(
+    *,
+    obj: bpy.types.Object,
+    mesh_obj: dict[str, Any],
+    animation_obj: dict[str, Any],
+    max_shape_keys: int,
+    animate_shape_keys: bool,
+    use_scene_frames: bool,
+) -> int:
+    if KEY_BAKED_VERTICES not in mesh_obj:
+        print(f"⚠️ Mesh {obj.name} has no baked_animation_vertices; skipping shape keys.", flush=True)
+        return 0
+
+    baked = np.asarray(mesh_obj[KEY_BAKED_VERTICES], dtype=np.float64)
+
+    if baked.ndim != 3 or baked.shape[2] != 3:
+        print(f"⚠️ Invalid baked_animation_vertices shape: {baked.shape}; skipping shape keys.", flush=True)
+        return 0
+
+    if baked.shape[1] != len(obj.data.vertices):
+        raise RuntimeError(
+            f"baked_animation_vertices vertex axis mismatch: {baked.shape[1]} vs {len(obj.data.vertices)}"
+        )
+
+    frame_count = int(baked.shape[0])
+
+    if int(max_shape_keys) > 0 and frame_count > int(max_shape_keys):
+        selected = np.rint(
+            np.linspace(0, frame_count - 1, num=int(max_shape_keys))
+        ).astype(np.int64)
+        selected = np.unique(selected)
+    else:
+        selected = np.arange(frame_count, dtype=np.int64)
+
+    print(
+        f"🔑 Import mode shape_key: adding shape keys {len(selected)}/{frame_count} "
+        f"(plugin-aligned frames, use_scene_frames={bool(use_scene_frames)})",
+        flush=True,
+    )
+
+    # Plugin version did not explicitly create a Basis key first. Blender will
+    # create one automatically when the first shape_key_add is called.
+    imported_count = 0
+
+    for frame_idx in selected.tolist():
+        frame_number = get_fitbox_import_frame_number(
+            frame_idx=int(frame_idx),
+            animation_obj=animation_obj,
+            mesh_obj=mesh_obj,
+            frame_count=frame_count,
+            use_scene_frames=bool(use_scene_frames),
+        )
+
+        new_key = obj.shape_key_add(name=f"frame_{frame_number}")
+        new_key.data.foreach_set("co", baked[int(frame_idx)].reshape(-1))
+        imported_count += 1
+
+    shape_keys = obj.data.shape_keys
+    if shape_keys is None:
+        return imported_count
+
+    if animate_shape_keys:
+        for key in shape_keys.key_blocks:
+            if not key.name.startswith("frame_"):
+                continue
+
+            try:
+                frame_number = int(key.name[6:])
+            except ValueError:
+                continue
+
+            key.value = 1.0
+            key.keyframe_insert(data_path="value", frame=frame_number)
+
+            key.value = 0.0
+            key.keyframe_insert(data_path="value", frame=frame_number - 1)
+            key.keyframe_insert(data_path="value", frame=frame_number + 1)
+
+        # Match plugin hard-transition behavior.
+        if shape_keys.animation_data is not None and shape_keys.animation_data.action is not None:
+            for fcurve in shape_keys.animation_data.action.fcurves:
+                for kp in fcurve.keyframe_points:
+                    kp.interpolation = "CONSTANT"
+
+        if imported_count > 0:
+            bpy.context.scene.frame_start = 1
+            if use_scene_frames:
+                # Best effort: use max keyframe frame.
+                max_frame = 1
+                for key in shape_keys.key_blocks:
+                    if key.name.startswith("frame_"):
+                        try:
+                            max_frame = max(max_frame, int(key.name[6:]))
+                        except ValueError:
+                            pass
+                bpy.context.scene.frame_end = max_frame
+            else:
+                bpy.context.scene.frame_end = frame_count
+
+    bpy.context.scene.frame_set(0)
+
+    print(f"✅ Added shape keys: {imported_count}", flush=True)
+    return imported_count
+
+
+def create_fitbox_armature_lbs_plugin_style(
+    *,
+    skeleton_obj: dict[str, Any],
+    animation_obj: dict[str, Any],
+    armature_name: str,
+    bone_length: float,
+) -> bpy.types.Object:
+    from mathutils import Matrix, Vector
+
+    bone_names = get_fitbox_bone_names(skeleton_obj)
+    parent_indices = normalize_fitbox_parent_indices(skeleton_obj, len(bone_names))
+    rest_pose = get_fitbox_rest_pose_matrices(animation_obj, len(bone_names))
+
+    armature = bpy.data.armatures.new(name=armature_name)
+    armature_obj = bpy.data.objects.new(armature.name, armature)
+    bpy.context.collection.objects.link(armature_obj)
+
+    bpy.context.view_layer.objects.active = armature_obj
+    armature_obj.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    edit_bones = armature_obj.data.edit_bones
+
+    for idx, bone_name in enumerate(bone_names):
+        bone = edit_bones.new(bone_name)
+
+        location, rotation, _scale = Matrix(rest_pose[idx].tolist()).decompose()
+        bone.head = location
+        bone.tail = location + rotation @ Vector((0.0, float(bone_length), 0.0))
+
+    for idx, parent_idx in enumerate(parent_indices):
+        if parent_idx is not None:
+            edit_bones[bone_names[idx]].parent = edit_bones[bone_names[int(parent_idx)]]
+
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    armature.display_type = "STICK"
+    try:
+        armature_obj.show_in_front = True
+    except Exception:
+        pass
+
+    print(f"✅ Created LBS armature: {armature_obj.name} (bones={len(bone_names)})", flush=True)
+    return armature_obj
+
+
+def animate_fitbox_armature_lbs_plugin_style(
+    *,
+    armature_obj: bpy.types.Object,
+    skeleton_obj: dict[str, Any],
+    animation_obj: dict[str, Any],
+    mesh_obj: dict[str, Any],
+    max_lbs_frames: int,
+    use_scene_frames: bool,
+) -> int:
+    from mathutils import Matrix
+
+    bone_names = get_fitbox_bone_names(skeleton_obj)
+    parent_indices = normalize_fitbox_parent_indices(skeleton_obj, len(bone_names))
+    animation_frames = get_fitbox_animation_pose_matrices(animation_obj, len(bone_names))
+
+    frame_count = int(animation_frames.shape[0])
+
+    if int(max_lbs_frames) > 0 and frame_count > int(max_lbs_frames):
+        selected = np.rint(
+            np.linspace(0, frame_count - 1, num=int(max_lbs_frames))
+        ).astype(np.int64)
+        selected = np.unique(selected)
+    else:
+        selected = np.arange(frame_count, dtype=np.int64)
+
+    # The tested plugin defines sort_tree_bfs but effectively uses range order.
+    bone_sorted_by_hierarchy = list(range(len(parent_indices)))
+
+    bpy.context.view_layer.objects.active = armature_obj
+    armature_obj.select_set(True)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    deps = bpy.context.evaluated_depsgraph_get()
+
+    print(
+        f"🦴 Import mode LBS: keyframing armature poses {len(selected)}/{frame_count} "
+        f"(plugin-aligned frames, use_scene_frames={bool(use_scene_frames)})",
+        flush=True,
+    )
+
+    keyed_count = 0
+
+    for frame_idx in selected.tolist():
+        frame_number = get_fitbox_import_frame_number(
+            frame_idx=int(frame_idx),
+            animation_obj=animation_obj,
+            mesh_obj=mesh_obj,
+            frame_count=frame_count,
+            use_scene_frames=bool(use_scene_frames),
+        )
+
+        bpy.context.scene.frame_set(frame_number)
+
+        for bone_idx in bone_sorted_by_hierarchy:
+            bone_name = bone_names[bone_idx]
+            pose_bone = armature_obj.pose.bones.get(bone_name)
+            if pose_bone is None:
+                continue
+
+            mat = Matrix(animation_frames[int(frame_idx), bone_idx].tolist())
+            pose_bone.matrix = mat
+
+            try:
+                deps.update()
+            except Exception:
+                pass
+
+            pose_bone.keyframe_insert("location", frame=frame_number)
+            pose_bone.keyframe_insert("rotation_quaternion", frame=frame_number)
+            pose_bone.keyframe_insert("scale", frame=frame_number)
+
+        keyed_count += 1
+
+    if keyed_count > 0:
+        bpy.context.scene.frame_start = 1
+        if use_scene_frames:
+            max_frame = 1
+            for frame_idx in selected.tolist():
+                max_frame = max(
+                    max_frame,
+                    get_fitbox_import_frame_number(
+                        frame_idx=int(frame_idx),
+                        animation_obj=animation_obj,
+                        mesh_obj=mesh_obj,
+                        frame_count=frame_count,
+                        use_scene_frames=True,
+                    ),
+                )
+            bpy.context.scene.frame_end = max_frame
+        else:
+            bpy.context.scene.frame_end = frame_count
+
+    print(f"✅ LBS armature animation keyed frames: {keyed_count}", flush=True)
+    return keyed_count
+
+
+def add_fitbox_lbs_vertex_groups_and_modifier_plugin_style(
+    *,
+    obj: bpy.types.Object,
+    mesh_obj: dict[str, Any],
+    skeleton_obj: dict[str, Any],
+    armature_obj: bpy.types.Object,
+    weight_eps: float,
+) -> None:
+    bone_names = get_fitbox_bone_names(skeleton_obj)
+
+    if KEY_VERTEX_BONE_WEIGHTS not in mesh_obj:
+        print(f"⚠️ Mesh {obj.name} has no vertex_bone_weights; skipping skinning setup.", flush=True)
+        return
+
+    vertex_bone_weights = np.asarray(mesh_obj[KEY_VERTEX_BONE_WEIGHTS], dtype=np.float64)
+
+    if vertex_bone_weights.ndim != 2:
+        raise RuntimeError(f"vertex_bone_weights must be 2D, got {vertex_bone_weights.shape}")
+
+    if vertex_bone_weights.shape[0] != len(obj.data.vertices):
+        raise RuntimeError(
+            f"vertex_bone_weights vertex axis mismatch: {vertex_bone_weights.shape[0]} vs {len(obj.data.vertices)}"
+        )
+
+    if vertex_bone_weights.shape[1] < len(bone_names):
+        raise RuntimeError(
+            f"vertex_bone_weights bone axis too small: {vertex_bone_weights.shape[1]} vs {len(bone_names)}"
+        )
+
+    assignment_count = 0
+
+    for idx, bone_name in enumerate(bone_names):
+        vertex_group = obj.vertex_groups.new(name=bone_name)
+
+        for vtx_idx, vtx_weight in enumerate(vertex_bone_weights[:, idx]):
+            weight = float(vtx_weight)
+            if weight > float(weight_eps):
+                vertex_group.add([int(vtx_idx)], weight, "REPLACE")
+                assignment_count += 1
+
+    modifier = obj.modifiers.new(name="ArmatureMod", type="ARMATURE")
+    modifier.object = armature_obj
+    modifier.use_vertex_groups = True
+
+    obj.parent = armature_obj
+
+    print(
+        f"✅ Added LBS skinning setup: groups={len(bone_names)}, assignments={assignment_count}, "
+        f"modifier=ArmatureMod, parent={armature_obj.name}",
+        flush=True,
+    )
+
+
+def setup_fitbox_debug_camera_and_light(mesh_obj: bpy.types.Object) -> None:
+    from mathutils import Vector
+
+    bbox = [mesh_obj.matrix_world @ Vector(corner) for corner in mesh_obj.bound_box]
+    center = sum(bbox, Vector()) / 8.0
+    dims = mesh_obj.dimensions
+    radius = max(float(dims.x), float(dims.y), float(dims.z), 1.0)
+
+    cam_data = bpy.data.cameras.new("Debug_Camera")
+    cam_obj = bpy.data.objects.new("Debug_Camera", cam_data)
+    bpy.context.collection.objects.link(cam_obj)
+
+    cam_obj.location = center + Vector((0.0, -2.5 * radius, 1.2 * radius))
+    direction = center - cam_obj.location
+    cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+    cam_data.lens = 35.0
+    cam_data.clip_end = max(10000.0, radius * 20.0)
+
+    bpy.context.scene.camera = cam_obj
+
+    light_data = bpy.data.lights.new("Debug_Key_Light", "SUN")
+    light_obj = bpy.data.objects.new("Debug_Key_Light", light_data)
+    bpy.context.collection.objects.link(light_obj)
+    light_obj.rotation_euler = (0.8, 0.0, 0.6)
+    light_data.energy = 2.5
+
+    bpy.context.scene.render.resolution_x = 1920
+    bpy.context.scene.render.resolution_y = 1080
+    bpy.context.scene.render.resolution_percentage = 100
+
+    print("✅ Added debug camera and sun light.", flush=True)
+
+
+def write_fitbox_import_metadata(
+    *,
+    input_dir: Path,
+    output_blend: Path,
+    mesh_path: Path,
+    import_mode: str,
+    mesh_obj: dict[str, Any],
+    use_scene_frames: bool,
+) -> None:
+    text = bpy.data.texts.new("FITBOX_IMPORT_DEBUG_INFO")
+    text.write(
+        "Fitbox import debug blend\\n"
+        f"input_dir: {input_dir}\\n"
+        f"mesh_path: {mesh_path}\\n"
+        f"output_blend: {output_blend}\\n"
+        f"import_mode: {import_mode}\\n"
+        f"use_scene_frames: {use_scene_frames}\\n"
+        f"mesh_name: {mesh_obj.get('name', mesh_path.stem)}\\n"
+        f"vertices: {np.asarray(mesh_obj.get(KEY_VERTICES, [])).shape}\\n"
+        f"faces: {np.asarray(mesh_obj.get(KEY_FACES, [])).shape}\\n"
+        f"baked_animation_vertices: {np.asarray(mesh_obj.get(KEY_BAKED_VERTICES, [])).shape}\\n"
+        f"vertex_bone_weights: {np.asarray(mesh_obj.get(KEY_VERTEX_BONE_WEIGHTS, [])).shape}\\n"
+    )
+
+
+def import_fitbox_stage_to_blend(
+    *,
+    input_dir: str | Path,
+    output_blend: str | Path,
+    mesh_name: str | None = None,
+    import_mode: str = "shape_key",
+    object_name: str | None = None,
+    armature_name: str = "Armature",
+    weight_eps: float = 1e-8,
+    max_shape_keys: int = -1,
+    animate_shape_keys: bool = True,
+    max_lbs_frames: int = -1,
+    add_armature_modifier_enabled: bool = True,
+    setup_debug_scene: bool = True,
+    write_metadata: bool = True,
+    clear_existing_scene: bool = True,
+    use_scene_frames: bool = False,
+    bone_length: float = 0.5,
+) -> dict[str, Any]:
+    mode = normalize_fitbox_import_mode(import_mode)
+
+    input_dir = Path(input_dir).expanduser().resolve(strict=False)
+    output_blend = Path(output_blend).expanduser().resolve(strict=False)
+
+    skeleton_path, animation_path, mesh_path, skeleton_obj, animation_obj, mesh_obj = _fitbox_load_stage_objects(
+        input_dir,
+        mesh_name,
+    )
+
+    object_name_resolved = object_name or str(mesh_obj.get("name", mesh_path.stem))
+
+    if clear_existing_scene:
+        clear_blender_scene_for_fitbox_import()
+
+    print("=" * 96, flush=True)
+    print("Fitbox -> Blender import", flush=True)
+    print(f"input_dir        : {input_dir}", flush=True)
+    print(f"skeleton         : {skeleton_path}", flush=True)
+    print(f"animation        : {animation_path}", flush=True)
+    print(f"mesh             : {mesh_path}", flush=True)
+    print(f"output_blend     : {output_blend}", flush=True)
+    print(f"import_mode      : {mode}", flush=True)
+    print(f"use_scene_frames : {bool(use_scene_frames)}", flush=True)
+    print("=" * 96, flush=True)
+
+    shape_key_count = 0
+    lbs_keyed_frame_count = 0
+    armature_obj = None
+
+    if mode == "shape_key":
+        # Plugin-aligned shape key import: mesh + shape keys only.
+        mesh_bl_obj = create_fitbox_mesh_object_plugin_style(
+            mesh_obj=mesh_obj,
+            object_name=object_name_resolved,
+        )
+
+        shape_key_count = add_fitbox_shape_keys_plugin_style(
+            obj=mesh_bl_obj,
+            mesh_obj=mesh_obj,
+            animation_obj=animation_obj,
+            max_shape_keys=int(max_shape_keys),
+            animate_shape_keys=bool(animate_shape_keys),
+            use_scene_frames=bool(use_scene_frames),
+        )
+
+    elif mode == "LBS":
+        # Plugin-aligned LBS import: armature first, animation, then skinned mesh.
+        armature_obj = create_fitbox_armature_lbs_plugin_style(
+            skeleton_obj=skeleton_obj,
+            animation_obj=animation_obj,
+            armature_name=str(armature_name),
+            bone_length=float(bone_length),
+        )
+
+        lbs_keyed_frame_count = animate_fitbox_armature_lbs_plugin_style(
+            armature_obj=armature_obj,
+            skeleton_obj=skeleton_obj,
+            animation_obj=animation_obj,
+            mesh_obj=mesh_obj,
+            max_lbs_frames=int(max_lbs_frames),
+            use_scene_frames=bool(use_scene_frames),
+        )
+
+        mesh_bl_obj = create_fitbox_mesh_object_plugin_style(
+            mesh_obj=mesh_obj,
+            object_name=object_name_resolved,
+        )
+
+        if add_armature_modifier_enabled:
+            add_fitbox_lbs_vertex_groups_and_modifier_plugin_style(
+                obj=mesh_bl_obj,
+                mesh_obj=mesh_obj,
+                skeleton_obj=skeleton_obj,
+                armature_obj=armature_obj,
+                weight_eps=float(weight_eps),
+            )
+
+    else:
+        raise RuntimeError(f"Internal unsupported mode: {mode}")
+
+    if setup_debug_scene:
+        setup_fitbox_debug_camera_and_light(mesh_bl_obj)
+
+    if write_metadata:
+        write_fitbox_import_metadata(
+            input_dir=input_dir,
+            output_blend=output_blend,
+            mesh_path=mesh_path,
+            import_mode=mode,
+            mesh_obj=mesh_obj,
+            use_scene_frames=bool(use_scene_frames),
+        )
+
+    output_blend.parent.mkdir(parents=True, exist_ok=True)
+    result = bpy.ops.wm.save_as_mainfile(filepath=str(output_blend))
+
+    if result != {"FINISHED"}:
+        raise RuntimeError(f"Failed to save blend: {output_blend}, result={result}")
+
+    vertex_count = int(np.asarray(mesh_obj.get(KEY_VERTICES, [])).shape[0])
+    face_count = int(np.asarray(mesh_obj.get(KEY_FACES, [])).shape[0])
+    bone_count = len(get_fitbox_bone_names(skeleton_obj))
+    frame_count = int(np.asarray(animation_obj.get(KEY_ANIMATION_POSES, [])).shape[0])
+
+    print("\\n🎉 Fitbox blend saved.", flush=True)
+    print(f"   {output_blend}", flush=True)
+
+    return {
+        "input_dir": str(input_dir),
+        "output_blend": str(output_blend),
+        "mesh_path": str(mesh_path),
+        "import_mode": mode,
+        "use_scene_frames": bool(use_scene_frames),
+        "mesh_name": object_name_resolved,
+        "vertex_count": vertex_count,
+        "face_count": face_count,
+        "bone_count": bone_count,
+        "frame_count": frame_count,
+        "shape_key_count": int(shape_key_count),
+        "lbs_keyed_frame_count": int(lbs_keyed_frame_count),
+    }
+
+
+def open_fitbox_import_blend_gui(
+    output_blend: str | Path,
+    blender_bin: str | None = None,
+) -> None:
+    import os
+    import subprocess
+
+    output_blend = Path(output_blend).expanduser().resolve(strict=False)
+
+    if blender_bin is None or not str(blender_bin).strip():
+        blender_bin = os.environ.get(
+            "BLENDER_BIN",
+            "/workspace/blender-4.5.12-linux-x64/blender",
+        )
+
+    blender_path = Path(blender_bin).expanduser()
+
+    if not blender_path.exists():
+        print(
+            "\\n⚠️ Blender executable not found. Open manually with:\\n"
+            f"   blender {output_blend}\\n"
+            f"   # or set BLENDER_BIN=/path/to/blender",
+            flush=True,
+        )
+        return
+
+    print(f"\\n🖥️ Opening Blender GUI: {blender_path} {output_blend}", flush=True)
+    subprocess.Popen([str(blender_path), str(output_blend)])
