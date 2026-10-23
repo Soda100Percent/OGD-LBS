@@ -1,3 +1,5 @@
+
+
 # OGD-LBS
 
 > Code of Paper: **“OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters”**
@@ -13,7 +15,9 @@ OGD-LBS/
 ├── configs/
 │   ├── prep_02_sdf_merge_config_example.json
 │   ├── prep_02_merge_config_example.json
-│   └── prep_02_sdf_merge_config_griffin.json
+│   ├── prep_02_sdf_merge_config_griffin.json
+│   └── ssdr_03_qem_config_example.json
+│
 ├── scripts/
 │   ├── data_prep/
 │   │   ├── prep_01_concat_nla.py
@@ -26,22 +30,44 @@ OGD-LBS/
 │   │   ├── paths.py
 │   │   ├── manifest.py
 │   │   └── tests/
-│   └── ssdr/
-│       ├── 00_convert_json_to_pickle.py
-│       ├── 01_reduce_animation_frame.py
-│       ├── 02_reduce_bone_weight.py
-│       ├── paths.py
-│       └── tests/
+│   │
+│   ├── ssdr/
+│   │   ├── 00_convert_json_to_pickle.py
+│   │   ├── 01_reduce_animation_frame.py
+│   │   ├── 02_reduce_bone_weight.py
+│   │   ├── 03_create_low_poly_shapes.py
+│   │   ├── paths.py
+│   │   └── tests/
+│   │
+│   └── debug/
+│       └── import_fitbox_to_blend.py
+│
 ├── src/
 │   └── ogd_lbs/
 │       ├── blender/
 │       ├── fitbox/
+│       │   ├── blender_io.py
+│       │   ├── sampling.py
+│       │   ├── schema.py
+│       │   └── validation.py
+│       ├── qem/
+│       │   ├── __init__.py
+│       │   └── qem.py
 │       ├── ssdr/
 │       └── utils/
+│
 ├── pyproject.toml
 ├── LICENSE
 └── README.md
 ```
+
+说明：
+
+- `scripts/data_prep/`：商业 `.blend` 到 Fitbox 数据的预处理流水线。
+- `scripts/ssdr/`：SSDR 前置阶段，目前包含 Step 00 / 01 / 02 / 03。
+- `scripts/debug/`：调试和检查工具，不属于某个 SSDR 阶段。
+- `src/ogd_lbs/fitbox/blender_io.py`：Fitbox 导出与导入 Blender 的核心逻辑。
+- `src/ogd_lbs/qem/qem.py`：QEM 网格减面核心实现。
 
 ---
 
@@ -58,7 +84,8 @@ OGD-LBS/
 - Prep 03
 - Prep 04a
 - Prep 05
-- SSDR Step 00 / 01 / 02
+- SSDR Step 00 / 01 / 02 / 03
+- Fitbox 导入检查工具
 - 常规 Python 测试
 
 示例：
@@ -74,6 +101,13 @@ pip install -e .
 Python 3.11
 bpy 4.x
 numpy
+pandas
+```
+
+如果需要运行旧的后续优化实验模块，可能还需要：
+
+```text
+scipy
 ```
 
 ### 2.2 SDF 环境：`ogd-bpy52`
@@ -112,7 +146,8 @@ networkx
 ```text
 /workspace/ogd_experiments/Griffin_A2_exp01/
 ├── data_prep_work_dir/
-└── ssdr_work_dir/
+├── ssdr_work_dir/
+└── logs/
 ```
 
 其中：
@@ -130,7 +165,7 @@ ssdr_work_dir/
 用于 SSDR 前置阶段：
 
 ```text
-data0_json -> data0 -> data1 -> data2
+data0_json -> data0 -> data1 -> data2 -> data3
 ```
 
 ---
@@ -282,8 +317,6 @@ $DP/data_prep_02/Griffin_A2_prep_02.blend
 ```
 
 #### 5.3.2 手动分两步运行
-
-如果需要调试 02a / 02b，可分开运行。
 
 Prep 02a：
 
@@ -499,15 +532,27 @@ ls -lh \
 
 ## 7. SSDR 前置管线
 
-SSDR 工作目录保持原有约定：
+SSDR 工作目录使用 staged directory 约定：
 
 ```text
 ssdr_work_dir/
 ├── data0_json/
 ├── data0/
 ├── data1/
-└── data2/
+├── data2/
+└── data3/
 ```
+
+阶段语义：
+
+|阶段|输入目录|输出目录|说明|
+|---|---|---|---|
+|Step 00|`data0_json`|`data0`|JSON/PKL 标准化到 PKL|
+|Step 01|`data0`|`data1`|动态帧采样|
+|Step 02|`data1`|`data2`|骨骼权重映射到 reduced skeleton|
+|Step 03|`data2`|`data3`|QEM low-poly shape generation|
+
+---
 
 ### 7.1 Step 00：`data0_json -> data0`
 
@@ -611,9 +656,199 @@ $SSDR/data2/step02_reduce_bone_weight_summary.json
 
 ---
 
-## 8. 当前 Griffin 测试参考命令
+### 7.4 Step 03：`data2 -> data3` QEM 减面
 
-下面是一组完整命令，可用于从头跑 Griffin 的 `data_prep -> ssdr 00/01/02`。
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/03_create_low_poly_shapes.py \
+    --input_dir "$SSDR" \
+    --simp_rate_base 0.1 \
+    --overwrite_output \
+    --max_workers 8 \
+    2>&1 | tee "$LOG/09_ssdr_03_create_low_poly_shapes.log"
+```
+
+默认：
+
+```text
+input : $SSDR/data2
+output: $SSDR/data3
+```
+
+输出：
+
+```text
+$SSDR/data3/skeleton_hierarchy_data.pkl
+$SSDR/data3/animation_data.pkl
+$SSDR/data3/main_mesh_VDB.pkl
+$SSDR/data3/step03_qem_summary.json
+```
+
+#### Step 03 配置文件
+
+Step 03 支持可选配置文件：
+
+```bash
+--config /path/to/ssdr_03_qem_config.json
+```
+
+如果未传 `--config`，脚本会尝试读取：
+
+```text
+$SSDR/ssdr_03_qem_config.json
+```
+
+如果默认配置文件不存在，则使用内置默认值。
+
+配置示例：
+
+```text
+configs/ssdr_03_qem_config_example.json
+```
+
+配置覆盖优先级：
+
+```text
+显式 CLI 参数
+  > config mesh_overrides[mesh_name]
+  > config global
+  > built-in defaults
+```
+
+每个 mesh 的目标面数计算规则：
+
+```text
+如果 mesh_overrides 中直接指定 target_faces：
+    target_faces 优先
+
+否则：
+    target_faces = max(
+        triangulated_face_count * simp_rate_base * simp_rate_multiplier,
+        min_target_faces
+    )
+```
+
+#### Polygon faces / quad faces
+
+Step 03 的 QEM 核心要求三角面。若输入 mesh 是 quad 或其他固定宽度 polygon faces，Step 03 会在 QEM 前自动进行 triangle fan triangulation。
+
+例如：
+
+```text
+113840 quads -> 227680 triangles -> QEM target 22768 faces
+```
+
+如果 VDB / QEM 数据没有有效 UV，`face_uvs` 可能会被跳过或丢弃。这对当前 SSDR/QEM/优化流程通常不是问题。
+
+---
+
+## 8. Fitbox 导入 Blender 检查工具
+
+Fitbox / SSDR stage 数据可以导入回 Blender 进行检查。
+
+统一脚本位置：
+
+```text
+scripts/debug/import_fitbox_to_blend.py
+```
+
+核心导入逻辑位于：
+
+```text
+src/ogd_lbs/fitbox/blender_io.py
+```
+
+该工具支持两种导入模式：
+
+```bash
+--import_mode shape_key
+--import_mode LBS
+```
+
+### 8.1 Shape key 模式
+
+Shape key 模式直接使用 `baked_animation_vertices` 创建 shape keys。该逻辑对齐已测试有效的 Blender 插件版 `ImportShapeKeyAnimation`：
+
+- 默认使用连续帧 `frame_idx + 1`；
+- shape key 名称为 `frame_1`, `frame_2`, ...；
+- 每个 shape key 按插件逻辑插入 `0 -> 1 -> 0` 的硬切换关键帧；
+- 默认不使用 `scene_frames`。
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/debug/import_fitbox_to_blend.py \
+    --input_dir "$SSDR/data3" \
+    --mesh main_mesh_VDB \
+    --import_mode shape_key \
+    --output_blend "$SSDR/data3/import_main_mesh_VDB_shape_key.blend" \
+    --open \
+    2>&1 | tee "$LOG/10_import_data3_shape_key.log"
+```
+
+如果需要按原始采样 scene frames 导入关键帧，可加：
+
+```bash
+--use_scene_frames
+```
+
+### 8.2 LBS 模式
+
+LBS 模式会创建：
+
+- Armature；
+- mesh；
+- vertex groups；
+- Armature modifier；
+- pose bone animation keyframes。
+
+该逻辑对齐已测试有效的 Blender 插件版 `SkdMeshArmatureImporter`：
+
+- armature 默认名称为 `Armature`；
+- edit bone `head = rest_pose translation`；
+- edit bone `tail = location + rotation @ Vector((0, 0.5, 0))`；
+- animation keyframes 默认使用连续帧 `frame_idx + 1`；
+- vertex group 写入使用 `REPLACE`；
+- Armature modifier 名称为 `ArmatureMod`；
+- mesh object parent 设置为 armature object。
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/debug/import_fitbox_to_blend.py \
+    --input_dir "$SSDR/data3" \
+    --mesh main_mesh_VDB \
+    --import_mode LBS \
+    --output_blend "$SSDR/data3/import_main_mesh_VDB_lbs.blend" \
+    --open \
+    2>&1 | tee "$LOG/11_import_data3_lbs.log"
+```
+
+如果你的 Blender 可执行文件路径不是默认：
+
+```text
+/workspace/blender-4.5.12-linux-x64/blender
+```
+
+可以设置：
+
+```bash
+export BLENDER_BIN=/path/to/blender
+```
+
+或者显式传入：
+
+```bash
+--blender_bin /path/to/blender
+```
+
+---
+
+## 9. 当前 Griffin 测试参考命令
+
+下面是一组完整命令，可用于从头跑 Griffin 的：
+
+```text
+data_prep -> ssdr 00/01/02/03
+```
 
 ```bash
 cd /workspace/git_projects/OGD-LBS
@@ -691,20 +926,84 @@ conda run --no-capture-output -n lao-lbs \
     --overwrite_output \
     --max_workers 1 \
     2>&1 | tee "$LOG/08_ssdr_02_reduce_bone_weight.log"
+
+conda run --no-capture-output -n lao-lbs \
+    python scripts/ssdr/03_create_low_poly_shapes.py \
+    --input_dir "$SSDR" \
+    --simp_rate_base 0.1 \
+    --overwrite_output \
+    --max_workers 8 \
+    2>&1 | tee "$LOG/09_ssdr_03_create_low_poly_shapes.log"
+```
+
+可选：导入 `data3` 结果到 Blender 检查：
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/debug/import_fitbox_to_blend.py \
+    --input_dir "$SSDR/data3" \
+    --mesh main_mesh_VDB \
+    --import_mode shape_key \
+    --output_blend "$SSDR/data3/import_main_mesh_VDB_shape_key.blend" \
+    --open \
+    2>&1 | tee "$LOG/10_import_data3_shape_key.log"
+```
+
+```bash
+conda run --no-capture-output -n lao-lbs \
+    python scripts/debug/import_fitbox_to_blend.py \
+    --input_dir "$SSDR/data3" \
+    --mesh main_mesh_VDB \
+    --import_mode LBS \
+    --output_blend "$SSDR/data3/import_main_mesh_VDB_lbs.blend" \
+    --open \
+    2>&1 | tee "$LOG/11_import_data3_lbs.log"
 ```
 
 ---
 
-## 9. 单测与编译检查
+## 10. 单测与编译检查
 
-### 9.1 data_prep 路径测试
+### 10.1 data_prep 路径测试
 
 ```bash
 python -m unittest discover -s scripts/data_prep/tests -p 'test_*.py' -v
 ```
 
-### 9.2 SSDR 测试
+### 10.2 SSDR 测试
 
 ```bash
 python -m unittest discover -s scripts/ssdr/tests -p 'test_*.py' -v
 ```
+
+### 10.3 常用编译检查
+
+```bash
+python -m py_compile \
+    scripts/ssdr/03_create_low_poly_shapes.py \
+    scripts/debug/import_fitbox_to_blend.py \
+    src/ogd_lbs/fitbox/blender_io.py \
+    src/ogd_lbs/fitbox/validation.py \
+    src/ogd_lbs/qem/qem.py
+```
+
+---
+
+## 11. 当前状态说明
+
+目前已迁移并验证的 SSDR 前置阶段包括：
+
+```text
+Step 00: data0_json -> data0
+Step 01: data0 -> data1
+Step 02: data1 -> data2
+Step 03: data2 -> data3
+```
+
+其中 Step 03 已在 Griffin 测试数据上验证：
+
+```text
+quad/polygon faces -> triangulated faces -> QEM reduced mesh
+```
+
+后续联合优化相关阶段仍在迁移规划中。
