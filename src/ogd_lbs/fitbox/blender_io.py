@@ -1094,6 +1094,25 @@ def create_fitbox_armature_lbs_plugin_style(
         bone.head = location
         bone.tail = location + rotation @ Vector((0.0, float(bone_length), 0.0))
 
+        # Restore the missing rest-pose roll around the local bone axis.
+        #
+        # head/tail only fixes Blender edit-bone local Y direction.  Fitbox
+        # rest_pose, however, stores a full 4x4 bone matrix.  Without restoring
+        # roll, Blender's actual bone.matrix_local can share the same head/tail
+        # direction but have different local X/Z axes, so the Armature modifier
+        # evaluates P @ inv(B) instead of the intended T @ inv(R).
+        #
+        # Align Blender edit-bone local Z to rest_rotation @ Z, which fixes the
+        # remaining rotational degree of freedom while preserving the head/tail
+        # direction already set above.
+        try:
+            bone.align_roll(rotation @ Vector((0.0, 0.0, 1.0)))
+        except Exception as exc:
+            print(
+                f"⚠️ Failed to align rest roll for bone {bone_name!r}: {exc}",
+                flush=True,
+            )
+
     for idx, parent_idx in enumerate(parent_indices):
         if parent_idx is not None:
             edit_bones[bone_names[idx]].parent = edit_bones[bone_names[int(parent_idx)]]
