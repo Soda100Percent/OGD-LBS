@@ -59,7 +59,7 @@ from ogd_lbs.fitbox.blender_io import (  # noqa: E402
 
 
 def resolve_default_output_blend(input_dir: Path, import_mode: str, mesh_name: str | None) -> Path:
-    mesh_tag = mesh_name or "auto_mesh"
+    mesh_tag = mesh_name or "ALL"
     mode_tag = str(import_mode).lower()
     return (input_dir / f"import_fitbox_{mesh_tag}_{mode_tag}.blend").resolve(strict=False)
 
@@ -70,7 +70,7 @@ def main() -> None:
     )
 
     parser.add_argument("-i", "--input_dir", type=str, required=True)
-    parser.add_argument("--mesh", type=str, default=None)
+    parser.add_argument("--mesh", type=str, default=None, help="Mesh name/stem. Use ALL, or omit, to import all mesh files.")
     parser.add_argument(
         "-o",
         "--output_blend",
@@ -127,6 +127,16 @@ def main() -> None:
         default=0.5,
         help="LBS mode edit-bone length. Default 0.5 matches tested plugin.",
     )
+    parser.add_argument(
+        "--matrix_space",
+        type=str,
+        choices=["POSE", "WORLD"],
+        default="POSE",
+        help=(
+            "LBS mode matrix interpretation. POSE matches the current plugin-aligned importer. "
+            "WORLD converts animation matrices from WORLD to POSE space, useful for legacy data checks."
+        ),
+    )
 
     parser.add_argument(
         "--open",
@@ -170,6 +180,7 @@ def main() -> None:
         clear_existing_scene=True,
         use_scene_frames=bool(args.use_scene_frames),
         bone_length=float(args.bone_length),
+        matrix_space=str(args.matrix_space),
     )
 
     print("\nImport summary:")
