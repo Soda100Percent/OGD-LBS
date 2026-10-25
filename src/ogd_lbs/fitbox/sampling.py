@@ -4,13 +4,17 @@ from __future__ import annotations
 """
 Frame sampling utilities migrated from the SSDR preprocessing step.
 
-The old SSDR script first exported all frames, then removed many frames from
-animation_poses and baked mesh animations. Here we compute the retained scene
-frames before Blender baking.
-
 Index-range convention:
     - removal_idx_ranges use candidate-frame indices, not Blender scene frame IDs.
     - ranges are 0-based and left-closed, right-open: start:end.
+
+Sampling priority:
+    1. Candidate frame range is resolved from Blender scene/NLA frames.
+    2. Explicit removal_idx_ranges are applied first.
+    3. If target_frame_count > 0, uniformly retain that many frames from the
+       remaining candidates. This has higher priority than removal_rate.
+    4. Otherwise, use legacy removal_rate / removal_bias semantics.
+    5. debug_frame_max is applied last as a debug truncation.
 """
 
 from dataclasses import dataclass
@@ -27,6 +31,7 @@ class FrameSamplingResult:
     removal_mask_before_debug: list[bool]
     explicit_removed_count: int
     rate_removed_count: int
+    target_removed_count: int
     debug_truncated_count: int
     stats: dict
 
@@ -79,6 +84,65 @@ def calc_idxs_by_rate(item_count: int, rate: float, bias: float = 0.0) -> list[i
     return idxs
 
 
+def calc_idxs_by_target_count(item_count: int, target_count: int) -> list[int]:
+    """
+    Select exactly target_count indices uniformly from [0, item_count).
+
+    If target_count >= item_count, keep all indices.
+    """
+    item_count = int(item_count)
+    target_count = int(target_count)
+
+    if item_count < 0:
+        raise ValueError(f"item_count must be non-negative, got {item_count}")
+
+    if target_count <= 0:
+        raise ValueError(f"target_count must be positive, got {target_count}")
+
+    if item_count == 0:
+        return []
+
+    if target_count >= item_count:
+        return list(range(item_count))
+
+    if target_count == 1:
+        return [0]
+
+    raw = np.rint(
+        np.linspace(0, item_count - 1, num=target_count)
+    ).astype(np.int64)
+
+    out: list[int] = []
+    used: set[int] = set()
+
+    for idx_raw in raw.tolist():
+        idx = max(0, min(int(idx_raw), item_count - 1))
+        if idx not in used:
+            out.append(idx)
+            used.add(idx)
+
+    # Defensive fill. Normally linspace+rint is already unique for
+    # target_count <= item_count, but keep exact-count semantics explicit.
+    if len(out) < target_count:
+        for idx in range(item_count):
+            if idx in used:
+                continue
+            out.append(idx)
+            used.add(idx)
+            if len(out) >= target_count:
+                break
+
+    out = sorted(out[:target_count])
+
+    if len(out) != target_count:
+        raise RuntimeError(
+            f"Could not select exact target_count indices: "
+            f"item_count={item_count}, target_count={target_count}, got={len(out)}"
+        )
+
+    return out
+
+
 def calc_mask_by_rate(
     mask: np.ndarray,
     rate: float,
@@ -118,6 +182,44 @@ def calc_mask_frames(
     return mask, explicit_removed_count, rate_removed_count
 
 
+def calc_mask_frames_by_target_count(
+    mask: np.ndarray,
+    idx_ranges: set[tuple[int, int]],
+    target_frame_count: int,
+) -> tuple[np.ndarray, int, int]:
+    """
+    Apply explicit index-range removal, then uniformly keep target_frame_count
+    frames from the remaining candidates.
+
+    Returns:
+        removal_mask, explicit_removed_count, target_removed_count
+    """
+    before_explicit = mask.copy()
+    mask = calc_mask_idx_ranges(mask, idx_ranges)
+    explicit_removed_count = int(np.count_nonzero(mask & ~before_explicit))
+
+    remaining_candidate_indices = np.arange(mask.shape[0])[~mask]
+
+    if remaining_candidate_indices.size <= 0:
+        raise RuntimeError(
+            "Explicit removal ranges removed all candidate frames before target-frame sampling."
+        )
+
+    selected_sub_indices = calc_idxs_by_target_count(
+        int(remaining_candidate_indices.size),
+        int(target_frame_count),
+    )
+    selected_global = set(remaining_candidate_indices[selected_sub_indices].tolist())
+
+    before_target = mask.copy()
+    for idx in remaining_candidate_indices.tolist():
+        if int(idx) not in selected_global:
+            mask[int(idx)] = True
+
+    target_removed_count = int(np.count_nonzero(mask & ~before_target))
+    return mask, explicit_removed_count, target_removed_count
+
+
 def resolve_sampled_frames(
     *,
     frame_start: int,
@@ -125,6 +227,7 @@ def resolve_sampled_frames(
     removal_rate: float = 0.9,
     removal_bias: float = 1.0,
     removal_idx_ranges: set[tuple[int, int]] | None = None,
+    target_frame_count: int = -1,
     debug_frame_max: int = -1,
 ) -> FrameSamplingResult:
     if frame_end_exclusive <= frame_start:
@@ -138,12 +241,25 @@ def resolve_sampled_frames(
     idx_ranges = set(removal_idx_ranges or set())
     removal_mask = np.zeros(candidate_count, dtype=bool)
 
-    removal_mask, explicit_removed_count, rate_removed_count = calc_mask_frames(
-        removal_mask,
-        idx_ranges,
-        float(removal_rate),
-        float(removal_bias),
-    )
+    target_frame_count_i = int(target_frame_count)
+
+    if target_frame_count_i > 0:
+        removal_mask, explicit_removed_count, target_removed_count = calc_mask_frames_by_target_count(
+            removal_mask,
+            idx_ranges,
+            target_frame_count_i,
+        )
+        rate_removed_count = 0
+        sampling_mode = "target_frame_count"
+    else:
+        removal_mask, explicit_removed_count, rate_removed_count = calc_mask_frames(
+            removal_mask,
+            idx_ranges,
+            float(removal_rate),
+            float(removal_bias),
+        )
+        target_removed_count = 0
+        sampling_mode = "removal_rate"
 
     retained_before_debug = [
         frame for frame, removed in zip(candidate_frames, removal_mask.tolist())
@@ -154,6 +270,7 @@ def resolve_sampled_frames(
         raise RuntimeError(
             "Frame sampling produced zero retained frames before debug truncation. "
             f"candidate_count={candidate_count}, removal_rate={removal_rate}, "
+            f"target_frame_count={target_frame_count_i}, "
             f"removal_idx_ranges={sorted(idx_ranges)}"
         )
 
@@ -171,14 +288,18 @@ def resolve_sampled_frames(
     debug_truncated_count = len(retained_before_debug) - len(retained_frames)
 
     stats = {
+        "sampling_mode": sampling_mode,
         "candidate_frame_start": int(frame_start),
         "candidate_frame_end_exclusive": int(frame_end_exclusive),
         "candidate_frame_count": int(candidate_count),
         "removal_rate": float(removal_rate),
         "removal_bias": float(removal_bias),
+        "target_frame_count": int(target_frame_count_i),
+        "target_frame_count_enabled": bool(target_frame_count_i > 0),
         "removal_idx_ranges": [list(x) for x in sorted(idx_ranges)],
         "explicit_removed_count": int(explicit_removed_count),
         "rate_removed_count": int(rate_removed_count),
+        "target_removed_count": int(target_removed_count),
         "retained_before_debug_count": int(len(retained_before_debug)),
         "debug_frame_max": int(debug_frame_max),
         "debug_truncated_count": int(debug_truncated_count),
@@ -197,6 +318,7 @@ def resolve_sampled_frames(
         removal_mask_before_debug=[bool(x) for x in removal_mask.tolist()],
         explicit_removed_count=int(explicit_removed_count),
         rate_removed_count=int(rate_removed_count),
+        target_removed_count=int(target_removed_count),
         debug_truncated_count=int(debug_truncated_count),
         stats=stats,
     )

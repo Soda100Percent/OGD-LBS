@@ -53,42 +53,24 @@ Important terminology:
 from __future__ import annotations
 
 import argparse
-import json
-import sys
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            data_prep_dir = parent / "scripts" / "data_prep"
-
-            for item in [src_dir, data_prep_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
+import _env  # noqa: F401
 
 import bpy  # noqa: E402
 
-from ogd_lbs.utils.common import script_argv  # noqa: E402
+from ogd_lbs.utils.common import script_argv, load_json, dump_json  # noqa: E402
+from ogd_lbs.utils.file_state import utc_now_iso, unix_timestamp, file_metadata  # noqa: E402
 from ogd_lbs.blender.object import ensure_object_mode, find_armature  # noqa: E402
 from ogd_lbs.blender.context import update_view_layer  # noqa: E402
+from ogd_lbs.blender.blend_io import open_blend_file, save_blend_file  # noqa: E402
 from ogd_lbs.blender.bone_pruning import (  # noqa: E402
     collect_effective_vertex_group_names_from_all_meshes,
     classify_bones,
     duplicate_and_prune_cleaned_full_armature,
+    delete_bones_native,
 )
 
 from paths import (  # noqa: E402
@@ -107,19 +89,6 @@ MANUAL_VERSIONS_MANIFEST_NAME = "manifest.json"
 MANUAL_VERSIONS_MANIFEST_SCHEMA = "ogd_lbs_manual_bone_reduced_versions_v1"
 
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def save_blend(path: Path) -> None:
-    print(f"\n💾 Saving to: {path}", flush=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to save blend file: {path}, result={result}")
-
-
 def load_manual_versions_manifest(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {
@@ -134,8 +103,7 @@ def load_manual_versions_manifest(path: Path) -> dict[str, Any]:
             ],
         }
 
-    with path.open("r", encoding="utf-8") as f:
-        obj = json.load(f)
+    obj = load_json(path)
 
     if not isinstance(obj, dict):
         raise RuntimeError(f"Manual versions manifest must be a JSON object: {path}")
@@ -152,20 +120,8 @@ def load_manual_versions_manifest(path: Path) -> dict[str, Any]:
 
 
 def dump_manual_versions_manifest(path: Path, obj: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     obj["updated_at_utc"] = utc_now_iso()
-
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=4, ensure_ascii=False)
-
-
-def file_metadata(path: Path) -> dict[str, Any]:
-    stat = path.stat()
-    return {
-        "size": int(stat.st_size),
-        "mtime": float(stat.st_mtime),
-        "mtime_ns": int(stat.st_mtime_ns),
-    }
+    dump_json(path, obj)
 
 
 def update_manual_template_manifest(
@@ -187,7 +143,7 @@ def update_manual_template_manifest(
         "path": rel_template,
         "armature_name": template_armature_name,
         "generated_at_utc": utc_now_iso(),
-        "generated_at_unix": time.time(),
+        "generated_at_unix": unix_timestamp(),
         "generated_from_cleaned_full_blend": str(cleaned_full_blend_path.resolve(strict=False)),
         "cleaned_full_armature_name": cleaned_full_armature_name,
         "original_armature_name": original_armature_name,
@@ -201,6 +157,288 @@ def update_manual_template_manifest(
     }
 
     dump_manual_versions_manifest(manifest_path, obj)
+
+
+
+
+EXTRA_BONE_REDUCE_CONFIG_SCHEMA = "ogd_lbs_extra_bone_reduction_config_v1"
+
+
+def variant_armature_name_from_variant_name(variant_name: str) -> str:
+    name = str(variant_name).strip()
+    if name.startswith("bone_reduced_"):
+        suffix = name[len("bone_reduced_") :]
+        return f"Armature_Bone_Reduced_{suffix}"
+    return f"Armature_Bone_Reduced_{name}"
+
+
+def load_extra_bone_reduce_config(path: Path) -> list[dict[str, Any]]:
+    obj = load_json(path)
+
+    if not isinstance(obj, dict):
+        raise RuntimeError(f"Extra bone-reduction config must be a JSON object: {path}")
+
+    variants = obj.get("variants")
+    if not isinstance(variants, dict) or not variants:
+        raise RuntimeError(
+            f"Extra bone-reduction config must contain non-empty object field 'variants': {path}"
+        )
+
+    normalized: list[dict[str, Any]] = []
+
+    for raw_name, raw_cfg in variants.items():
+        variant_name = str(raw_name).strip()
+        if not variant_name or "/" in variant_name or "\\" in variant_name:
+            raise RuntimeError(f"Invalid variant name in extra bone-reduction config: {raw_name!r}")
+
+        if variant_name.endswith(".blend"):
+            variant_name = Path(variant_name).stem
+
+        if isinstance(raw_cfg, list):
+            delete_bones = [str(x) for x in raw_cfg]
+            armature_name = variant_armature_name_from_variant_name(variant_name)
+            description = ""
+        elif isinstance(raw_cfg, dict):
+            raw_delete = raw_cfg.get("delete_bones", raw_cfg.get("bones_to_delete"))
+            if not isinstance(raw_delete, list):
+                raise RuntimeError(
+                    f"Variant {variant_name!r} must contain list field 'delete_bones'."
+                )
+            delete_bones = [str(x) for x in raw_delete]
+            armature_name = str(
+                raw_cfg.get("armature_name")
+                or variant_armature_name_from_variant_name(variant_name)
+            )
+            description = str(raw_cfg.get("description", ""))
+        else:
+            raise RuntimeError(
+                f"Variant {variant_name!r} config must be either a list or object."
+            )
+
+        seen: set[str] = set()
+        unique_delete: list[str] = []
+        for bone_name in delete_bones:
+            bone_name = str(bone_name).strip()
+            if not bone_name:
+                continue
+            if bone_name in seen:
+                continue
+            seen.add(bone_name)
+            unique_delete.append(bone_name)
+
+        if not unique_delete:
+            raise RuntimeError(f"Variant {variant_name!r} has empty delete_bones.")
+
+        normalized.append(
+            {
+                "variant_name": variant_name,
+                "armature_name": armature_name,
+                "delete_bones": unique_delete,
+                "description": description,
+            }
+        )
+
+    return normalized
+
+
+def update_config_variant_manifest(
+    *,
+    manifest_path: Path,
+    variant_path: Path,
+    variant_name: str,
+    variant_armature_name: str,
+    requested_delete_bones: list[str],
+    applied_delete_bones: list[str],
+    already_absent_in_cleaned_full: list[str],
+    cleaned_full_blend_path: Path,
+    cleaned_full_armature_name: str,
+    original_armature_name: str,
+    extra_bone_reduce_config_path: Path,
+    final_bone_count: int,
+    description: str,
+) -> None:
+    obj = load_manual_versions_manifest(manifest_path)
+
+    rel_variant = variant_path.name
+    meta = file_metadata(variant_path)
+
+    obj["templates"][rel_variant] = {
+        "kind": "configured_bone_reduction_variant",
+        "path": rel_variant,
+        "variant_name": variant_name,
+        "armature_name": variant_armature_name,
+        "generated_at_utc": utc_now_iso(),
+        "generated_at_unix": unix_timestamp(),
+        "generated_from_cleaned_full_blend": str(cleaned_full_blend_path.resolve(strict=False)),
+        "cleaned_full_armature_name": cleaned_full_armature_name,
+        "original_armature_name": original_armature_name,
+        "extra_bone_reduce_config": str(extra_bone_reduce_config_path.resolve(strict=False)),
+        "requested_delete_bones": list(requested_delete_bones),
+        "applied_delete_bones": list(applied_delete_bones),
+        "already_absent_in_cleaned_full": list(already_absent_in_cleaned_full),
+        # Backward-compatible field: actual bones deleted from Armature_Cleaned_Full.
+        "delete_bones": list(applied_delete_bones),
+        "requested_delete_bone_count": int(len(requested_delete_bones)),
+        "deleted_bone_count": int(len(applied_delete_bones)),
+        "already_absent_in_cleaned_full_count": int(len(already_absent_in_cleaned_full)),
+        "final_bone_count": int(final_bone_count),
+        "initial_file_metadata": meta,
+        "skip_if_unmodified": False,
+        "description": description,
+    }
+
+    dump_manual_versions_manifest(manifest_path, obj)
+
+
+def create_configured_bone_reduced_variants(
+    *,
+    config_path: Path,
+    manual_versions_dir: Path,
+    cleaned_full_blend_path: Path,
+    cleaned_full_armature_name: str,
+    original_armature_name: str,
+    overwrite: bool,
+) -> list[dict[str, Any]]:
+    config_path = Path(config_path).expanduser().resolve(strict=False)
+
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Extra bone-reduction config not found: {config_path}")
+
+    variants = load_extra_bone_reduce_config(config_path)
+    manual_versions_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = manual_versions_dir / MANUAL_VERSIONS_MANIFEST_NAME
+    summaries: list[dict[str, Any]] = []
+
+    print("\n🧬 Creating configured bone-reduced variants...", flush=True)
+    print(f"   Config: {config_path}", flush=True)
+
+    for variant in variants:
+        variant_name = str(variant["variant_name"])
+        armature_name = str(variant["armature_name"])
+        delete_bones = [str(x) for x in variant["delete_bones"]]
+        description = str(variant.get("description", ""))
+
+        variant_path = manual_versions_dir / f"{variant_name}.blend"
+
+        if variant_path.exists() and not overwrite:
+            raise RuntimeError(
+                f"Configured bone-reduced variant already exists: {variant_path}. "
+                "Use --overwrite_config_variants to regenerate it."
+            )
+
+        print("\n" + "-" * 80, flush=True)
+        print(f"Configured variant: {variant_name}", flush=True)
+        print(f"   output blend : {variant_path}", flush=True)
+        print(f"   armature     : {armature_name}", flush=True)
+        print(f"   delete bones : {len(delete_bones)}", flush=True)
+
+        open_blend_file(
+            cleaned_full_blend_path,
+            role="Prep 04a cleaned-full source for configured bone-reduced variant",
+            load_ui=False,
+        )
+
+        cleaned = bpy.data.objects.get(cleaned_full_armature_name)
+        if cleaned is None or cleaned.type != "ARMATURE":
+            raise RuntimeError(
+                f"Cleaned-full armature not found in {cleaned_full_blend_path}: "
+                f"{cleaned_full_armature_name}"
+            )
+
+        existing_bones = {bone.name for bone in cleaned.data.bones}
+
+        original = bpy.data.objects.get(original_armature_name)
+        if original is not None and original.type == "ARMATURE":
+            original_bones = {bone.name for bone in original.data.bones}
+        else:
+            original_bones = set()
+
+        missing_from_cleaned = [name for name in delete_bones if name not in existing_bones]
+        already_absent_in_cleaned_full = [
+            name for name in missing_from_cleaned if name in original_bones
+        ]
+        unresolved_missing = [
+            name for name in missing_from_cleaned if name not in original_bones
+        ]
+        applied_delete_bones = [name for name in delete_bones if name in existing_bones]
+
+        if unresolved_missing:
+            raise RuntimeError(
+                f"Variant {variant_name!r} requests bones that are absent from both "
+                f"{cleaned_full_armature_name} and {original_armature_name}: {unresolved_missing}"
+            )
+
+        if already_absent_in_cleaned_full:
+            print(
+                f"   already absent in {cleaned_full_armature_name} "
+                f"(accepted because present in {original_armature_name}): "
+                f"{len(already_absent_in_cleaned_full)}",
+                flush=True,
+            )
+            for bone_name in already_absent_in_cleaned_full:
+                print(f"      already absent: {bone_name}", flush=True)
+
+        print(
+            f"   requested deletes: {len(delete_bones)}, "
+            f"applied deletes: {len(applied_delete_bones)}, "
+            f"already absent: {len(already_absent_in_cleaned_full)}",
+            flush=True,
+        )
+
+        cleaned.name = armature_name
+        cleaned.data.name = armature_name
+        update_view_layer()
+
+        if applied_delete_bones:
+            delete_bones_native(cleaned, set(applied_delete_bones))
+        else:
+            print(
+                f"   ⚠️ No requested bones remain in {cleaned_full_armature_name}; "
+                "saving unchanged configured variant.",
+                flush=True,
+            )
+        update_view_layer()
+
+        final_bone_count = len(cleaned.data.bones)
+
+        save_blend_file(
+            variant_path,
+            role=f"configured bone-reduced variant blend: {variant_name}",
+        )
+
+        update_config_variant_manifest(
+            manifest_path=manifest_path,
+            variant_path=variant_path,
+            variant_name=variant_name,
+            variant_armature_name=armature_name,
+            requested_delete_bones=delete_bones,
+            applied_delete_bones=applied_delete_bones,
+            already_absent_in_cleaned_full=already_absent_in_cleaned_full,
+            cleaned_full_blend_path=cleaned_full_blend_path,
+            cleaned_full_armature_name=cleaned_full_armature_name,
+            original_armature_name=original_armature_name,
+            extra_bone_reduce_config_path=config_path,
+            final_bone_count=final_bone_count,
+            description=description,
+        )
+
+        summaries.append(
+            {
+                "variant_name": variant_name,
+                "blend_path": str(variant_path),
+                "armature_name": armature_name,
+                "requested_delete_bone_count": int(len(delete_bones)),
+                "deleted_bone_count": int(len(applied_delete_bones)),
+                "already_absent_in_cleaned_full_count": int(len(already_absent_in_cleaned_full)),
+                "final_bone_count": int(final_bone_count),
+            }
+        )
+
+        print(f"   final bones  : {final_bone_count}", flush=True)
+        print(f"   manifest     : {manifest_path}", flush=True)
+
+    return summaries
 
 
 def create_manual_bone_reduced_template(
@@ -263,7 +501,7 @@ def create_manual_bone_reduced_template(
     cleaned.data.name = template_armature_name
 
     update_view_layer()
-    save_blend(template_path)
+    save_blend_file(template_path, role="manual bone-reduced template blend")
 
     manifest_path = manual_versions_dir / MANUAL_VERSIONS_MANIFEST_NAME
     update_manual_template_manifest(
@@ -373,6 +611,20 @@ def main() -> None:
         action="store_true",
         help="Overwrite existing manual template file. Use with care; this may overwrite manual edits.",
     )
+    parser.add_argument(
+        "--extra_bone_reduce_config",
+        type=str,
+        default=None,
+        help=(
+            "Optional JSON config defining additional bone-reduced variants to create "
+            "from Armature_Cleaned_Full."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite_config_variants",
+        action="store_true",
+        help="Overwrite .blend files generated from --extra_bone_reduce_config.",
+    )
 
     args = parser.parse_args(script_argv())
 
@@ -409,10 +661,7 @@ def main() -> None:
     print(f"   output_blend       : {output_path}", flush=True)
     print(f"   manual_versions_dir: {manual_versions_dir}", flush=True)
 
-    print(f"\n📂 Loading: {input_path}", flush=True)
-    result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
+    open_blend_file(input_path, role="Prep 04a input LBS drive-mode blend")
 
     ensure_object_mode()
 
@@ -465,7 +714,37 @@ def main() -> None:
 
     update_view_layer()
 
-    save_blend(output_path)
+    save_blend_file(output_path, role="Prep 04a cleaned-full blend")
+
+    configured_variant_summaries: list[dict[str, Any]] = []
+
+    if args.extra_bone_reduce_config is not None and str(args.extra_bone_reduce_config).strip():
+        configured_variant_summaries = create_configured_bone_reduced_variants(
+            config_path=Path(str(args.extra_bone_reduce_config)),
+            manual_versions_dir=manual_versions_dir,
+            cleaned_full_blend_path=output_path,
+            cleaned_full_armature_name=str(args.cleaned_full_armature_name),
+            original_armature_name=str(args.original_armature_name),
+            overwrite=bool(args.overwrite_config_variants),
+        )
+
+        print("\n✅ Configured bone-reduced variants created:", flush=True)
+        for item in configured_variant_summaries:
+            print(
+                f"   - {item['variant_name']}: bones={item['final_bone_count']}, "
+                f"requested={item.get('requested_delete_bone_count')}, "
+                f"deleted={item['deleted_bone_count']}, "
+                f"already_absent={item.get('already_absent_in_cleaned_full_count')}, "
+                f"blend={item['blend_path']}",
+                flush=True,
+            )
+
+        if not args.no_manual_template:
+            open_blend_file(
+                output_path,
+                role="Prep 04a cleaned-full blend reload before manual template",
+                load_ui=False,
+            )
 
     template_path: Path | None = None
 

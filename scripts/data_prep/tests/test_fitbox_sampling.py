@@ -67,6 +67,38 @@ class TestFitboxSampling(unittest.TestCase):
         )
         self.assertEqual(result.retained_frames, [100, 103, 104, 105])
 
+    def test_resolve_sampled_frames_target_count_priority(self) -> None:
+        result = resolve_sampled_frames(
+            frame_start=1,
+            frame_end_exclusive=11,
+            removal_rate=0.9,
+            removal_bias=1.0,
+            removal_idx_ranges=set(),
+            target_frame_count=4,
+            debug_frame_max=-1,
+        )
+        self.assertEqual(result.stats["sampling_mode"], "target_frame_count")
+        self.assertEqual(result.stats["target_frame_count_enabled"], True)
+        self.assertEqual(result.stats["rate_removed_count"], 0)
+        self.assertEqual(result.stats["final_retained_count"], 4)
+        self.assertEqual(result.retained_frames, [1, 4, 7, 10])
+
+    def test_resolve_sampled_frames_target_count_respects_explicit_ranges(self) -> None:
+        result = resolve_sampled_frames(
+            frame_start=100,
+            frame_end_exclusive=106,
+            removal_rate=0.0,
+            removal_bias=1.0,
+            removal_idx_ranges={(1, 3)},
+            target_frame_count=3,
+            debug_frame_max=-1,
+        )
+        self.assertEqual(result.stats["sampling_mode"], "target_frame_count")
+        self.assertEqual(result.stats["explicit_removed_count"], 2)
+        self.assertEqual(result.stats["final_retained_count"], 3)
+        self.assertNotIn(101, result.retained_frames)
+        self.assertNotIn(102, result.retained_frames)
+
     def test_invalid_rate(self) -> None:
         with self.assertRaises(ValueError):
             resolve_sampled_frames(

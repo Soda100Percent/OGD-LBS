@@ -63,34 +63,21 @@ Important:
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            data_prep_dir = parent / "scripts" / "data_prep"
-
-            for item in [src_dir, data_prep_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
+import _env  # noqa: F401
 
 import bpy  # noqa: E402
 
-from ogd_lbs.utils.common import script_argv  # noqa: E402
+from ogd_lbs.utils.common import (  # noqa: E402
+    script_argv,
+    require_file,
+    load_json,
+    dump_json,
+    unique_keep_order,
+)
 from ogd_lbs.fitbox.blender_io import (  # noqa: E402
     export_skeleton,
     export_animation,
@@ -99,6 +86,9 @@ from ogd_lbs.fitbox.blender_io import (  # noqa: E402
 )
 from ogd_lbs.fitbox.sampling import resolve_sampled_frames  # noqa: E402
 from ogd_lbs.utils.work_dir import parse_idx_ranges  # noqa: E402
+from ogd_lbs.utils.file_state import file_metadata, metadata_matches  # noqa: E402
+from ogd_lbs.blender.object import find_armature, find_mesh  # noqa: E402
+from ogd_lbs.blender.blend_io import open_blend_file  # noqa: E402
 
 from paths import (  # noqa: E402
     resolve_data_prep_stage_dirs,
@@ -111,51 +101,6 @@ from manifest import (  # noqa: E402
     require_vdb_mapping,
     get_source_objects_mapping,
 )
-
-
-def require_file(path: Path, *, role: str) -> Path:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing required {role}: {path}")
-    if not path.is_file():
-        raise FileNotFoundError(f"Required {role} is not a file: {path}")
-    return path
-
-
-def find_armature(name: str, *, required: bool = True) -> bpy.types.Object | None:
-    obj = bpy.data.objects.get(name)
-
-    if obj is not None and obj.type == "ARMATURE":
-        return obj
-
-    if required:
-        raise RuntimeError(f"Required armature not found: {name}")
-
-    return None
-
-
-def find_mesh(name: str, *, required: bool = True) -> bpy.types.Object | None:
-    obj = bpy.data.objects.get(name)
-
-    if obj is not None and obj.type == "MESH":
-        return obj
-
-    if required:
-        raise RuntimeError(f"Required mesh not found: {name}")
-
-    return None
-
-
-def unique_keep_order(names: list[str]) -> list[str]:
-    out = []
-    seen = set()
-
-    for name in names:
-        if name in seen:
-            continue
-        seen.add(name)
-        out.append(name)
-
-    return out
 
 
 def resolve_candidate_frame_range(
@@ -194,22 +139,12 @@ def load_manual_versions_manifest(manual_dir: Path) -> dict[str, Any]:
     if not manifest_path.exists():
         return {}
 
-    with manifest_path.open("r", encoding="utf-8") as f:
-        obj = json.load(f)
+    obj = load_json(manifest_path)
 
     if not isinstance(obj, dict):
         raise RuntimeError(f"Manual versions manifest must be an object: {manifest_path}")
 
     return obj
-
-
-def file_metadata(path: Path) -> dict[str, Any]:
-    stat = path.stat()
-    return {
-        "size": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
-        "mtime": float(stat.st_mtime),
-    }
 
 
 def template_is_unmodified(
@@ -221,12 +156,7 @@ def template_is_unmodified(
     if not isinstance(initial, dict):
         return False
 
-    current = file_metadata(blend_path)
-
-    return (
-        int(initial.get("size", -1)) == int(current["size"])
-        and int(initial.get("mtime_ns", -1)) == int(current["mtime_ns"])
-    )
+    return metadata_matches(blend_path, initial, fields=("size", "mtime_ns"))
 
 
 def discover_manual_variant_blends(
@@ -376,6 +306,15 @@ def main() -> None:
     parser.add_argument("--debug_frame_max", type=int, default=-1)
     parser.add_argument("--frame_start", type=int, default=None)
     parser.add_argument("--frame_end", type=int, default=None)
+    parser.add_argument(
+        "--target_frame_count",
+        type=int,
+        default=-1,
+        help=(
+            "If > 0, uniformly retain this many frames after explicit removal_idx_ranges. "
+            "This has higher priority than removal_rate."
+        ),
+    )
 
     parser.add_argument("--removal_rate", type=float, default=0.9)
     parser.add_argument("--removal_bias", type=float, default=1.0)
@@ -446,10 +385,7 @@ def main() -> None:
     print(f"   reduced_root       : {out_reduced_root}", flush=True)
     print(f"   format             : {fmt}", flush=True)
 
-    print(f"\n📂 Loading main Prep 04a blend: {input_path}", flush=True)
-    result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
+    open_blend_file(input_path, role="Prep 05 input cleaned-full blend")
 
     manifest_obj = load_manifest(manifest_path)
     vdb_mapping = require_vdb_mapping(manifest_obj)
@@ -507,6 +443,7 @@ def main() -> None:
         removal_rate=float(args.removal_rate),
         removal_bias=float(args.removal_bias),
         removal_idx_ranges=removal_idx_ranges,
+        target_frame_count=int(args.target_frame_count),
         debug_frame_max=int(args.debug_frame_max),
     )
 
@@ -588,9 +525,7 @@ def main() -> None:
         print(f"🚀 Exporting manual bone-reduced variant: {variant_name}", flush=True)
         print(f"   blend: {variant_blend}", flush=True)
 
-        result = bpy.ops.wm.open_mainfile(filepath=str(variant_blend))
-        if result != {"FINISHED"}:
-            raise RuntimeError(f"Failed to open manual variant blend: {variant_blend}, result={result}")
+        open_blend_file(variant_blend, role=f"manual bone-reduced variant blend: {variant_name}")
 
         reduced_armature = find_manual_variant_armature(
             variant_name=variant_name,
@@ -665,8 +600,7 @@ def main() -> None:
     }
 
     summary_path = out_root / "export_summary.json"
-    with summary_path.open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=4, ensure_ascii=False)
+    dump_json(summary_path, summary)
 
     print("\n🎉 Prep 05 Fitbox export done.", flush=True)
     print(f"   original:        {out_original}", flush=True)

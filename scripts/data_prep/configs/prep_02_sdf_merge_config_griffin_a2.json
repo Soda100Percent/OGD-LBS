@@ -1,0 +1,9 @@
+{
+    "main_mesh_VDB": {
+        "source_meshes": [
+            "Griffin_A"
+        ],
+        "voxel_size": 10.0,
+        "offset": 15.0
+    }
+}

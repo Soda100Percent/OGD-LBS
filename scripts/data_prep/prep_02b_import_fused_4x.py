@@ -34,38 +34,21 @@ Important:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            data_prep_dir = parent / "scripts" / "data_prep"
-
-            for item in [src_dir, data_prep_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
+import _env  # noqa: F401
 
 import bpy  # noqa: E402
 
-from ogd_lbs.utils.common import script_argv  # noqa: E402
+from ogd_lbs.utils.common import script_argv, require_file  # noqa: E402
 from ogd_lbs.blender.object import (  # noqa: E402
     ensure_object_mode,
     find_armature,
 )
 from ogd_lbs.blender.context import align_scene_pose_frame, update_view_layer  # noqa: E402
+from ogd_lbs.blender.blend_io import open_blend_file, save_blend_file  # noqa: E402
 
 from paths import (  # noqa: E402
     resolve_data_prep_stage_dirs,
@@ -83,23 +66,6 @@ from manifest import (  # noqa: E402
     resolve_manifest_reference_path,
     source_object_name_for_vdb,
 )
-
-
-def require_file(path: Path, *, role: str) -> Path:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing required {role}: {path}")
-    if not path.is_file():
-        raise FileNotFoundError(f"Required {role} is not a file: {path}")
-    return path
-
-
-def save_blend(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n💾 Saving to: {path}", flush=True)
-    save_result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
-    if save_result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to save blend file: {path}, result={save_result}")
 
 
 def ensure_source_armature_modifier(
@@ -366,10 +332,7 @@ def main() -> None:
     for vdb_name, obj_path in sorted(export_paths.items()):
         print(f"      {vdb_name}: {obj_path}", flush=True)
 
-    print(f"\n📂 Loading: {input_path}", flush=True)
-    result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
+    open_blend_file(input_path, role="Prep 02b input blend")
 
     ensure_object_mode()
 
@@ -439,7 +402,7 @@ def main() -> None:
     print(f"   Updated manifest: {manifest_path}", flush=True)
 
     update_view_layer()
-    save_blend(output_path)
+    save_blend_file(output_path, role="Prep 02b output blend")
 
     print("🎉 Prep 02b done.", flush=True)
 

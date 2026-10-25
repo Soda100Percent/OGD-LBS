@@ -40,36 +40,18 @@ Config override arguments have highest priority:
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from pathlib import Path
 from typing import Any
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            data_prep_dir = parent / "scripts" / "data_prep"
-
-            for item in [src_dir, data_prep_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
+import _env  # noqa: F401
 
 import bpy  # noqa: E402
 
-from ogd_lbs.utils.common import script_argv  # noqa: E402
+from ogd_lbs.utils.common import script_argv, load_json, dump_json  # noqa: E402
 from ogd_lbs.blender.object import ensure_object_mode, print_scene_inspect_summary  # noqa: E402
 from ogd_lbs.blender.context import align_scene_pose_frame, update_view_layer  # noqa: E402
+from ogd_lbs.blender.blend_io import open_blend_file  # noqa: E402
 from ogd_lbs.blender.sdf_grid import (  # noqa: E402
     HAS_TRIMESH,
     create_sdf_grid_geonodes,
@@ -90,8 +72,7 @@ from paths import (  # noqa: E402
 
 
 def load_merge_rules(config_path: Path) -> dict[str, dict[str, Any]]:
-    with config_path.open("r", encoding="utf-8") as f:
-        obj = json.load(f)
+    obj = load_json(config_path)
 
     if not isinstance(obj, dict) or not obj:
         raise RuntimeError(f"Prep 02a config must be a non-empty JSON object: {config_path}")
@@ -324,10 +305,7 @@ def main() -> None:
     print(f"   config      : {config_path} ({config_source})", flush=True)
     print(f"   out_dir     : {out_dir}", flush=True)
 
-    print(f"\n📂 Loading: {input_path}", flush=True)
-    result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
+    open_blend_file(input_path, role="Prep 02a input blend")
 
     ensure_object_mode()
 
@@ -508,8 +486,7 @@ def main() -> None:
         update_view_layer()
 
     manifest_path = out_dir / "manifest.json"
-    with manifest_path.open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=4)
+    dump_json(manifest_path, manifest)
 
     print(f"\n✅ Prep 02a complete. Manifest saved to: {manifest_path}", flush=True)
 
