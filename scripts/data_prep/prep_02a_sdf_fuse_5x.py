@@ -71,24 +71,310 @@ from paths import (  # noqa: E402
 )
 
 
-def load_merge_rules(config_path: Path) -> dict[str, dict[str, Any]]:
+PREP02_CONFIG_SCHEMA = "ogd_lbs_prep02_sdf_merge_config_v2"
+
+PREP02_FLAT_CONFIG_METADATA_KEYS = {
+    "schema",
+    "asset",
+    "description",
+    "notes",
+    "unmerged_meshes",
+}
+
+
+PLACEHOLDER_PREFIX = "__OGD_PREP02_VDB_PLACEHOLDER_"
+
+
+def make_vdb_placeholder_name(index: int) -> str:
+    return f"{PLACEHOLDER_PREFIX}{int(index):04d}__"
+
+
+def normalize_string_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+
+    if not isinstance(value, list):
+        raise RuntimeError(f"Config field {field_name!r} must be a list if present.")
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for raw in value:
+        name = str(raw).strip()
+        if not name:
+            raise RuntimeError(f"Config field {field_name!r} contains an empty string.")
+        if name in seen:
+            raise RuntimeError(f"Config field {field_name!r} contains duplicate name: {name!r}")
+        seen.add(name)
+        out.append(name)
+
+    return out
+
+
+def load_sdf_merge_config(config_path: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
     obj = load_json(config_path)
 
     if not isinstance(obj, dict) or not obj:
         raise RuntimeError(f"Prep 02a config must be a non-empty JSON object: {config_path}")
 
+    unmerged_meshes = normalize_string_list(
+        obj.get("unmerged_meshes", []),
+        field_name="unmerged_meshes",
+    )
+
+    if "merge_groups" in obj:
+        raw_rules = obj.get("merge_groups")
+        rules_source = "merge_groups"
+    elif "vdb_mapping" in obj:
+        raw_rules = obj.get("vdb_mapping")
+        rules_source = "vdb_mapping"
+    else:
+        # Backward-compatible flat schema:
+        # {
+        #   "target_VDB": {"source_meshes": [...], "voxel_size": ..., "offset": ...},
+        #   "unmerged_meshes": [...]
+        # }
+        raw_rules = {
+            key: value
+            for key, value in obj.items()
+            if key not in PREP02_FLAT_CONFIG_METADATA_KEYS
+        }
+        rules_source = "flat_top_level"
+
+    if not isinstance(raw_rules, dict) or not raw_rules:
+        raise RuntimeError(
+            f"Prep 02a config must contain non-empty merge rules. "
+            f"Use 'merge_groups', 'vdb_mapping', or flat target entries: {config_path}"
+        )
+
     rules: dict[str, dict[str, Any]] = {}
 
-    for target_name, cfg in obj.items():
-        if not isinstance(target_name, str) or not target_name:
-            raise RuntimeError(f"Invalid VDB target name in config: {target_name!r}")
+    for target_name_raw, cfg in raw_rules.items():
+        target_name = str(target_name_raw).strip()
 
-        if not isinstance(cfg, dict):
-            raise RuntimeError(f"Config for VDB target {target_name!r} must be an object.")
+        if not target_name:
+            raise RuntimeError(f"Invalid empty VDB target name in config: {target_name_raw!r}")
 
-        rules[target_name] = dict(cfg)
+        if "/" in target_name or "\\" in target_name:
+            raise RuntimeError(
+                f"Invalid VDB target name {target_name!r}: path separators are not allowed."
+            )
 
-    return rules
+        if target_name.startswith(PLACEHOLDER_PREFIX):
+            raise RuntimeError(
+                f"Invalid VDB target name {target_name!r}: reserved placeholder prefix "
+                f"{PLACEHOLDER_PREFIX!r} is not allowed."
+            )
+
+        if isinstance(cfg, list):
+            normalized_cfg = {"source_meshes": cfg}
+        elif isinstance(cfg, dict):
+            normalized_cfg = dict(cfg)
+        else:
+            raise RuntimeError(
+                f"Config for VDB target {target_name!r} must be an object or list, "
+                f"got {type(cfg).__name__}."
+            )
+
+        source_meshes = normalize_string_list(
+            normalized_cfg.get("source_meshes", None),
+            field_name=f"{rules_source}.{target_name}.source_meshes",
+        )
+
+        if not source_meshes:
+            raise RuntimeError(
+                f"Config target {target_name!r} must contain non-empty list field "
+                "'source_meshes'."
+            )
+
+        normalized_cfg["source_meshes"] = source_meshes
+
+        if target_name in rules:
+            raise RuntimeError(f"Duplicate VDB target name after normalization: {target_name!r}")
+
+        rules[target_name] = normalized_cfg
+
+    return rules, unmerged_meshes
+
+
+def object_is_descendant_of(obj: bpy.types.Object, ancestor: bpy.types.Object) -> bool:
+    cur = obj.parent
+    while cur is not None:
+        if cur == ancestor:
+            return True
+        cur = cur.parent
+    return False
+
+
+def object_has_armature_modifier_to(obj: bpy.types.Object, armature: bpy.types.Object) -> bool:
+    for mod in obj.modifiers:
+        if mod.type == "ARMATURE" and getattr(mod, "object", None) == armature:
+            return True
+    return False
+
+
+def choose_config_validation_armature() -> bpy.types.Object | None:
+    preferred = bpy.data.objects.get("Armature")
+    if preferred is not None and preferred.type == "ARMATURE":
+        return preferred
+
+    armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
+    if len(armatures) == 1:
+        return armatures[0]
+
+    if not armatures:
+        return None
+
+    raise RuntimeError(
+        "Could not uniquely resolve target Armature for Prep 02 config coverage "
+        f"validation. Available armatures={[obj.name for obj in armatures]}"
+    )
+
+
+def source_object_name_for_vdb_target(vdb_name: str) -> str:
+    return f"Source_{vdb_name}"
+
+
+def find_duplicate_names(names: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    return {name: count for name, count in counts.items() if count > 1}
+
+
+def validate_vdb_name_plan(
+    *,
+    merge_rules: dict[str, dict[str, Any]],
+    unmerged_meshes: list[str],
+) -> dict[str, str]:
+    target_names = list(merge_rules.keys())
+    placeholder_by_target = {
+        target_name: make_vdb_placeholder_name(idx)
+        for idx, target_name in enumerate(target_names)
+    }
+
+    source_object_names = [
+        source_object_name_for_vdb_target(target_name)
+        for target_name in target_names
+    ]
+
+    final_mesh_names = [
+        *target_names,
+        *source_object_names,
+        *unmerged_meshes,
+    ]
+
+    final_duplicates = find_duplicate_names(final_mesh_names)
+    if final_duplicates:
+        raise RuntimeError(
+            "Planned post-Prep02 mesh names are not unique. "
+            "VDB targets, Source_<VDB> lineage meshes, and unmerged meshes must not "
+            f"collide. Duplicates={final_duplicates}. "
+            "Rename the VDB target or source mesh in the config."
+        )
+
+    placeholder_names = list(placeholder_by_target.values())
+    placeholder_duplicates = find_duplicate_names(placeholder_names)
+    if placeholder_duplicates:
+        raise RuntimeError(f"Internal placeholder duplicate error: {placeholder_duplicates}")
+
+    reserved_post_collisions = sorted(set(placeholder_names) & set(final_mesh_names))
+    if reserved_post_collisions:
+        raise RuntimeError(
+            "Internal VDB placeholder names collide with planned final mesh names. "
+            f"Collisions={reserved_post_collisions}. Please rename the colliding mesh/target."
+        )
+
+    existing_object_names = {obj.name for obj in bpy.data.objects}
+    existing_mesh_data_names = {mesh.name for mesh in bpy.data.meshes}
+
+    reserved_pre_collisions = sorted(
+        (set(placeholder_names) & existing_object_names)
+        | (set(placeholder_names) & existing_mesh_data_names)
+    )
+    if reserved_pre_collisions:
+        raise RuntimeError(
+            "Internal VDB placeholder names collide with existing object/mesh data names. "
+            f"Collisions={reserved_pre_collisions}. Please rename the colliding object/mesh."
+        )
+
+    return placeholder_by_target
+
+
+def validate_mesh_coverage(
+    *,
+    merge_rules: dict[str, dict[str, Any]],
+    unmerged_meshes: list[str],
+) -> dict[str, Any]:
+    all_mesh_objects = [obj for obj in bpy.data.objects if obj.type == "MESH"]
+    all_mesh_names = {obj.name for obj in all_mesh_objects}
+
+    armature = choose_config_validation_armature()
+
+    if armature is None:
+        armature_mesh_objects = all_mesh_objects
+        armature_name = None
+        armature_bone_count = 0
+    else:
+        armature_mesh_objects = [
+            obj for obj in all_mesh_objects
+            if (
+                obj.parent == armature
+                or object_is_descendant_of(obj, armature)
+                or object_has_armature_modifier_to(obj, armature)
+            )
+        ]
+        armature_name = armature.name
+        armature_bone_count = len(armature.data.bones)
+
+    armature_mesh_names = {obj.name for obj in armature_mesh_objects}
+
+    declared_roles: dict[str, list[str]] = {}
+
+    for target_name, cfg in merge_rules.items():
+        for source_name in cfg["source_meshes"]:
+            declared_roles.setdefault(source_name, []).append(f"merge_source:{target_name}")
+
+    for mesh_name in unmerged_meshes:
+        declared_roles.setdefault(mesh_name, []).append("unmerged")
+
+    duplicate_declarations = {
+        name: roles
+        for name, roles in declared_roles.items()
+        if len(roles) > 1
+    }
+    if duplicate_declarations:
+        raise RuntimeError(
+            "Prep 02 config declares some mesh names more than once. "
+            f"Duplicates={duplicate_declarations}"
+        )
+
+    declared_mesh_names = set(declared_roles.keys())
+
+    declared_but_absent = sorted(declared_mesh_names - all_mesh_names)
+    if declared_but_absent:
+        raise RuntimeError(
+            "Prep 02 config declares mesh names that do not exist in the input blend. "
+            f"Missing={declared_but_absent}"
+        )
+
+    missing_armature_meshes = sorted(armature_mesh_names - declared_mesh_names)
+    if missing_armature_meshes:
+        raise RuntimeError(
+            "Prep 02 config does not cover all meshes under/bound to the target Armature. "
+            f"Armature={armature_name or '<none>'}, missing={missing_armature_meshes}"
+        )
+
+    outside_armature_meshes = sorted(all_mesh_names - armature_mesh_names)
+
+    return {
+        "armature_name": armature_name,
+        "armature_bone_count": int(armature_bone_count),
+        "armature_meshes": sorted(armature_mesh_names),
+        "declared_meshes": sorted(declared_mesh_names),
+        "unmerged_meshes": list(unmerged_meshes),
+        "outside_armature_meshes": outside_armature_meshes,
+    }
 
 
 def resolve_group_config(
@@ -315,7 +601,29 @@ def main() -> None:
     align_scene_pose_frame(int(args.target_frame), set_all_armatures=True)
 
     print(f"\n📋 Loading SDF config: {config_path}", flush=True)
-    merge_rules = load_merge_rules(config_path)
+    merge_rules, declared_unmerged_meshes = load_sdf_merge_config(config_path)
+
+    print("\n🔎 Validating Prep 02 config mesh coverage and post-fusion name plan...", flush=True)
+    coverage_info = validate_mesh_coverage(
+        merge_rules=merge_rules,
+        unmerged_meshes=declared_unmerged_meshes,
+    )
+    placeholder_by_target = validate_vdb_name_plan(
+        merge_rules=merge_rules,
+        unmerged_meshes=declared_unmerged_meshes,
+    )
+
+    print(f"   armature              : {coverage_info['armature_name']}", flush=True)
+    print(f"   armature bones        : {coverage_info['armature_bone_count']}", flush=True)
+    print(f"   armature meshes       : {len(coverage_info['armature_meshes'])}", flush=True)
+    print(f"   declared meshes       : {len(coverage_info['declared_meshes'])}", flush=True)
+    print(f"   unmerged meshes       : {declared_unmerged_meshes}", flush=True)
+    if coverage_info["outside_armature_meshes"]:
+        print(
+            "   note outside armature : "
+            f"{coverage_info['outside_armature_meshes']}",
+            flush=True,
+        )
 
     resolved_rules: dict[str, dict[str, Any]] = {}
 
@@ -356,9 +664,13 @@ def main() -> None:
         "config": str(config_path.resolve()),
         "bpy_version": bpy.app.version_string,
         "target_frame": int(args.target_frame),
+        "config_schema": PREP02_CONFIG_SCHEMA,
         "exports": {},
         "details": {},
         "vdb_mapping": {},
+        "unmerged_meshes": list(declared_unmerged_meshes),
+        "vdb_placeholders": dict(placeholder_by_target),
+        "coverage_validation": coverage_info,
     }
 
     for target_name, cfg in resolved_rules.items():
@@ -381,9 +693,11 @@ def main() -> None:
         print(f"   initial_offset:{initial_offset}", flush=True)
         print(f"   auto_offset:   {use_auto}", flush=True)
 
+        placeholder_name = placeholder_by_target[target_name]
+
         temp_obj = duplicate_join_and_staticize_sources(
             source_objs,
-            temp_name=f"TEMP_{target_name}",
+            temp_name=placeholder_name,
             apply_scale=bool(args.apply_scale),
         )
 
@@ -463,8 +777,12 @@ def main() -> None:
         if apply_result != {"FINISHED"}:
             raise RuntimeError(f"modifier_apply failed for {target_name}: {apply_result}")
 
-        temp_obj.name = target_name
-        temp_obj.data.name = target_name
+        # Keep the evaluated fused object under an internal placeholder name.
+        # The final VDB target name may intentionally equal a consumed source
+        # mesh name. Prep 02b renames imported placeholders after raw sources
+        # are removed.
+        temp_obj.name = placeholder_name
+        temp_obj.data.name = placeholder_name
 
         final_obj_path = out_dir / f"{target_name}.obj"
 
@@ -480,6 +798,7 @@ def main() -> None:
             "offset": selected_offset,
             "auto_offset": use_auto,
             "override_sources": cfg["override_sources"],
+            "placeholder_name": placeholder_name,
             "topology_stats": selected_stats,
         }
 

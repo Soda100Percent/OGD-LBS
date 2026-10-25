@@ -246,38 +246,159 @@ def safe_normalize_rows(arr: np.ndarray) -> np.ndarray:
     return arr / norms
 
 
+def collect_triangulated_static_face_data(
+    mesh_obj: bpy.types.Object,
+    *,
+    fmt: str,
+) -> tuple[Any, Any, Any]:
+    """
+    Collect triangulated face topology and aligned per-face sidecars.
+
+    Fitbox export stores faces as triangles to avoid ragged mixed-polygon
+    arrays. This keeps downstream NumPy validation, SSDR preprocessing, and
+    debug Blender import simple and deterministic.
+
+    Returns:
+        faces, face_uvs, face_materials
+
+    For pkl:
+        faces          -> np.ndarray, shape (T, 3), int64
+        face_uvs       -> np.ndarray, shape (T, 3, 2), float64, or []
+        face_materials -> np.ndarray, shape (T,), int64
+
+    For json:
+        list equivalents are returned.
+    """
+    if mesh_obj is None or mesh_obj.type != "MESH":
+        raise RuntimeError("collect_triangulated_static_face_data expects a MESH object.")
+
+    fmt = str(fmt).lower()
+    mesh_data = mesh_obj.data
+
+    try:
+        mesh_data.update(calc_edges=True)
+    except TypeError:
+        try:
+            mesh_data.update()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        mesh_data.calc_loop_triangles()
+    except Exception as exc:
+        raise RuntimeError(
+            f"{mesh_obj.name}: failed to calc_loop_triangles() during Fitbox export: {exc}"
+        ) from exc
+
+    faces_list: list[list[int]] = []
+    face_materials_list: list[int] = []
+    face_uvs_list: list[list[list[float]]] = []
+
+    uv_layer = None
+    if mesh_data.uv_layers.active is not None:
+        uv_layer = mesh_data.uv_layers.active.data
+
+    for tri in mesh_data.loop_triangles:
+        tri_vertices = [int(v) for v in tri.vertices]
+
+        if len(tri_vertices) != 3:
+            raise RuntimeError(
+                f"{mesh_obj.name}: loop triangle is not length 3: {tri_vertices}"
+            )
+
+        faces_list.append(tri_vertices)
+
+        poly_index = int(tri.polygon_index)
+        if poly_index < 0 or poly_index >= len(mesh_data.polygons):
+            raise RuntimeError(
+                f"{mesh_obj.name}: loop triangle polygon_index out of range: {poly_index}"
+            )
+
+        face_materials_list.append(int(mesh_data.polygons[poly_index].material_index))
+
+        if uv_layer is not None:
+            tri_uvs: list[list[float]] = []
+            for loop_i in tri.loops:
+                uv = uv_layer[int(loop_i)].uv
+                tri_uvs.append([float(uv[0]), float(uv[1])])
+            if len(tri_uvs) != 3:
+                raise RuntimeError(
+                    f"{mesh_obj.name}: triangle UV row is not length 3: {tri_uvs}"
+                )
+            face_uvs_list.append(tri_uvs)
+
+    if not faces_list:
+        raise RuntimeError(f"{mesh_obj.name}: triangulated face list is empty.")
+
+    faces_arr = np.asarray(faces_list, dtype=np.int64)
+
+    if faces_arr.ndim != 2 or faces_arr.shape[1] != 3:
+        raise RuntimeError(
+            f"{mesh_obj.name}: triangulated faces must have shape (F, 3), got {faces_arr.shape}"
+        )
+
+    face_materials_arr = np.asarray(face_materials_list, dtype=np.int64)
+
+    if face_materials_arr.shape != (faces_arr.shape[0],):
+        raise RuntimeError(
+            f"{mesh_obj.name}: face_materials shape mismatch after triangulation: "
+            f"{face_materials_arr.shape} vs faces={faces_arr.shape}"
+        )
+
+    if face_uvs_list:
+        face_uvs_arr = np.asarray(face_uvs_list, dtype=np.float64)
+        if face_uvs_arr.shape != (faces_arr.shape[0], 3, 2):
+            raise RuntimeError(
+                f"{mesh_obj.name}: face_uvs shape mismatch after triangulation: "
+                f"{face_uvs_arr.shape} vs expected {(faces_arr.shape[0], 3, 2)}"
+            )
+    else:
+        face_uvs_arr = np.asarray([], dtype=np.float64)
+
+    if fmt == "pkl":
+        return faces_arr, face_uvs_arr, face_materials_arr
+
+    return faces_arr.tolist(), face_uvs_arr.tolist(), face_materials_arr.tolist()
+
 def collect_mesh_static_data(
     mesh_obj: bpy.types.Object,
     bone_names: list[str],
     *,
     fmt: str,
 ) -> dict[str, Any]:
-    vertices = np.array([mesh_obj.matrix_world @ v.co for v in mesh_obj.data.vertices], dtype=np.float64)
-    faces = [list(poly.vertices) for poly in mesh_obj.data.polygons]
+    vertices = np.array(
+        [mesh_obj.matrix_world @ v.co for v in mesh_obj.data.vertices],
+        dtype=np.float64,
+    )
+
+    faces, face_uvs, face_materials = collect_triangulated_static_face_data(
+        mesh_obj,
+        fmt=fmt,
+    )
 
     raw_normals = np.array(
-        [mesh_obj.matrix_world.inverted().transposed() @ v.normal for v in mesh_obj.data.vertices],
+        [
+            mesh_obj.matrix_world.inverted().transposed() @ v.normal
+            for v in mesh_obj.data.vertices
+        ],
         dtype=np.float64,
     )
     vertex_normals = safe_normalize_rows(raw_normals)
 
-    face_materials = [int(poly.material_index) for poly in mesh_obj.data.polygons]
-    material_names = [slot.material.name if slot.material else None for slot in mesh_obj.material_slots]
+    material_names = [
+        slot.material.name if slot.material else None
+        for slot in mesh_obj.material_slots
+    ]
     if not material_names:
         material_names = [None]
 
-    face_uvs: list[list[list[float]]] = []
-    if mesh_obj.data.uv_layers.active is not None:
-        uv_layer = mesh_obj.data.uv_layers.active.data
-        for poly in mesh_obj.data.polygons:
-            uv_coords = []
-            for loop_i in poly.loop_indices:
-                uv = uv_layer[loop_i].uv
-                uv_coords.append([float(uv[0]), float(uv[1])])
-            face_uvs.append(uv_coords)
-
     bone_name_to_index = {name: idx for idx, name in enumerate(bone_names)}
-    vertex_bone_weights = np.zeros((len(mesh_obj.data.vertices), len(bone_names)), dtype=np.float64)
+    vertex_bone_weights = np.zeros(
+        (len(mesh_obj.data.vertices), len(bone_names)),
+        dtype=np.float64,
+    )
 
     for vertex in mesh_obj.data.vertices:
         for assignment in vertex.groups:
@@ -290,6 +411,12 @@ def collect_mesh_static_data(
             if bone_idx is not None:
                 vertex_bone_weights[int(vertex.index), bone_idx] = float(assignment.weight)
 
+    print(
+        f"      static mesh topology exported as triangles: "
+        f"polygons={len(mesh_obj.data.polygons)}, triangles={len(faces)}",
+        flush=True,
+    )
+
     if fmt == "pkl":
         return {
             "name": mesh_obj.name,
@@ -301,6 +428,10 @@ def collect_mesh_static_data(
             "face_materials": face_materials,
             "material_names": material_names,
             "bone_names": bone_names,
+            "topology_export_note": (
+                "faces are triangulated from Blender loop_triangles during Fitbox export; "
+                "face_uvs and face_materials are aligned to triangle faces."
+            ),
         }
 
     return {
@@ -313,6 +444,10 @@ def collect_mesh_static_data(
         "face_materials": face_materials,
         "material_names": material_names,
         "bone_names": bone_names,
+        "topology_export_note": (
+            "faces are triangulated from Blender loop_triangles during Fitbox export; "
+            "face_uvs and face_materials are aligned to triangle faces."
+        ),
     }
 
 
@@ -919,21 +1054,153 @@ def import_fitbox_materials_plugin_style(
         )
 
 
+
+class FitboxFaceListForBlender(list):
+    """
+    Small list wrapper for Blender mesh.from_pydata compatibility.
+
+    Blender accepts faces as list[list[int]] with mixed lengths, but NumPy
+    cannot coerce such ragged faces into a regular int64 2D array. Some Fitbox
+    exports may contain mixed triangles/quads/ngons, especially unmerged
+    commercial asset meshes such as Body2.
+
+    This wrapper keeps old call-sites that use faces.tolist() or faces.shape[0]
+    working while preserving ragged face rows.
+    """
+
+    @property
+    def shape(self):
+        return (len(self),)
+
+    @property
+    def ndim(self):
+        return 1
+
+    def tolist(self):
+        return [list(face) for face in self]
+
+
+def coerce_fitbox_faces_for_blender(raw_faces, *, mesh_name: str = "mesh") -> FitboxFaceListForBlender:
+    """
+    Convert Fitbox faces to a Blender-friendly list-of-index-lists.
+
+    Supports:
+      - regular NumPy arrays shaped (F, K);
+      - object / ragged NumPy arrays;
+      - Python list/tuple of faces with mixed vertex counts.
+
+    This is intentionally for Blender import/debug visualization. It does not
+    force triangulation; Blender Mesh.from_pydata can create mixed polygon
+    faces directly.
+    """
+    if raw_faces is None:
+        raise RuntimeError(f"{mesh_name}: missing faces.")
+
+    if isinstance(raw_faces, np.ndarray):
+        if raw_faces.ndim == 2:
+            rows = raw_faces.tolist()
+        elif raw_faces.ndim == 1:
+            rows = raw_faces.tolist()
+        else:
+            raise RuntimeError(
+                f"{mesh_name}: unsupported faces ndarray shape: {raw_faces.shape}"
+            )
+    else:
+        rows = list(raw_faces)
+
+    out = FitboxFaceListForBlender()
+    face_size_hist: dict[int, int] = {}
+
+    for face_idx, row in enumerate(rows):
+        if isinstance(row, np.ndarray):
+            values = row.tolist()
+        else:
+            values = list(row)
+
+        face = [int(x) for x in values]
+
+        if len(face) < 3:
+            raise RuntimeError(
+                f"{mesh_name}: face {face_idx} has fewer than 3 vertices: {face}"
+            )
+
+        if len(set(face)) < 3:
+            raise RuntimeError(
+                f"{mesh_name}: face {face_idx} has fewer than 3 unique vertices: {face}"
+            )
+
+        out.append(face)
+        face_size_hist[len(face)] = face_size_hist.get(len(face), 0) + 1
+
+    if not out:
+        raise RuntimeError(f"{mesh_name}: empty faces.")
+
+    if len(face_size_hist) > 1:
+        print(
+            f"⚠️ {mesh_name}: mixed polygon face sizes detected: {dict(sorted(face_size_hist.items()))}. "
+            "Using Blender list-of-faces import path.",
+            flush=True,
+        )
+
+    return out
+
+def coerce_fitbox_faces_to_numpy_2d(
+    raw_faces: Any,
+    *,
+    mesh_name: str = "mesh",
+) -> np.ndarray:
+    """
+    Convert Fitbox faces to a regular int64 ndarray.
+
+    Current Data Prep Fitbox export is expected to triangulate faces, so this
+    should normally return shape (F, 3). If ragged faces are encountered, fail
+    with a clear message asking to re-run Prep 05 after the triangulated export
+    patch.
+    """
+    try:
+        faces = np.asarray(raw_faces, dtype=np.int64)
+    except Exception as exc:
+        raise RuntimeError(
+            f"{mesh_name}: faces are ragged or not numeric. "
+            "Re-run Prep 05 after the triangulated Fitbox export patch. "
+            f"Original conversion error: {exc}"
+        ) from exc
+
+    if faces.ndim != 2 or faces.shape[1] < 3:
+        raise RuntimeError(
+            f"{mesh_name}: faces must have shape (F, K), K>=3, got {faces.shape}. "
+            "Re-run Prep 05 after the triangulated Fitbox export patch."
+        )
+
+    if faces.shape[1] != 3:
+        print(
+            f"⚠️ {mesh_name}: imported faces have K={faces.shape[1]} instead of triangles. "
+            "This is allowed for Blender import but Data Prep exports should normally be triangulated.",
+            flush=True,
+        )
+
+    return faces
+
 def create_fitbox_mesh_object_plugin_style(
     *,
     mesh_obj: dict[str, Any],
     object_name: str | None = None,
 ) -> bpy.types.Object:
+    mesh_name = object_name or str(mesh_obj.get("name", "FitboxMesh"))
+
     vertices = np.asarray(mesh_obj[KEY_VERTICES], dtype=np.float64)
-    faces = np.asarray(mesh_obj[KEY_FACES], dtype=np.int64)
+    faces = coerce_fitbox_faces_to_numpy_2d(
+        mesh_obj[KEY_FACES],
+        mesh_name=mesh_name,
+    )
 
     if vertices.ndim != 2 or vertices.shape[1] != 3:
-        raise RuntimeError(f"vertices must have shape (V, 3), got {vertices.shape}")
+        raise RuntimeError(f"{mesh_name}: vertices must have shape (V, 3), got {vertices.shape}")
 
-    if faces.ndim != 2 or faces.shape[1] < 3:
-        raise RuntimeError(f"faces must have shape (F, K), K>=3, got {faces.shape}")
-
-    mesh_name = object_name or str(mesh_obj.get("name", "FitboxMesh"))
+    if np.any(faces < 0) or np.any(faces >= vertices.shape[0]):
+        raise RuntimeError(
+            f"{mesh_name}: face indices out of range for vertex count {vertices.shape[0]}."
+        )
 
     mesh = bpy.data.meshes.new(name=mesh_name)
     obj = bpy.data.objects.new(mesh.name, mesh)
@@ -1125,7 +1392,11 @@ def create_fitbox_armature_lbs_plugin_style(
     except Exception:
         pass
 
-    print(f"✅ Created LBS armature: {armature_obj.name} (bones={len(bone_names)})", flush=True)
+    print(
+        f"✅ Created LBS armature: {armature_obj.name} "
+        f"(bones={len(bone_names)}, bone_length={float(bone_length)})",
+        flush=True,
+    )
     return armature_obj
 
 
@@ -1394,6 +1665,7 @@ def import_fitbox_stage_to_blend(
     print(f"import_mode      : {mode}", flush=True)
     print(f"use_scene_frames : {bool(use_scene_frames)}", flush=True)
     print(f"matrix_space     : {matrix_space_norm}", flush=True)
+    print(f"bone_length      : {float(bone_length)}", flush=True)
     print("=" * 96, flush=True)
 
     shape_key_count_total = 0
@@ -1517,6 +1789,7 @@ def import_fitbox_stage_to_blend(
         "import_mode": mode,
         "use_scene_frames": bool(use_scene_frames),
         "matrix_space": matrix_space_norm,
+        "bone_length": float(bone_length),
         "mesh_name": mesh_names[0] if len(mesh_names) == 1 else "ALL",
         "vertex_count": vertex_count_total,
         "face_count": face_count_total,

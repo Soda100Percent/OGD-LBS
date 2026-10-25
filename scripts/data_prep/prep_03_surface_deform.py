@@ -122,6 +122,26 @@ def main() -> None:
     parser.add_argument("--falloff_start", type=float, default=4.0)
     parser.add_argument("--falloff_step", type=float, default=2.0)
     parser.add_argument("--weight_eps", type=float, default=1e-8)
+    parser.add_argument(
+        "--surface_bind_proxy_mode",
+        type=str,
+        choices=["off", "auto", "always"],
+        default="off",
+        help=(
+            "Surface Deform bind target repair mode. "
+            "off keeps the original Source_<VDB> target. "
+            "auto creates a repaired hidden proxy only when the source target "
+            "has edge>2 topology after triangulation. "
+            "always always creates a repaired hidden proxy. "
+            "This does NOT fallback to LBS; Surface Deform binding still must succeed."
+        ),
+    )
+    parser.add_argument(
+        "--surface_bind_proxy_repair_max_iters",
+        type=int,
+        default=8,
+        help="Maximum edge-split repair iterations for Surface Deform bind proxy.",
+    )
 
     args = parser.parse_args(script_argv())
 
@@ -173,6 +193,8 @@ def main() -> None:
     print(f"   base_stem           : {base_stem}", flush=True)
     print(f"   manifest            : {manifest_path}", flush=True)
     print(f"   drive_mode          : {drive_mode}", flush=True)
+    print(f"   bind_proxy_mode     : {args.surface_bind_proxy_mode}", flush=True)
+    print(f"   bind_proxy_max_iters: {args.surface_bind_proxy_repair_max_iters}", flush=True)
     if drive_mode == "BOTH":
         print(f"   output_blend_surface: {output_surface_path}", flush=True)
         print(f"   output_blend_lbs    : {output_lbs_path}", flush=True)
@@ -236,6 +258,8 @@ def main() -> None:
             falloff_start=float(args.falloff_start),
             falloff_step=float(args.falloff_step),
             weight_eps=float(args.weight_eps),
+            surface_bind_proxy_mode=str(args.surface_bind_proxy_mode),
+            surface_bind_proxy_repair_max_iters=int(args.surface_bind_proxy_repair_max_iters),
         )
 
     print("\n▶️ Setting Armature to POSE mode for playback...", flush=True)
