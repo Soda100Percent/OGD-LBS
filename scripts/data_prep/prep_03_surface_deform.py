@@ -126,7 +126,7 @@ def main() -> None:
         "--surface_bind_proxy_mode",
         type=str,
         choices=["off", "auto", "always"],
-        default="off",
+        default="auto",
         help=(
             "Surface Deform bind target repair mode. "
             "off keeps the original Source_<VDB> target. "
