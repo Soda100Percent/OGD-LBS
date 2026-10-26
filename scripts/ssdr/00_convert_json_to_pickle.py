@@ -37,25 +37,19 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+try:
+    from _env import ensure_repo_paths_in_syspath
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._env import ensure_repo_paths_in_syspath
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
+ensure_repo_paths_in_syspath(__file__)
 
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            ssdr_script_dir = parent / "scripts" / "ssdr"
-
-            for item in [src_dir, ssdr_script_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
+try:
+    from _stage_io import prepare_output_dir, write_stage_summary
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._stage_io import prepare_output_dir, write_stage_summary
 
 
-ensure_repo_paths_in_syspath()
 
 from ogd_lbs.utils.common import (  # noqa: E402
     log,
@@ -74,17 +68,6 @@ from paths import (  # noqa: E402
     validate_ssdr_stage_resolution,
     print_ssdr_resolution_info,
 )
-
-
-def path_has_any_children(path: Path) -> bool:
-    if not path.exists() or not path.is_dir():
-        return False
-
-    try:
-        next(path.iterdir())
-        return True
-    except StopIteration:
-        return False
 
 
 def discover_source_files(input_tree: Path) -> list[Path]:
@@ -163,44 +146,6 @@ def process_single_source_file(
     }
 
 
-def write_summary(path: Path, summary: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=4, ensure_ascii=False)
-
-
-def prepare_output_dir(
-    output_tree: Path,
-    *,
-    overwrite_output: bool,
-    allow_merge: bool,
-) -> None:
-    if overwrite_output and allow_merge:
-        fail("--overwrite_output and --allow_merge are mutually exclusive.")
-
-    if output_tree.exists():
-        if not output_tree.is_dir():
-            fail(f"Output path exists but is not a directory: {output_tree}")
-
-        if overwrite_output:
-            warn(f"Removing existing output directory because --overwrite_output is set: {output_tree}")
-            shutil.rmtree(output_tree)
-            output_tree.mkdir(parents=True, exist_ok=True)
-            return
-
-        if path_has_any_children(output_tree) and not allow_merge:
-            fail(
-                f"Output directory already exists and is non-empty: {output_tree}\n"
-                "Use --overwrite_output to clear it, or --allow_merge to write into it."
-            )
-
-        output_tree.mkdir(parents=True, exist_ok=True)
-        return
-
-    output_tree.mkdir(parents=True, exist_ok=True)
-
-
 def convert_or_copy_tree_to_data0(
     *,
     input_tree: Path,
@@ -236,7 +181,7 @@ def convert_or_copy_tree_to_data0(
                 "files": [],
             }
             if write_summary_file:
-                write_summary(output_tree / "step00_convert_summary.json", summary)
+                write_stage_summary(output_tree / "step00_convert_summary.json", summary)
             return summary
 
         fail(msg)
@@ -298,7 +243,7 @@ def convert_or_copy_tree_to_data0(
 
     if write_summary_file:
         summary_path = output_tree / "step00_convert_summary.json"
-        write_summary(summary_path, summary)
+        write_stage_summary(summary_path, summary)
         log(f"Step 00 summary written: {summary_path}")
 
     record_metric("00_source_file_count", int(len(source_files)))

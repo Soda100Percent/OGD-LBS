@@ -49,29 +49,26 @@ import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+try:
+    from _env import ensure_repo_paths_in_syspath
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._env import ensure_repo_paths_in_syspath
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
+ensure_repo_paths_in_syspath(__file__)
 
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            ssdr_script_dir = parent / "scripts" / "ssdr"
-
-            for item in [src_dir, ssdr_script_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
+try:
+    from _stage_io import prepare_output_dir, write_stage_summary
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._stage_io import prepare_output_dir, write_stage_summary
 
 
-ensure_repo_paths_in_syspath()
 
 import numpy as np  # noqa: E402
+
+from ogd_lbs.utils.work_dir import parse_idx_ranges  # noqa: E402
 
 from ogd_lbs.utils.common import (  # noqa: E402
     log,
@@ -98,48 +95,6 @@ from paths import (  # noqa: E402
     validate_ssdr_stage_resolution,
     print_ssdr_resolution_info,
 )
-
-
-def path_has_any_children(path: Path) -> bool:
-    if not path.exists() or not path.is_dir():
-        return False
-
-    try:
-        next(path.iterdir())
-        return True
-    except StopIteration:
-        return False
-
-
-def prepare_output_dir(
-    output_tree: Path,
-    *,
-    overwrite_output: bool,
-    allow_merge: bool,
-) -> None:
-    if overwrite_output and allow_merge:
-        fail("--overwrite_output and --allow_merge are mutually exclusive.")
-
-    if output_tree.exists():
-        if not output_tree.is_dir():
-            fail(f"Output path exists but is not a directory: {output_tree}")
-
-        if overwrite_output:
-            warn(f"Removing existing output directory because --overwrite_output is set: {output_tree}")
-            shutil.rmtree(output_tree)
-            output_tree.mkdir(parents=True, exist_ok=True)
-            return
-
-        if path_has_any_children(output_tree) and not allow_merge:
-            fail(
-                f"Output directory already exists and is non-empty: {output_tree}\n"
-                "Use --overwrite_output to clear it, or --allow_merge to write into it."
-            )
-
-        output_tree.mkdir(parents=True, exist_ok=True)
-        return
-
-    output_tree.mkdir(parents=True, exist_ok=True)
 
 
 def discover_pkl_files(input_tree: Path) -> list[Path]:
@@ -219,6 +174,148 @@ def find_reference_frame_count(
     raise RuntimeError("unreachable")
 
 
+
+def make_frame_sample_plan_with_optional_removal_ranges(
+    frame_count: int,
+    *,
+    max_frames: int,
+    target_frames: int,
+    removal_idx_ranges_text: str | None,
+):
+    """
+    Build the Step 01 frame sampling plan.
+
+    Default behavior is exactly the existing dynamic frame sampling plan.
+
+    When removal_idx_ranges_text is non-empty, explicit candidate-frame index
+    ranges are removed first, then the remaining frames are uniformly sampled
+    down to target_frames only if the remaining count still exceeds max_frames.
+
+    Range convention:
+        - 0-based candidate-frame indices;
+        - left-closed, right-open: start:end;
+        - same convention as ogd_lbs.utils.work_dir.parse_idx_ranges().
+    """
+    text = str(removal_idx_ranges_text or "").strip()
+
+    if not text:
+        return make_dynamic_frame_sample_plan(
+            int(frame_count),
+            max_frames=int(max_frames),
+            target_frames=int(target_frames),
+        )
+
+    frame_count_i = int(frame_count)
+    max_frames_i = int(max_frames)
+    target_frames_i = int(target_frames)
+
+    if frame_count_i <= 0:
+        raise RuntimeError(f"frame_count must be positive, got {frame_count_i}")
+
+    if max_frames_i <= 0:
+        raise RuntimeError(f"max_frames must be positive, got {max_frames_i}")
+
+    if target_frames_i <= 0:
+        raise RuntimeError(f"target_frames must be positive, got {target_frames_i}")
+
+    ranges = parse_idx_ranges(text)
+    removal_mask = np.zeros(frame_count_i, dtype=bool)
+
+    for start, end in sorted(ranges):
+        if int(end) > frame_count_i:
+            raise RuntimeError(
+                f"removal_idx_ranges item {start}:{end} exceeds frame_count={frame_count_i}"
+            )
+        removal_mask[int(start):int(end)] = True
+
+    remaining_indices = np.arange(frame_count_i, dtype=np.int64)[~removal_mask]
+
+    if remaining_indices.size <= 0:
+        raise RuntimeError(
+            f"removal_idx_ranges removed all frames: {text!r}, frame_count={frame_count_i}"
+        )
+
+    explicit_removed_count = int(np.count_nonzero(removal_mask))
+
+    if int(remaining_indices.size) > max_frames_i:
+        sample_count = min(target_frames_i, int(remaining_indices.size))
+
+        if sample_count == 1:
+            selected_sub = np.asarray([0], dtype=np.int64)
+        else:
+            raw = np.rint(
+                np.linspace(0, int(remaining_indices.size) - 1, num=sample_count)
+            ).astype(np.int64)
+
+            selected_list: list[int] = []
+            used: set[int] = set()
+
+            for raw_idx in raw.tolist():
+                idx = max(0, min(int(raw_idx), int(remaining_indices.size) - 1))
+                if idx not in used:
+                    selected_list.append(idx)
+                    used.add(idx)
+
+            if len(selected_list) < sample_count:
+                for idx in range(int(remaining_indices.size)):
+                    if idx in used:
+                        continue
+                    selected_list.append(idx)
+                    used.add(idx)
+                    if len(selected_list) >= sample_count:
+                        break
+
+            selected_sub = np.asarray(sorted(selected_list[:sample_count]), dtype=np.int64)
+
+        selected_indices = remaining_indices[selected_sub]
+        target_removed_count = int(remaining_indices.size) - int(selected_indices.size)
+        sampling_mode = "removal_idx_ranges_plus_target_frames"
+    else:
+        selected_indices = remaining_indices
+        target_removed_count = 0
+        sampling_mode = "removal_idx_ranges_only"
+
+    selected_indices = np.asarray(selected_indices, dtype=np.int64)
+    selected_mask = np.zeros(frame_count_i, dtype=bool)
+    selected_mask[selected_indices] = True
+
+    final_removal_mask = ~selected_mask
+    reduced = bool(
+        selected_indices.shape[0] != frame_count_i
+        or not np.array_equal(selected_indices, np.arange(frame_count_i, dtype=np.int64))
+    )
+
+    stats = {
+        "sampling_mode": sampling_mode,
+        "original_frame_count": int(frame_count_i),
+        "max_frames": int(max_frames_i),
+        "target_frames": int(target_frames_i),
+        "target_frames_enabled": bool(int(remaining_indices.size) > max_frames_i),
+        "reduced": bool(reduced),
+        "retained_count": int(selected_indices.shape[0]),
+        "selected_indices": [int(x) for x in selected_indices.tolist()],
+        "removal_mask": [bool(x) for x in final_removal_mask.tolist()],
+        "removal_idx_ranges": [list(x) for x in sorted(ranges)],
+        "removal_idx_ranges_text": text,
+        "explicit_removed_count": int(explicit_removed_count),
+        "target_removed_count": int(target_removed_count),
+        "removed_count": int(np.count_nonzero(final_removal_mask)),
+        "remaining_after_explicit_count": int(remaining_indices.size),
+        "note": (
+            "removal_idx_ranges are 0-based candidate-frame indices, "
+            "left-closed and right-open. Explicit ranges are removed before "
+            "optional target-frame sampling."
+        ),
+    }
+
+    return SimpleNamespace(
+        original_frame_count=int(frame_count_i),
+        selected_indices=selected_indices,
+        removal_mask=final_removal_mask,
+        reduced=bool(reduced),
+        stats=stats,
+    )
+
 def process_single_pkl_file(
     pkl_path: Path,
     input_tree: Path,
@@ -275,20 +372,14 @@ def process_single_pkl_file(
     }
 
 
-def write_summary(path: Path, summary: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=4, ensure_ascii=False)
-
-
 def reduce_animation_tree(
     *,
     input_tree: Path,
     output_tree: Path,
     max_frames: int,
     target_frames: int,
-    max_workers: int | None,
+    removal_idx_ranges: str | None = None,
+    max_workers: int | None = None,
     overwrite_output: bool,
     allow_merge: bool,
     allow_no_files: bool,
@@ -318,7 +409,7 @@ def reduce_animation_tree(
                 "files": [],
             }
             if write_summary_file:
-                write_summary(output_tree / "step01_frame_sampling_summary.json", summary)
+                write_stage_summary(output_tree / "step01_frame_sampling_summary.json", summary)
             return summary
 
         fail(msg)
@@ -328,10 +419,11 @@ def reduce_animation_tree(
             input_tree=input_tree,
             pkl_files=pkl_files,
         )
-        plan = make_dynamic_frame_sample_plan(
+        plan = make_frame_sample_plan_with_optional_removal_ranges(
             frame_count,
             max_frames=int(max_frames),
             target_frames=int(target_frames),
+            removal_idx_ranges_text=removal_idx_ranges,
         )
 
     prepare_output_dir(
@@ -396,7 +488,7 @@ def reduce_animation_tree(
 
     if write_summary_file:
         summary_path = output_tree / "step01_frame_sampling_summary.json"
-        write_summary(summary_path, summary)
+        write_stage_summary(summary_path, summary)
         log(f"Step 01 summary written: {summary_path}")
 
     record_metric("01_pkl_file_count", int(len(pkl_files)))
@@ -452,6 +544,17 @@ def main() -> None:
         type=int,
         default=200,
         help="If frame count > max_frames, uniformly sample to this count. Default: 200.",
+    )
+
+    parser.add_argument(
+        "--removal_idx_ranges",
+        type=str,
+        default="",
+        help=(
+            "Optional explicit candidate-frame index ranges to remove before "
+            "dynamic target-frame sampling, e.g. '20:60,260:340'. "
+            "Ranges are 0-based and left-closed/right-open."
+        ),
     )
 
     parser.add_argument(
@@ -511,6 +614,7 @@ def main() -> None:
     log(f"output_source     : {resolution.output_source}")
     log(f"max_frames        : {int(args.max_frames)}")
     log(f"target_frames     : {int(args.target_frames)}")
+    log(f"removal_idx_ranges: {args.removal_idx_ranges}")
     log(f"max_workers       : {args.max_workers}")
     log(f"overwrite_output  : {bool(args.overwrite_output)}")
     log(f"allow_merge       : {bool(args.allow_merge)}")
@@ -522,6 +626,7 @@ def main() -> None:
             output_tree=resolution.output_tree,
             max_frames=int(args.max_frames),
             target_frames=int(args.target_frames),
+            removal_idx_ranges=args.removal_idx_ranges,
             max_workers=args.max_workers,
             overwrite_output=bool(args.overwrite_output),
             allow_merge=bool(args.allow_merge),

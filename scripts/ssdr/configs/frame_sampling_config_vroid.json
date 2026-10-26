@@ -1,0 +1,81 @@
+{
+    "schema": "ogd_lbs_ssdr_01_frame_sampling_config_v1",
+    "description": "Shared SSDR Step 01 frame sampling configuration for legacy VRoid datasets Vroid_18, Vroid_19, and Vroid_20.",
+    "metadata": {
+        "dataset_models": [
+            "Vroid_18",
+            "Vroid_19",
+            "Vroid_20"
+        ],
+        "legacy_dataset_ids": [
+            "dataset18",
+            "dataset19",
+            "dataset20"
+        ],
+        "stage": "01_reduce_animation_frame",
+        "applies_to": "legacy_vroid_only",
+        "not_required_for": [
+            "Griffin_A2",
+            "Winter_Samurai"
+        ]
+    },
+    "frame_index_convention": {
+        "index_base": 0,
+        "range_semantics": "left_closed_right_open",
+        "note": "Ranges are candidate-frame indices, not Blender scene frame IDs. Each pair [start, end] means start <= idx < end."
+    },
+    "step01_params": {
+        "removal_idx_ranges": [
+            [
+                20,
+                60
+            ],
+            [
+                260,
+                340
+            ],
+            [
+                440,
+                600
+            ],
+            [
+                680,
+                820
+            ],
+            [
+                940,
+                1040
+            ],
+            [
+                1140,
+                1260
+            ],
+            [
+                1340,
+                1430
+            ],
+            [
+                1620,
+                1710
+            ],
+            [
+                1850,
+                2030
+            ],
+            [
+                2340,
+                2450
+            ],
+            [
+                2650,
+                2800
+            ]
+        ],
+        "removal_idx_ranges_text": "20:60,260:340,440:600,680:820,940:1040,1140:1260,1340:1430,1620:1710,1850:2030,2340:2450,2650:2800",
+        "legacy_symbol": "REMOVAL_IDX_RANGES"
+    },
+    "compatibility_notes": [
+        "Current scripts/ssdr/01_reduce_animation_frame.py may not yet consume this config directly. This file records the dataset-level Step 01 sampling contract for the upcoming SSDR runner / experiment scripts.",
+        "Griffin_A2 and Winter_Samurai should not use these removal_idx_ranges unless explicitly requested."
+    ]
+}

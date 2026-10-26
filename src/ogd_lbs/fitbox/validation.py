@@ -96,8 +96,8 @@ def validate_fitbox_mesh(
     if v.ndim != 2 or v.shape[1] != 3 or v.shape[0] <= 0:
         fail(f"[{name}] vertices must have shape (V, 3), got {v.shape}.")
 
-    if f.ndim != 2 or f.shape[1] < 3 or f.shape[0] <= 0:
-        fail(f"[{name}] faces must have shape (F, K) with K >= 3, got {f.shape}.")
+    if f.ndim != 2 or f.shape[1] != 3 or f.shape[0] <= 0:
+        fail(f"[{name}] faces must have shape (F, 3), got {f.shape}.")
 
     if not np.issubdtype(f.dtype, np.integer):
         f = f.astype(np.int64)

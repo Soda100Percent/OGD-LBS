@@ -1,0 +1,57 @@
+{
+    "schema": "ogd_lbs_ssdr_03_qem_config_v1",
+    "description": "SSDR Step 03 QEM configuration for VRoid datasets. Migrated from legacy dataset18/19/20 SSDR experiment configs.",
+    "source_legacy_mapping": {
+        "dataset18": "Vroid_18",
+        "dataset19": "Vroid_19",
+        "dataset20": "Vroid_20",
+        "legacy_specific_rates": "{\"top_merged\": 1.5}",
+        "new_equivalent": {
+            "mesh_overrides": {
+                "top_merged": {
+                    "simp_rate_multiplier": 1.5
+                }
+            }
+        }
+    },
+    "global": {
+        "simp_rate_base": 0.1,
+        "min_target_faces": 100,
+        "maximum_error": 9999999.0,
+        "qem_frames": "all",
+        "qem_sample_count": 16,
+        "qem_profile_detail": false,
+        "preserve_topology": true,
+        "preserve_boundary_mode": "soft",
+        "boundary_weight": 1000.0,
+        "preserve_normal": true,
+        "normal_flip_threshold": 0.0,
+        "quality_check": true,
+        "quality_thr": 0.3,
+        "hard_quality_check": false,
+        "attribute_merge": "edge_linear",
+        "cleanup_mesh": true,
+        "validate_output": true,
+        "weak_validate": true
+    },
+    "mesh_overrides": {
+        "top_merged": {
+            "simp_rate_multiplier": 1.5,
+            "note": "Equivalent to legacy CLI specific_rates={\"top_merged\": 1.5}. With global simp_rate_base=0.1, this yields effective rate 0.15 for top_merged."
+        }
+    },
+    "notes": [
+        "This file configures SSDR Step 03 only.",
+        "It does not define Step 00/01/02/04 parameters.",
+        "Model-specific copies are currently identical and are provided for future per-model overrides.",
+        "Fitbox mesh faces are expected to be triangulated as shape (F, 3)."
+    ],
+    "metadata": {
+        "dataset_model": "Vroid_shared",
+        "aliases": [
+            "Vroid_18",
+            "Vroid_19",
+            "Vroid_20"
+        ]
+    }
+}

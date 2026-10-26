@@ -59,33 +59,34 @@ For new layout, use fitbox_vdb itself as the SSDR input tree.
 from __future__ import annotations
 
 import argparse
-import json
-import shutil
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+try:
+    from _env import ensure_repo_paths_in_syspath
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._env import ensure_repo_paths_in_syspath
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
+ensure_repo_paths_in_syspath(__file__)
 
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            ssdr_script_dir = parent / "scripts" / "ssdr"
+try:
+    from _stage_io import (
+        load_required_dict,
+        prepare_output_dir,
+        require_file,
+        write_stage_summary,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._stage_io import (
+        load_required_dict,
+        prepare_output_dir,
+        require_file,
+        write_stage_summary,
+    )
 
-            for item in [src_dir, ssdr_script_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
 
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
 
 import numpy as np  # noqa: E402
 
@@ -147,65 +148,6 @@ class SelectedDatasetLayout:
     reduced_animation_path: Path
 
     mesh_paths: list[Path]
-
-
-def path_has_any_children(path: Path) -> bool:
-    if not path.exists() or not path.is_dir():
-        return False
-
-    try:
-        next(path.iterdir())
-        return True
-    except StopIteration:
-        return False
-
-
-def prepare_output_dir(
-    output_tree: Path,
-    *,
-    overwrite_output: bool,
-    allow_merge: bool,
-) -> None:
-    if overwrite_output and allow_merge:
-        fail("--overwrite_output and --allow_merge are mutually exclusive.")
-
-    if output_tree.exists():
-        if not output_tree.is_dir():
-            fail(f"Output path exists but is not a directory: {output_tree}")
-
-        if overwrite_output:
-            warn(f"Removing existing output directory because --overwrite_output is set: {output_tree}")
-            shutil.rmtree(output_tree)
-            output_tree.mkdir(parents=True, exist_ok=True)
-            return
-
-        if path_has_any_children(output_tree) and not allow_merge:
-            fail(
-                f"Output directory already exists and is non-empty: {output_tree}\n"
-                "Use --overwrite_output to clear it, or --allow_merge to write into it."
-            )
-
-        output_tree.mkdir(parents=True, exist_ok=True)
-        return
-
-    output_tree.mkdir(parents=True, exist_ok=True)
-
-
-def require_file(path: Path, *, role: str) -> Path:
-    if not path.exists():
-        fail(f"Missing required {role}: {path}")
-    if not path.is_file():
-        fail(f"Required {role} is not a file: {path}")
-    return path
-
-
-def load_required_dict(path: Path, *, role: str) -> dict[str, Any]:
-    obj = load_data(path)
-
-    if not isinstance(obj, dict):
-        fail(f"{role} must be a dictionary object: {path}")
-
-    return obj
 
 
 def has_legacy_flat_layout(input_tree: Path) -> bool:
@@ -557,13 +499,6 @@ def process_single_mesh_file(
     }
 
 
-def write_summary(path: Path, summary: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=4, ensure_ascii=False)
-
-
 def reduce_bone_weight_tree(
     *,
     input_tree: Path,
@@ -723,7 +658,7 @@ def reduce_bone_weight_tree(
 
     if write_summary_file:
         summary_path = output_tree / "step02_reduce_bone_weight_summary.json"
-        write_summary(summary_path, summary)
+        write_stage_summary(summary_path, summary)
         log(f"Step 02 summary written: {summary_path}")
 
     record_metric("02_full_bone_count", int(ctx.sh_bones_count))

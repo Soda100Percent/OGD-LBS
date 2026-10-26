@@ -46,33 +46,44 @@ os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import argparse
-import json
-import shutil
-import sys
 from pathlib import Path
 from typing import Any
+
+try:
+    from _env import ensure_repo_paths_in_syspath
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._env import ensure_repo_paths_in_syspath
+
+ensure_repo_paths_in_syspath(__file__)
+
+try:
+    from _stage_constants import (
+        ANIMATION_STEM,
+        SKELETON_STEM,
+        CORE_STEMS,
+        STEP_SUMMARY_STEMS as SUMMARY_STEMS,
+    )
+    from _stage_io import (
+        prepare_output_dir,
+        require_dict,
+        write_stage_summary,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import fallback
+    from ._stage_constants import (
+        ANIMATION_STEM,
+        SKELETON_STEM,
+        CORE_STEMS,
+        STEP_SUMMARY_STEMS as SUMMARY_STEMS,
+    )
+    from ._stage_io import (
+        prepare_output_dir,
+        require_dict,
+        write_stage_summary,
+    )
 
 import numpy as np
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            ssdr_script_dir = parent / "scripts" / "ssdr"
-
-            for item in [src_dir, ssdr_script_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
 
 from ogd_lbs.utils.common import (  # noqa: E402
     log,
@@ -83,7 +94,6 @@ from ogd_lbs.utils.common import (  # noqa: E402
     load_data,
     load_json,
     dump_pkl,
-    dump_json,
     resolve_specific_file,
     discover_and_resolve_files,
     record_metric,
@@ -124,93 +134,6 @@ from paths import (  # noqa: E402
     validate_ssdr_stage_resolution,
     print_ssdr_resolution_info,
 )
-
-
-ANIMATION_STEM = "animation_data"
-SKELETON_STEM = "skeleton_hierarchy_data"
-
-CORE_STEMS = {
-    ANIMATION_STEM,
-    SKELETON_STEM,
-}
-
-SUMMARY_STEMS = {
-    "step00_convert_summary",
-    "step01_frame_sampling_summary",
-    "step02_reduce_bone_weight_summary",
-    "step03_qem_summary",
-    "step04_optimize_summary",
-}
-
-
-def path_has_any_children(path: Path) -> bool:
-    if not path.exists() or not path.is_dir():
-        return False
-
-    try:
-        next(path.iterdir())
-        return True
-    except StopIteration:
-        return False
-
-
-def prepare_output_dir(
-    output_tree: Path,
-    *,
-    overwrite_output: bool,
-    allow_merge: bool,
-) -> None:
-    if overwrite_output and allow_merge:
-        fail("--overwrite_output and --allow_merge are mutually exclusive.")
-
-    if output_tree.exists():
-        if not output_tree.is_dir():
-            fail(f"Output path exists but is not a directory: {output_tree}")
-
-        if overwrite_output:
-            warn(f"Removing existing output directory because --overwrite_output is set: {output_tree}")
-            shutil.rmtree(output_tree)
-            output_tree.mkdir(parents=True, exist_ok=True)
-            return
-
-        if path_has_any_children(output_tree) and not allow_merge:
-            fail(
-                f"Output directory already exists and is non-empty: {output_tree}\n"
-                "Use --overwrite_output to clear it, or --allow_merge to write into it."
-            )
-
-        output_tree.mkdir(parents=True, exist_ok=True)
-        return
-
-    output_tree.mkdir(parents=True, exist_ok=True)
-
-
-def json_safe(obj: Any) -> Any:
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-
-    if isinstance(obj, np.generic):
-        return obj.item()
-
-    if isinstance(obj, Path):
-        return str(obj)
-
-    if isinstance(obj, dict):
-        return {str(k): json_safe(v) for k, v in obj.items()}
-
-    if isinstance(obj, (list, tuple)):
-        return [json_safe(x) for x in obj]
-
-    if isinstance(obj, set):
-        return sorted(json_safe(x) for x in obj)
-
-    return obj
-
-
-def require_dict(obj: Any, *, role: str, path: Path) -> dict[str, Any]:
-    if not isinstance(obj, dict):
-        fail(f"{role} must be a dictionary object: {path}")
-    return obj
 
 
 def discover_step04_mesh_files(input_tree: Path) -> list[Path]:
@@ -351,11 +274,6 @@ def resolve_iteration_schedule(
         bool(opt_weight),
     )
     return bool(to_opt_weight), int(weight_calc_mode), float(jnt_factor), "legacy_schedule"
-
-
-def write_summary(path: Path, summary: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    dump_json(path, json_safe(summary))
 
 
 def optimize_weight_and_bone_trans_tree(
@@ -1049,7 +967,7 @@ def optimize_weight_and_bone_trans_tree(
 
     if write_summary_file:
         summary_path = output_tree / "step04_optimize_summary.json"
-        write_summary(summary_path, summary)
+        write_stage_summary(summary_path, summary)
         log(f"Step 04 summary written: {summary_path}")
         summary["summary_path"] = str(summary_path)
 
