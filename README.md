@@ -1,4 +1,5 @@
 
+
 # OGD-LBS
 
 > Code of Paper: **“OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters”**
@@ -10,7 +11,8 @@ OGD-LBS 是面向商业级、多组件、预绑定（Pre-Bound）LBS 角色资�
 - SSDR 前置处理；
 - QEM 低模生成；
 - 权重与骨骼变换优化相关实验代码；
-- 针对部分商业资产的清洗入口脚本。
+- 针对部分商业资产的清洗入口脚本；
+- dataset-side Data Prep / SSDR runner 与实验配置。
 
 ---
 
@@ -53,17 +55,23 @@ OGD-LBS/
 │   │   └── tests/
 │   │
 │   ├── ssdr/
+│   │   ├── _env.py
+│   │   ├── _stage_constants.py
+│   │   ├── _stage_io.py
+│   │   ├── paths.py
 │   │   ├── 00_convert_json_to_pickle.py
 │   │   ├── 01_reduce_animation_frame.py
 │   │   ├── 02_reduce_bone_weight.py
 │   │   ├── 03_create_low_poly_shapes.py
 │   │   ├── 04_optimize_weight_and_bone_trans.py
-│   │   ├── paths.py
+│   │   ├── run_dataset_ssdr.sh
+│   │   ├── configs/
 │   │   └── tests/
 │   │
 │   └── debug/
 │       ├── compare_blend_armature_bones.py
 │       ├── diagnose_surface_deform_topology.py
+│       ├── import_fitbox_lbs_variant_probe.py
 │       ├── import_fitbox_to_blend.py
 │       └── ssdr_res_render.py
 │
@@ -86,70 +94,145 @@ OGD-LBS/
 |---|---|
 |`scripts/custom_model_clean/`|资产专用清洗入口。目前包含 Winter Samurai 清洗流程。|
 |`scripts/data_prep/`|商业 `.blend` 到 Fitbox 数据的预处理管线。支持 staged work dir、SDF fusion、Surface Deform / LBS drive mode、配置式减骨版本与 Fitbox 导出。|
-|`scripts/ssdr/`|SSDR 前置与优化阶段。|
+|`scripts/ssdr/`|SSDR 前置与优化阶段。包含 00–04 staged pipeline、dataset-side runner、SSDR 配置与测试。|
 |`scripts/debug/`|Fitbox / SSDR 结果检查、渲染与调试工具。|
 |`src/ogd_lbs/blender/`|可复用 Blender 工具。|
-|`src/ogd_lbs/fitbox/`|Fitbox 导入、导出、采样与校验。|
+|`src/ogd_lbs/fitbox/`|Fitbox 导入、导出、采样与校验。当前 Fitbox mesh faces 约定为三角面 `(F, 3)`。|
 |`src/ogd_lbs/qem/`|QEM 网格减面核心实现。|
 |`src/ogd_lbs/ssdr/`|SSDR 相关算法实现。|
-|`src/ogd_lbs/utils/`|通用 IO、work dir、progress 等工具。|
+|`src/ogd_lbs/utils/`|通用 IO、work dir、progress、file state 等工具。|
 
 ---
 
-## 2. 环境依赖
+## 2. 安装与环境配置
 
-项目当前主要使用两个 Conda 环境。
+### 2.1 推荐环境命名
 
-### 2.1 主环境：`lao-lbs`
+新机器上统一使用以下 Conda 环境名：
 
-用于运行：
+```text
+ogd-lbs
+```
 
-- Winter Samurai 清洗；
-- Prep 01 / 02b / 03 / 04a / 05；
+该环境用于：
+
+- Winter Samurai custom clean；
+- Data Prep Prep 01 / 02b / 03 / 04a / 05；
 - SSDR Step 00 / 01 / 02 / 03 / 04；
-- Fitbox 导入检查工具；
+- Fitbox / SSDR debug import；
 - 常规 Python 测试。
 
-示例：
+项目历史日志或旧脚本示例中可能出现旧环境名：
+
+```text
+lao-lbs
+```
+
+在新机器上请优先使用：
+
+```text
+ogd-lbs
+```
+
+除非你明确在旧服务器环境中运行。
+
+---
+
+### 2.2 创建主环境 `ogd-lbs`
+
+建议从 Conda / Mamba 创建基础环境：
 
 ```bash
-conda activate lao-lbs
+conda create -n ogd-lbs python=3.11 -y
+conda activate ogd-lbs
+```
+
+安装 Python 包：
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
 pip install -e .
 ```
 
-已验证环境包括：
+如果需要补充常用科学计算 / 可视化依赖，可安装：
 
-```text
-Python 3.11
-bpy 4.x
-Blender 4.5.x LTS binary
-numpy
-scipy
-pandas
-PyYAML
-rsync
+```bash
+conda install -n ogd-lbs -c conda-forge \
+  numpy scipy pandas pyyaml rsync \
+  pyvista vtk \
+  -y
 ```
 
-如果直接使用 Blender binary 运行脚本，当前项目中常用路径为：
+说明：
+
+- `pyproject.toml` 中已经声明了项目核心 Python 依赖；
+- `pyvista / vtk` 主要用于 `scripts/debug/ssdr_res_render.py`；
+- `rsync` 用于 dataset-side handoff / 同步；
+- 如果当前机器不需要 direct renderer，可以暂不安装 `pyvista / vtk`。
+
+验证安装：
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+conda run --no-capture-output -n ogd-lbs \
+  python - <<'PY'
+import ogd_lbs
+print("ogd_lbs import OK")
+PY
+```
+
+运行 SSDR 纯 Python 测试：
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+conda run --no-capture-output -n ogd-lbs \
+  python -m unittest discover -s scripts/ssdr/tests -p 'test_*.py'
+```
+
+---
+
+### 2.3 Blender Python / bpy
+
+项目中部分脚本需要 Blender / `bpy`：
+
+- Winter Samurai custom clean；
+- Data Prep；
+- Fitbox visual import；
+- debug `.blend` 检查。
+
+当前常用 Blender binary 路径：
 
 ```text
 /workspace/blender-4.5.12-linux-x64/blender
 ```
 
-### 2.2 SDF 环境：`ogd-bpy52`
+如路径不同，可设置：
 
-用于运行：
+```bash
+export BLENDER_BIN=/path/to/blender
+```
 
-- Prep 02a；
-- Blender 5.x SDF Grid / VDB-like fusion。
+部分 Python 脚本通过 Conda 环境中的 `bpy` 运行。推荐确保 `ogd-lbs` 环境中具备与当前机器兼容的 `bpy` / Blender 相关依赖。
 
-示例：
+---
+
+### 2.4 SDF 环境 `ogd-bpy52`
+
+Data Prep 的 Prep 02a 使用 Blender 5.x SDF Grid / VDB-like fusion，推荐单独环境：
 
 ```bash
 conda create -n ogd-bpy52 python=3.13 -y
 conda activate ogd-bpy52
 pip install bpy==5.2.2 trimesh networkx numpy
 ```
+
+用途：
+
+- `scripts/data_prep/prep_02a_sdf_fuse_5x.py`
+- `scripts/data_prep/prep_02_sdf_pipeline.sh` 中的 Blender 5.x fusion 阶段
 
 已验证环境包括：
 
@@ -159,6 +242,27 @@ bpy 5.2.2 LTS
 numpy
 trimesh
 networkx
+```
+
+---
+
+### 2.5 rsync
+
+SSDR / Data Prep handoff 推荐使用 `rsync -a --delete`，确保目标目录与源目录严格一致。
+
+安装：
+
+```bash
+conda install -n ogd-lbs -c conda-forge rsync -y
+```
+
+验证时避免使用可能触发 SIGPIPE 的管道命令。推荐：
+
+```bash
+conda run --no-capture-output -n ogd-lbs \
+  rsync --version > /tmp/ogd_lbs_rsync_version.txt
+
+sed -n '1,4p' /tmp/ogd_lbs_rsync_version.txt
 ```
 
 ---
@@ -177,7 +281,7 @@ networkx
 |---|---|---|
 |`Griffin_A2`|标准 `.blend` 输入，无需 custom clean|[https://superhivemarket.com/products/griffin_a2](https://superhivemarket.com/products/griffin_a2)|
 |`Winter_Samurai`|需要先运行 custom clean|[https://superhivemarket.com/products/winter-samurai](https://superhivemarket.com/products/winter-samurai)|
-|`Vroid_*`|预制角色资产，旧数据已预处理|[https://vroid.com/en/studio](https://vroid.com/en/studio)|
+|`Vroid_*`|预制角色资产，旧 Fitbox `data0` 已预处理|[https://vroid.com/en/studio](https://vroid.com/en/studio)|
 
 本仓库不提供商业资产本体。请将资产放置到本地数据集目录后再运行管线。
 
@@ -186,19 +290,24 @@ networkx
 ```text
 /workspace/ogd_dataset/
 ├── Griffin_A2/
-│   └── Griffin_A2.blend
+│   ├── Griffin_A2.blend
+│   ├── data_prep_work_dir/
+│   └── ssdr_work_dir/
 │
 ├── Vroid_18/
 │   ├── data0/
-│   └── target/
+│   ├── target/
+│   └── ssdr_work_dir/
 │
 ├── Vroid_19/
 │   ├── data0/
-│   └── target/
+│   ├── target/
+│   └── ssdr_work_dir/
 │
 ├── Vroid_20/
 │   ├── data0/
-│   └── target/
+│   ├── target/
+│   └── ssdr_work_dir/
 │
 └── Winter_Samurai/
     ├── model/
@@ -208,14 +317,18 @@ networkx
     │   ├── Anim_Winter_Samurai_Attack1.fbx
     │   ├── ...
     │   └── Anim_Winter_Samurai_Walk3.fbx
-    └── Winter_Samurai_Normalized.blend
+    ├── Winter_Samurai_Normalized.blend
+    ├── data_prep_work_dir/
+    └── ssdr_work_dir/
 ```
 
 说明：
 
-- `Griffin_A2/Griffin_A2.blend` 是标准 Data Prep 输入。
-- `Vroid_*` 当前按 `data0/` 和 `target/` 组织。项目涉及的 VRoid 预制资产 Fitbox `data0` 文件后续考虑发布，但目前暂未上传；派生的 `data1` / `data2` / `data3` / `data4` 请用本仓库脚本自行计算生成。
-- `Winter_Samurai/Winter_Samurai_Normalized.blend` 由 custom clean 管线生成，是后续 Data Prep 输入。
+- `Griffin_A2/Griffin_A2.blend` 是标准 Data Prep 输入；
+- `Winter_Samurai/Winter_Samurai_Normalized.blend` 由 custom clean 管线生成；
+- `Vroid_*` 当前按旧 Fitbox `data0/` 和 `target/` 组织；
+- `Vroid_*` 的根目录 `data0/` 作为只读 legacy input，SSDR runner 会 handoff 到 `ssdr_work_dir/data0_json/` 后再运行 SSDR；
+- 所有 SSDR 生成物应写入 `ssdr_work_dir/`，避免污染模型根目录。
 
 ---
 
@@ -444,9 +557,9 @@ cd /workspace/git_projects/OGD-LBS
 
 bash scripts/data_prep/run_dataset_data_prep.sh All \
   --dataset_root /workspace/ogd_dataset \
-  --conda_env lao-lbs \
+  --conda_env ogd-lbs \
   --bpy5_env ogd-bpy52 \
-  --bpy4_env lao-lbs \
+  --bpy4_env ogd-lbs \
   --archive_existing \
   --target_frame_count 60 \
   --nla_gap 0
@@ -469,7 +582,9 @@ scripts/data_prep/configs/extra_bone_reduce_griffin_a2.json
 scripts/data_prep/configs/extra_bone_reduce_winter_samurai.json
 ```
 
-### 6.1 初始化实验目录
+---
+
+### 6.1 手动初始化实验目录
 
 如果不使用 dataset-side runner，也可以手动初始化实验目录：
 
@@ -499,10 +614,12 @@ echo "SSDR = $SSDR"
 echo "LOG  = $LOG"
 ```
 
+---
+
 ### 6.2 Prep 01：NLA 拼接
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/data_prep/prep_01_concat_nla.py \
   --input_dir "$DP" \
   --gap 0 \
@@ -518,7 +635,7 @@ bash scripts/data_prep/prep_02_sdf_pipeline.sh \
   --input_dir "$DP" \
   --config "$DP/prep_02_sdf_merge_config.json" \
   --bpy5_env ogd-bpy52 \
-  --bpy4_env lao-lbs \
+  --bpy4_env ogd-lbs \
   2>&1 | tee "$LOG/02_prep_02_sdf_pipeline.log"
 ```
 
@@ -529,11 +646,10 @@ scripts/data_prep/configs/prep_02_sdf_merge_config_griffin_a2.json
 scripts/data_prep/configs/prep_02_sdf_merge_config_winter_samurai.json
 ```
 
-
 ### 6.4 Prep 03：Surface Deform + LBS drive mode
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/data_prep/prep_03_surface_deform.py \
   --input_dir "$DP" \
   --drive_mode BOTH \
@@ -559,7 +675,7 @@ Winter Samurai 的 `Source_top` 曾出现 edge>2 非流形边，因此该默认�
 ### 6.5 Prep 04a：cleaned-full skeleton 与配置式减骨
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/data_prep/prep_04a_bone_pruning.py \
   --input_dir "$DP" \
   --extra_bone_reduce_config "$DP/extra_bone_reduce_config.json" \
@@ -608,7 +724,7 @@ bone_reduced_versions/
 ```bash
 TARGET_FRAME_COUNT=60
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/data_prep/prep_05_export_fitbox.py \
   --input_dir "$DP" \
   --target_frame_count "$TARGET_FRAME_COUNT" \
@@ -622,7 +738,7 @@ Debug 运行也可限制最大帧数：
 ```bash
 DEBUG_FRAME_MAX=60
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/data_prep/prep_05_export_fitbox.py \
   --input_dir "$DP" \
   --debug_frame_max "$DEBUG_FRAME_MAX" \
@@ -640,7 +756,7 @@ faces shape = (F, 3)
 
 ---
 
-## 7. SSDR 工作目录与最小运行流程
+## 7. SSDR 工作目录与运行流程
 
 SSDR staged layout：
 
@@ -651,7 +767,9 @@ ssdr_work_dir/
 ├── data1/
 ├── data2/
 ├── data3/
-└── data4/
+├── data4/
+├── logs/
+└── metrics/
 ```
 
 阶段语义：
@@ -664,21 +782,172 @@ ssdr_work_dir/
 |Step 03|`data2`|`data3`|QEM low-poly shape generation|
 |Step 04|`data3`|`data4` / `opt_out`|权重与骨骼变换优化|
 
-### 7.1 同步 Fitbox 到 SSDR
+---
 
-Data Prep 完成后，将：
+### 7.0 推荐：dataset-side SSDR runner
+
+当前推荐使用：
+
+```text
+scripts/ssdr/run_dataset_ssdr.sh
+```
+
+支持：
+
+```text
+Vroid_18
+Vroid_19
+Vroid_20
+Griffin_A2
+Winter_Samurai
+All
+```
+
+runner 默认 dataset root：
+
+```text
+/workspace/ogd_dataset
+```
+
+runner 会统一使用：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir
+```
+
+作为 SSDR 工作目录。
+
+#### 输入源解析优先级
+
+对每个模型，runner 会按以下顺序查找输入：
+
+1. 已有 SSDR source：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir/data0_json
+```
+
+2. 旧 VRoid / legacy source：
+
+```text
+/workspace/ogd_dataset/<MODEL>/data0
+```
+
+会 handoff 到：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir/data0_json
+```
+
+3. Data Prep Fitbox VDB：
+
+```text
+/workspace/ogd_dataset/<MODEL>/data_prep_work_dir/data_prep_05/fitbox_vdb
+```
+
+会 handoff 到：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir/data0_json
+```
+
+如果三者都不存在，则 fail fast。
+
+#### VRoid 专用配置
+
+VRoid 旧数据会自动使用：
+
+```text
+scripts/ssdr/configs/frame_sampling_config_vroid.json
+scripts/ssdr/configs/qem_config_vroid.json
+```
+
+其中：
+
+- `frame_sampling_config_vroid.json` 记录旧 VRoid 的 Step 01 `removal_idx_ranges`；
+- `qem_config_vroid.json` 记录旧 VRoid 的 Step 03 QEM 参数；
+- `top_merged` 会使用 `simp_rate_multiplier = 1.5`；
+- 默认 `simp_rate_base = 0.1`，因此 `top_merged` effective rate 为 `0.15`。
+
+#### dry-run 检查
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+bash scripts/ssdr/run_dataset_ssdr.sh Vroid_18 --dry_run --no_step04
+bash scripts/ssdr/run_dataset_ssdr.sh Griffin_A2 --dry_run --no_step04
+bash scripts/ssdr/run_dataset_ssdr.sh Winter_Samurai --dry_run --no_step04
+```
+
+#### 跑 Step 00–03
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+bash scripts/ssdr/run_dataset_ssdr.sh Vroid_18 \
+  --archive_existing \
+  --overwrite_output \
+  --no_step04 \
+  --max_workers 16 \
+  --qem_max_workers 16
+```
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+bash scripts/ssdr/run_dataset_ssdr.sh Griffin_A2 \
+  --archive_existing \
+  --overwrite_output \
+  --no_step04 \
+  --max_workers 16 \
+  --qem_max_workers 16
+```
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+bash scripts/ssdr/run_dataset_ssdr.sh Winter_Samurai \
+  --archive_existing \
+  --overwrite_output \
+  --no_step04 \
+  --max_workers 16 \
+  --qem_max_workers 16
+```
+
+#### 跑完整 00–04
+
+Step 04 当前常用正式配置为：
+
+```text
+iter = 70
+org_type = 3
+legacy schedule
+max_workers = 16
+weight_solver = simplex
+input_poses = true
+opt_weight = true
+use_weight_mask = true
+```
+
+可以直接调用 Step 04，也可以后续通过实验 runner / grid runner 管理。
+
+---
+
+### 7.1 手动同步 Fitbox 到 SSDR
+
+如果不使用 `run_dataset_ssdr.sh`，Data Prep 完成后可手动同步：
 
 ```text
 data_prep_work_dir/data_prep_05/fitbox_vdb/
 ```
 
-同步到：
+到：
 
 ```text
 ssdr_work_dir/data0_json/
 ```
 
-推荐使用 `rsync -a --delete`，确保目标目录严格等于当前 `fitbox_vdb`。
+推荐使用 `rsync -a --delete`：
 
 ```bash
 SRC="$DP/data_prep_05/fitbox_vdb"
@@ -688,7 +957,7 @@ test -d "$SRC" || { echo "ERROR: source fitbox_vdb not found: $SRC"; exit 1; }
 
 mkdir -p "$DST"
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   rsync -a --delete "$SRC/" "$DST/"
 ```
 
@@ -705,30 +974,32 @@ for MODEL in Griffin_A2 Winter_Samurai; do
 
   mkdir -p "$DST"
 
-  conda run --no-capture-output -n lao-lbs \
+  conda run --no-capture-output -n ogd-lbs \
     rsync -a --delete "$SRC/" "$DST/"
 done
 ```
 
+---
+
 ### 7.2 Step 00：`data0_json -> data0`
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/00_convert_json_to_pickle.py \
   --input_dir "$SSDR" \
   --overwrite_output \
-  --max_workers 1 \
+  --max_workers 16 \
   2>&1 | tee "$LOG/06_ssdr_00_convert_json_to_pickle.log"
 ```
 
 ### 7.3 Step 01：`data0 -> data1`
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/01_reduce_animation_frame.py \
   --input_dir "$SSDR" \
   --overwrite_output \
-  --max_workers 1 \
+  --max_workers 16 \
   2>&1 | tee "$LOG/07_ssdr_01_reduce_animation_frame.log"
 ```
 
@@ -739,40 +1010,52 @@ frame_count <= 210: 保留全部
 frame_count > 210 : 均匀采样到 200 帧
 ```
 
+VRoid 旧数据还会通过 runner 自动应用：
+
+```text
+--removal_idx_ranges 20:60,260:340,...
+```
+
+该配置记录在：
+
+```text
+scripts/ssdr/configs/frame_sampling_config_vroid.json
+```
+
 ### 7.4 Step 02：`data1 -> data2`
 
 如果导出了 configured reduced variant，例如 `bone_reduced_aggressive`：
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/02_reduce_bone_weight.py \
   --input_dir "$SSDR" \
   --variant bone_reduced_aggressive \
   --overwrite_output \
-  --max_workers 1 \
+  --max_workers 16 \
   2>&1 | tee "$LOG/08_ssdr_02_reduce_bone_weight.log"
 ```
 
 如果没有显式 reduced variant，可以不传 `--variant`：
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/02_reduce_bone_weight.py \
   --input_dir "$SSDR" \
   --overwrite_output \
-  --max_workers 1 \
+  --max_workers 16 \
   2>&1 | tee "$LOG/08_ssdr_02_reduce_bone_weight.log"
 ```
 
 ### 7.5 Step 03：`data2 -> data3`
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/03_create_low_poly_shapes.py \
   --input_dir "$SSDR" \
-  --simp_rate_base 0.1 \
+  --config scripts/ssdr/configs/qem_config_vroid.json \
   --overwrite_output \
-  --max_workers 8 \
+  --max_workers 16 \
   2>&1 | tee "$LOG/09_ssdr_03_create_low_poly_shapes.log"
 ```
 
@@ -780,12 +1063,7 @@ conda run --no-capture-output -n lao-lbs \
 
 ```text
 --simp_rate_base
-```
-
-可选配置文件：
-
-```text
-configs/ssdr_03_qem_config_example.json
+--config
 ```
 
 如果未显式传入 `--config`，脚本会尝试读取：
@@ -794,17 +1072,51 @@ configs/ssdr_03_qem_config_example.json
 $SSDR/ssdr_03_qem_config.json
 ```
 
+如果该文件不存在，则使用 Step 03 内置默认参数。
+
 ### 7.6 Step 04：`data3 -> data4 / opt_out`
 
-Step 04 用于后续权重与骨骼变换优化。具体参数与实验设置相关，建议先查看：
+示例：`iter=70`, `org_type=3`, legacy schedule, workers=16：
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+cd /workspace/git_projects/OGD-LBS
+
+conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/04_optimize_weight_and_bone_trans.py \
-  --help
+  --input_dir "$SSDR" \
+  --metrics_dir "$SSDR/metrics" \
+  --overwrite_output \
+  --iter 70 \
+  --print_every_n 5 \
+  --org_type 3 \
+  --input_poses \
+  --opt_weight \
+  --use_weight_mask \
+  --weight_solver simplex \
+  --bt_covariance_mode corrected \
+  --trans_affine 0.0 \
+  --trans_affine_norm 4.0 \
+  --roll_affinity 0.0 \
+  --roll_affinity_norm 2.0 \
+  --eval_mesh_health \
+  --health_level 1 \
+  --health_every 5 \
+  --health_weight_scheme uniform \
+  --eval_bone_health \
+  --bone_health_every 5 \
+  --max_workers 16 \
+  --validate_output \
+  2>&1 | tee "$SSDR/logs/04_optimize_weight_and_bone_trans_iter70_org3_workers16.log"
 ```
 
-最小约定是从 `ssdr_work_dir/data3` 读取，并将结果写入 `data4` 或 `opt_out` 相关目录。
+输出：
+
+```text
+$SSDR/data4/step04_optimize_summary.json
+$SSDR/data4/opt_out/
+$SSDR/data4/opt_out/metrics_history_per_frame.npz
+$SSDR/metrics/metrics_04.json
+```
 
 ---
 
@@ -833,7 +1145,7 @@ cd /workspace/git_projects/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode shape_key \
@@ -848,7 +1160,7 @@ cd /workspace/git_projects/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode LBS \
@@ -863,7 +1175,7 @@ cd /workspace/git_projects/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode shape_key \
@@ -880,7 +1192,7 @@ cd /workspace/git_projects/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks
 
-conda run --no-capture-output -n lao-lbs \
+conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode LBS \
@@ -895,42 +1207,156 @@ conda run --no-capture-output -n lao-lbs \
 export OGD_FITBOX_IMPORT_BONE_LENGTH=0.08
 ```
 
-### 8.1 SSDR ShapeKey 模式
+---
 
-SSDR 后续阶段完成后，也可以从 `data3` 等目录导入检查：
+### 8.1 SSDR Step 03 检查
+
+从：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir/data3
+```
+
+导入检查。
+
+#### Griffin_A2 Step 03 ShapeKey 200 帧
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
-  --input_dir "$SSDR/data3" \
-  --mesh main_mesh_VDB \
+  --input_dir /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/data3 \
+  --mesh ALL \
   --import_mode shape_key \
-  --output_blend "$SSDR/data3/import_main_mesh_VDB_shape_key.blend" \
-  --open \
-  2>&1 | tee "$LOG/10_import_data3_shape_key.log"
+  --output_blend /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks/import_data3_shape_key_200f.blend \
+  --open
 ```
 
-### 8.2 SSDR LBS 模式
+#### Griffin_A2 Step 03 LBS 200 帧
 
 ```bash
-conda run --no-capture-output -n lao-lbs \
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
-  --input_dir "$SSDR/data3" \
-  --mesh main_mesh_VDB \
+  --input_dir /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/data3 \
+  --mesh ALL \
   --import_mode LBS \
-  --output_blend "$SSDR/data3/import_main_mesh_VDB_lbs.blend" \
-  --open \
-  2>&1 | tee "$LOG/11_import_data3_lbs.log"
+  --output_blend /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks/import_data3_lbs_200f.blend \
+  --open
 ```
 
-如果 Blender binary 不是默认路径，可设置：
+#### Winter_Samurai Step 03 ShapeKey 200 帧
 
 ```bash
-export BLENDER_BIN=/path/to/blender
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/data3 \
+  --mesh ALL \
+  --import_mode shape_key \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks/import_data3_shape_key_200f.blend \
+  --open
 ```
 
-或显式传入：
+#### Winter_Samurai Step 03 LBS 200 帧
 
 ```bash
---blender_bin /path/to/blender
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/data3 \
+  --mesh ALL \
+  --import_mode LBS \
+  --bone_length 0.08 \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks/import_data3_lbs_200f_bonelen0p08.blend \
+  --open
+```
+
+---
+
+### 8.2 SSDR Step 04 / opt_out 检查
+
+从：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir/data4/opt_out
+```
+
+导入检查。
+
+#### Griffin_A2 Step 04 ShapeKey 200 帧
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/data4/opt_out \
+  --mesh ALL \
+  --import_mode shape_key \
+  --output_blend /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks/import_data4_opt_out_shape_key_200f.blend \
+  --open
+```
+
+#### Griffin_A2 Step 04 LBS 200 帧
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/data4/opt_out \
+  --mesh ALL \
+  --import_mode LBS \
+  --output_blend /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks/import_data4_opt_out_lbs_200f.blend \
+  --open
+```
+
+#### Winter_Samurai Step 04 ShapeKey 200 帧
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/data4/opt_out \
+  --mesh ALL \
+  --import_mode shape_key \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks/import_data4_opt_out_shape_key_200f.blend \
+  --open
+```
+
+#### Winter_Samurai Step 04 LBS 200 帧
+
+```bash
+cd /workspace/git_projects/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/data4/opt_out \
+  --mesh ALL \
+  --import_mode LBS \
+  --bone_length 0.08 \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks/import_data4_opt_out_lbs_200f_bonelen0p08.blend \
+  --open
 ```

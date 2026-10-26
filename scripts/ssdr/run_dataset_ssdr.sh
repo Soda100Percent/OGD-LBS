@@ -78,6 +78,8 @@ FRAME_REMOVAL_IDX_RANGES=""
 FRAME_SAMPLING_CONFIG=""
 HANDOFF_LEGACY_DATA0=0
 LEGACY_SOURCE_DATA0=""
+HANDOFF_SOURCE_DIR=""
+HANDOFF_SOURCE_KIND=""
 
 usage() {
   cat <<'EOF'
@@ -351,60 +353,77 @@ resolve_work_layout() {
   local model="$1"
   local model_dir="$DATASET_ROOT/$model"
   local ssdr_dir="$model_dir/ssdr_work_dir"
+  local root_data0="$model_dir/data0"
+  local fitbox_vdb="$model_dir/data_prep_work_dir/data_prep_05/fitbox_vdb"
 
   MODEL_DIR="$model_dir"
-  WORK_DIR=""
+  WORK_DIR="$ssdr_dir"
   RUN_STEP00=0
   INPUT_LAYOUT=""
   PRESERVE_DATA0=0
   HANDOFF_LEGACY_DATA0=0
   LEGACY_SOURCE_DATA0=""
+  HANDOFF_SOURCE_DIR=""
+  HANDOFF_SOURCE_KIND=""
 
   [ -d "$model_dir" ] || die "Missing model directory: $model_dir"
 
-  # Legacy VRoid / old dataset layout:
+  # Priority 1: existing SSDR data0_json.
   #
-  #   <model_dir>/data0
-  #
-  # is treated as a source-only input. We hand it off into:
-  #
-  #   <model_dir>/ssdr_work_dir/data0_json
-  #
-  # and run SSDR Step 00 followed by all later stages inside ssdr_work_dir to avoid polluting the dataset
-  # model root. This also keeps generated data1/data2/data3/data4/logs/metrics
-  # separate from original legacy data0/target folders.
-  if [ -d "$model_dir/data0" ]; then
-    WORK_DIR="$ssdr_dir"
-    RUN_STEP00=1
-    INPUT_LAYOUT="legacy_model_root_data0_json_handoff"
-    PRESERVE_DATA0=0
-    HANDOFF_LEGACY_DATA0=1
-    LEGACY_SOURCE_DATA0="$model_dir/data0"
-    return 0
-  fi
-
-  # New Data Prep handoff layout.
+  # This is the canonical SSDR source stage. If it already exists, use it
+  # directly and run Step 00 data0_json -> data0.
   if [ -d "$ssdr_dir/data0_json" ]; then
-    WORK_DIR="$ssdr_dir"
     RUN_STEP00=1
     INPUT_LAYOUT="ssdr_work_dir_data0_json"
     PRESERVE_DATA0=0
     return 0
   fi
 
-  # Already-normalized SSDR work dir layout.
-  if [ -d "$ssdr_dir/data0" ]; then
-    WORK_DIR="$ssdr_dir"
-    RUN_STEP00=0
-    INPUT_LAYOUT="ssdr_work_dir_data0"
-    PRESERVE_DATA0=1
+  # Priority 2: legacy root data0.
+  #
+  # Old VRoid datasets may have:
+  #   <model_dir>/data0
+  #
+  # Treat it as source-only and hand it off to:
+  #   <model_dir>/ssdr_work_dir/data0_json
+  #
+  # Then run Step 00 normally so all generated SSDR stages live under
+  # ssdr_work_dir.
+  if [ -d "$root_data0" ]; then
+    RUN_STEP00=1
+    INPUT_LAYOUT="legacy_model_root_data0_json_handoff"
+    PRESERVE_DATA0=0
+    HANDOFF_LEGACY_DATA0=1
+    LEGACY_SOURCE_DATA0="$root_data0"
+    HANDOFF_SOURCE_DIR="$root_data0"
+    HANDOFF_SOURCE_KIND="model_root_data0"
+    return 0
+  fi
+
+  # Priority 3: Data Prep Fitbox VDB output.
+  #
+  # New Data Prep outputs are expected at:
+  #   <model_dir>/data_prep_work_dir/data_prep_05/fitbox_vdb
+  #
+  # Hand this directory off to:
+  #   <model_dir>/ssdr_work_dir/data0_json
+  #
+  # so Step 00 can normalize json/pkl inputs into data0.
+  if [ -d "$fitbox_vdb" ]; then
+    RUN_STEP00=1
+    INPUT_LAYOUT="data_prep_fitbox_vdb_data0_json_handoff"
+    PRESERVE_DATA0=0
+    HANDOFF_LEGACY_DATA0=1
+    LEGACY_SOURCE_DATA0="$fitbox_vdb"
+    HANDOFF_SOURCE_DIR="$fitbox_vdb"
+    HANDOFF_SOURCE_KIND="data_prep_fitbox_vdb"
     return 0
   fi
 
   die "Could not detect SSDR input for $model. Expected one of:
-  $model_dir/data0
   $ssdr_dir/data0_json
-  $ssdr_dir/data0"
+  $root_data0
+  $fitbox_vdb"
 }
 
 resolve_qem_config() {
@@ -546,15 +565,16 @@ handoff_legacy_data0_if_needed() {
     return 0
   fi
 
-  [ -n "$src" ] || die "Internal error: legacy handoff requested but source data0 is empty."
-  [ -d "$src" ] || die "Legacy source data0 does not exist: $src"
+  [ -n "$src" ] || die "Internal error: handoff requested but source directory is empty."
+  [ -d "$src" ] || die "Handoff source directory does not exist: $src"
 
-  log "Handing off legacy data0 for $model"
-  log "  source data0 : $src"
-  log "  target data0_json : $dst"
+  log "Handing off source directory for $model"
+  log "  source kind      : ${HANDOFF_SOURCE_KIND:-unknown}"
+  log "  source directory : $src"
+  log "  target data0_json: $dst"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "[dry-run] would recreate target data0_json from legacy source data0."
+    log "[dry-run] would recreate target data0_json from source directory."
     return 0
   fi
 
@@ -570,12 +590,11 @@ handoff_legacy_data0_if_needed() {
   fi
 
   if [ ! -d "$dst" ]; then
-    die "Legacy data0 handoff failed; target data0_json not found: $dst"
+    die "Handoff failed; target data0_json not found: $dst"
   fi
 
-  log "Legacy data0 handoff complete."
+  log "data0_json handoff complete."
 }
-
 
 write_run_summary() {
   local model="$1"
@@ -646,9 +665,10 @@ run_one_model() {
   log "input_layout    : $INPUT_LAYOUT"
   log "run_step00      : $RUN_STEP00"
   log "preserve_data0  : $PRESERVE_DATA0"
-  log "handoff_data0   : $HANDOFF_LEGACY_DATA0"
+  log "handoff_data0_json: $HANDOFF_LEGACY_DATA0"
   if [ "$HANDOFF_LEGACY_DATA0" -eq 1 ]; then
-    log "source_data0    : $LEGACY_SOURCE_DATA0"
+    log "handoff_source_kind: $HANDOFF_SOURCE_KIND"
+    log "handoff_source_dir : $HANDOFF_SOURCE_DIR"
   fi
   log "logs_dir        : $logs_dir"
   log "metrics_dir     : $metrics_dir"
@@ -660,7 +680,7 @@ run_one_model() {
 
   archive_existing_outputs "$model" "$WORK_DIR" "$PRESERVE_DATA0"
 
-  handoff_legacy_data0_if_needed "$model" "$LEGACY_SOURCE_DATA0" "$WORK_DIR/data0_json"
+  handoff_legacy_data0_if_needed "$model" "$HANDOFF_SOURCE_DIR" "$WORK_DIR/data0_json"
 
   if [ "$DRY_RUN" -ne 1 ]; then
     mkdir -p "$logs_dir" "$metrics_dir"
