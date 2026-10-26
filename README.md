@@ -1,5 +1,4 @@
 
-
 # OGD-LBS
 
 > Code of Paper: **“OGD-LBS: Animation-Guided Collaborative Lightweighting for Pre-Bound Multi-Component LBS Characters”**
@@ -104,166 +103,210 @@ OGD-LBS/
 
 ---
 
-## 2. 安装与环境配置
+## 2. 安装
 
-### 2.1 推荐环境命名
+### 2.1 假设
 
-新机器上统一使用以下 Conda 环境名：
+- 代码位于 `/workspace/OGD-LBS`；
+- 数据集位于 `/workspace/ogd_dataset`；
+- Blender 4.5.12 位于 `/workspace/blender-4.5.12-linux-x64/blender`；
+- 主环境名为 `ogd-lbs`；
+- SDF 环境名为 `ogd-bpy52`。
 
-```text
-ogd-lbs
-```
-
-该环境用于：
-
-- Winter Samurai custom clean；
-- Data Prep Prep 01 / 02b / 03 / 04a / 05；
-- SSDR Step 00 / 01 / 02 / 03 / 04；
-- Fitbox / SSDR debug import；
-- 常规 Python 测试。
-
-项目历史日志或旧脚本示例中可能出现旧环境名：
-
-```text
-lao-lbs
-```
-
-在新机器上请优先使用：
-
-```text
-ogd-lbs
-```
-
-除非你明确在旧服务器环境中运行。
-
----
-
-### 2.2 创建主环境 `ogd-lbs`
-
-建议从 Conda / Mamba 创建基础环境：
+### 2.2 下载 Blender 4.5.12
 
 ```bash
+cd /workspace
+
+wget https://download.blender.org/release/Blender4.5/blender-4.5.12-linux-x64.tar.xz
+
+tar -xf blender-4.5.12-linux-x64.tar.xz
+```
+
+### 2.3 克隆并安装 OGD-LBS
+
+```bash
+cd /workspace
+
+git clone https://github.com/Soda100Percent/OGD-LBS.git
+
 conda create -n ogd-lbs python=3.11 -y
+
 conda activate ogd-lbs
+
+cd /workspace/OGD-LBS
+
+pip install -e . numpy==1.23.5
+
+pip install bpy==4.4.0
 ```
 
-安装 Python 包：
+### 2.4 Winter Samurai custom clean
+
+设置 custom clean 使用的环境名：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
-
-pip install -e .
+export OGD_WS_CONDA_ENV=ogd-lbs
 ```
 
-如果需要补充常用科学计算 / 可视化依赖，可安装：
+运行 Winter Samurai 清洗：
 
 ```bash
-conda install -n ogd-lbs -c conda-forge \
-  numpy scipy pandas pyyaml rsync \
-  pyvista vtk \
-  -y
+cd /workspace/OGD-LBS
+
+bash scripts/custom_model_clean/winter_samurai/run_dataset_cleaning.sh \
+  --publish copy \
+  --overwrite_work_dir \
+  --overwrite_publication
 ```
 
-说明：
-
-- `pyproject.toml` 中已经声明了项目核心 Python 依赖；
-- `pyvista / vtk` 主要用于 `scripts/debug/ssdr_res_render.py`；
-- `rsync` 用于 dataset-side handoff / 同步；
-- 如果当前机器不需要 direct renderer，可以暂不安装 `pyvista / vtk`。
-
-验证安装：
+检查清洗后的 `.blend`：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
-
-conda run --no-capture-output -n ogd-lbs \
-  python - <<'PY'
-import ogd_lbs
-print("ogd_lbs import OK")
-PY
+/workspace/blender-4.5.12-linux-x64/blender \
+  /workspace/ogd_dataset/Winter_Samurai/model_clean_work_dir/04_weapon/Winter_Samurai_Normalized.blend
 ```
 
-运行 SSDR 纯 Python 测试：
-
-```bash
-cd /workspace/git_projects/OGD-LBS
-
-conda run --no-capture-output -n ogd-lbs \
-  python -m unittest discover -s scripts/ssdr/tests -p 'test_*.py'
-```
-
----
-
-### 2.3 Blender Python / bpy
-
-项目中部分脚本需要 Blender / `bpy`：
-
-- Winter Samurai custom clean；
-- Data Prep；
-- Fitbox visual import；
-- debug `.blend` 检查。
-
-当前常用 Blender binary 路径：
+通常发布结果也会复制到：
 
 ```text
-/workspace/blender-4.5.12-linux-x64/blender
+/workspace/ogd_dataset/Winter_Samurai/Winter_Samurai_Normalized.blend
 ```
 
-如路径不同，可设置：
+### 2.5 创建 Blender 5.x SDF 环境
 
 ```bash
-export BLENDER_BIN=/path/to/blender
-```
+conda deactivate
 
-部分 Python 脚本通过 Conda 环境中的 `bpy` 运行。推荐确保 `ogd-lbs` 环境中具备与当前机器兼容的 `bpy` / Blender 相关依赖。
-
----
-
-### 2.4 SDF 环境 `ogd-bpy52`
-
-Data Prep 的 Prep 02a 使用 Blender 5.x SDF Grid / VDB-like fusion，推荐单独环境：
-
-```bash
 conda create -n ogd-bpy52 python=3.13 -y
+
 conda activate ogd-bpy52
+
 pip install bpy==5.2.2 trimesh networkx numpy
 ```
 
-用途：
+### 2.6 运行 Griffin_A2 Data Prep
 
-- `scripts/data_prep/prep_02a_sdf_fuse_5x.py`
-- `scripts/data_prep/prep_02_sdf_pipeline.sh` 中的 Blender 5.x fusion 阶段
+```bash
+cd /workspace/OGD-LBS
 
-已验证环境包括：
+bash scripts/data_prep/run_dataset_data_prep.sh Griffin_A2 \
+  --dataset_root /workspace/ogd_dataset \
+  --conda_env ogd-lbs \
+  --bpy5_env ogd-bpy52 \
+  --bpy4_env ogd-lbs \
+  --archive_existing \
+  --target_frame_count 200 \
+  --nla_gap 0
+```
+
+#### Griffin_A2 Fitbox ShapeKey 检查
+
+```bash
+cd /workspace/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb \
+  --import_mode shape_key \
+  --output_blend /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks/import_fitbox_vdb_shape_key_200f.blend \
+  --open
+```
+
+#### Griffin_A2 Fitbox LBS 检查
+
+```bash
+cd /workspace/OGD-LBS
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb \
+  --import_mode LBS \
+  --output_blend /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks/import_fitbox_vdb_lbs_200f.blend \
+  --open
+```
+
+### 2.7 运行 Winter Samurai Data Prep
+
+```bash
+cd /workspace/OGD-LBS
+
+bash scripts/data_prep/run_dataset_data_prep.sh Winter_Samurai \
+  --dataset_root /workspace/ogd_dataset \
+  --conda_env ogd-lbs \
+  --bpy5_env ogd-bpy52 \
+  --bpy4_env ogd-lbs \
+  --archive_existing \
+  --target_frame_count 200 \
+  --nla_gap 0
+```
+
+#### Winter Samurai Fitbox ShapeKey 检查
+
+```bash
+cd /workspace/OGD-LBS
+
+mkdir -p /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb \
+  --import_mode shape_key \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks/import_fitbox_vdb_shape_key_200f.blend \
+  --open
+```
+
+#### Winter Samurai Fitbox LBS 检查
+
+Winter Samurai 模型较小，建议使用较短骨骼显示长度：
+
+```bash
+cd /workspace/OGD-LBS
+
+conda run --no-capture-output -n ogd-lbs \
+  python scripts/debug/import_fitbox_to_blend.py \
+  --input_dir /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb \
+  --import_mode LBS \
+  --bone_length 0.08 \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks/import_fitbox_vdb_lbs_200f_bonelen0p08.blend \
+  --open
+```
+
+也可以用环境变量设置默认骨骼显示长度：
+
+```bash
+export OGD_FITBOX_IMPORT_BONE_LENGTH=0.08
+```
+
+### 2.8 Data Prep 完成后的关键输出
+
+Griffin_A2：
 
 ```text
-Python 3.13
-bpy 5.2.2 LTS
-numpy
-trimesh
-networkx
+/workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb/
 ```
 
----
+Winter Samurai：
 
-### 2.5 rsync
-
-SSDR / Data Prep handoff 推荐使用 `rsync -a --delete`，确保目标目录与源目录严格一致。
-
-安装：
-
-```bash
-conda install -n ogd-lbs -c conda-forge rsync -y
+```text
+/workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb/
 ```
 
-验证时避免使用可能触发 SIGPIPE 的管道命令。推荐：
+这些目录是后续 SSDR runner 的 `data0_json` 来源。运行 `scripts/ssdr/run_dataset_ssdr.sh` 时，runner 会自动查找：
 
-```bash
-conda run --no-capture-output -n ogd-lbs \
-  rsync --version > /tmp/ogd_lbs_rsync_version.txt
-
-sed -n '1,4p' /tmp/ogd_lbs_rsync_version.txt
+```text
+/workspace/ogd_dataset/<MODEL>/data_prep_work_dir/data_prep_05/fitbox_vdb
 ```
+
+并 handoff 到：
+
+```text
+/workspace/ogd_dataset/<MODEL>/ssdr_work_dir/data0_json
+```
+
+然后执行 SSDR Step 00–04。
 
 ---
 
@@ -389,13 +432,14 @@ scripts/custom_model_clean/winter_samurai/run_dataset_cleaning.sh
 ### 4.2 正式清洗命令
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
+export OGD_WS_CONDA_ENV=ogd-lbs
 export OGD_PROGRESS=auto
 
 bash scripts/custom_model_clean/winter_samurai/run_dataset_cleaning.sh \
-  --dataset_dir /workspace/ogd_dataset/Winter_Samurai \
   --publish copy \
+  --overwrite_work_dir \
   --overwrite_publication
 ```
 
@@ -415,10 +459,16 @@ bash scripts/custom_model_clean/winter_samurai/run_dataset_cleaning.sh \
 └── publication_report.json
 ```
 
-发布结果：
+发布结果通常位于：
 
 ```text
 /workspace/ogd_dataset/Winter_Samurai/Winter_Samurai_Normalized.blend
+```
+
+也可以直接检查清洗工作目录中的最终结果：
+
+```text
+/workspace/ogd_dataset/Winter_Samurai/model_clean_work_dir/04_weapon/Winter_Samurai_Normalized.blend
 ```
 
 ### 4.3 清洗结果检查
@@ -439,7 +489,7 @@ Weapon parent = None
 
 ```bash
 /workspace/blender-4.5.12-linux-x64/blender \
-  /workspace/ogd_dataset/Winter_Samurai/Winter_Samurai_Normalized.blend
+  /workspace/ogd_dataset/Winter_Samurai/model_clean_work_dir/04_weapon/Winter_Samurai_Normalized.blend
 ```
 
 建议检查动作：
@@ -553,7 +603,7 @@ Vroid_20
 全量运行 Griffin_A2 + Winter_Samurai：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 bash scripts/data_prep/run_dataset_data_prep.sh All \
   --dataset_root /workspace/ogd_dataset \
@@ -561,14 +611,14 @@ bash scripts/data_prep/run_dataset_data_prep.sh All \
   --bpy5_env ogd-bpy52 \
   --bpy4_env ogd-lbs \
   --archive_existing \
-  --target_frame_count 60 \
+  --target_frame_count 200 \
   --nla_gap 0
 ```
 
 说明：
 
 - `--archive_existing`：如果已有非空 `data_prep_work_dir`，自动归档到 `/workspace/ogd_backups/data_prep_work_dir_archives/`；
-- `--target_frame_count 60`：Prep 05 使用目标帧数采样，导出 60 帧；
+- `--target_frame_count 200`：Prep 05 使用目标帧数采样，导出 200 帧；
 - `--nla_gap 0`：Prep 01 拼接动作时不插入空帧；
 - runner 会自动复制模型对应的 Prep 02 config；
 - 如果存在模型对应的 extra bone reduction config，则自动复制并传给 Prep 04a。
@@ -589,12 +639,12 @@ scripts/data_prep/configs/extra_bone_reduce_winter_samurai.json
 如果不使用 dataset-side runner，也可以手动初始化实验目录：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 ASSET=Winter_Samurai
 INPUT_BLEND=/workspace/ogd_dataset/Winter_Samurai/Winter_Samurai_Normalized.blend
-CONFIG_SRC=/workspace/git_projects/OGD-LBS/scripts/data_prep/configs/prep_02_sdf_merge_config_winter_samurai.json
-EXTRA_REDUCE_SRC=/workspace/git_projects/OGD-LBS/scripts/data_prep/configs/extra_bone_reduce_winter_samurai.json
+CONFIG_SRC=/workspace/OGD-LBS/scripts/data_prep/configs/prep_02_sdf_merge_config_winter_samurai.json
+EXTRA_REDUCE_SRC=/workspace/OGD-LBS/scripts/data_prep/configs/extra_bone_reduce_winter_samurai.json
 
 EXP_ROOT=/workspace/ogd_experiments
 EXP="$EXP_ROOT/${ASSET}_exp01_$(date +%Y%m%d_%H%M%S)"
@@ -722,7 +772,7 @@ bone_reduced_versions/
 可以使用目标帧数采样：
 
 ```bash
-TARGET_FRAME_COUNT=60
+TARGET_FRAME_COUNT=200
 
 conda run --no-capture-output -n ogd-lbs \
   python scripts/data_prep/prep_05_export_fitbox.py \
@@ -872,7 +922,7 @@ scripts/ssdr/configs/qem_config_vroid.json
 #### dry-run 检查
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 bash scripts/ssdr/run_dataset_ssdr.sh Vroid_18 --dry_run --no_step04
 bash scripts/ssdr/run_dataset_ssdr.sh Griffin_A2 --dry_run --no_step04
@@ -882,7 +932,7 @@ bash scripts/ssdr/run_dataset_ssdr.sh Winter_Samurai --dry_run --no_step04
 #### 跑 Step 00–03
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 bash scripts/ssdr/run_dataset_ssdr.sh Vroid_18 \
   --archive_existing \
@@ -893,7 +943,7 @@ bash scripts/ssdr/run_dataset_ssdr.sh Vroid_18 \
 ```
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 bash scripts/ssdr/run_dataset_ssdr.sh Griffin_A2 \
   --archive_existing \
@@ -904,7 +954,7 @@ bash scripts/ssdr/run_dataset_ssdr.sh Griffin_A2 \
 ```
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 bash scripts/ssdr/run_dataset_ssdr.sh Winter_Samurai \
   --archive_existing \
@@ -964,7 +1014,7 @@ conda run --no-capture-output -n ogd-lbs \
 如果是在默认 dataset 目录下同步 Griffin_A2 与 Winter_Samurai：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 for MODEL in Griffin_A2 Winter_Samurai; do
   SRC="/workspace/ogd_dataset/$MODEL/data_prep_work_dir/data_prep_05/fitbox_vdb"
@@ -1079,7 +1129,7 @@ $SSDR/ssdr_03_qem_config.json
 示例：`iter=70`, `org_type=3`, legacy schedule, workers=16：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 conda run --no-capture-output -n ogd-lbs \
   python scripts/ssdr/04_optimize_weight_and_bone_trans.py \
@@ -1141,7 +1191,7 @@ data_prep_work_dir/data_prep_05/fitbox_vdb/
 #### Griffin_A2 ShapeKey
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks
 
@@ -1149,14 +1199,14 @@ conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode shape_key \
-  --output_blend /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks/import_fitbox_vdb_shape_key_60f.blend \
+  --output_blend /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks/import_fitbox_vdb_shape_key_200f.blend \
   --open
 ```
 
 #### Griffin_A2 LBS
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks
 
@@ -1164,14 +1214,14 @@ conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode LBS \
-  --output_blend /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks/import_fitbox_vdb_lbs_60f.blend \
+  --output_blend /workspace/ogd_dataset/Griffin_A2/data_prep_work_dir/visual_checks/import_fitbox_vdb_lbs_200f.blend \
   --open
 ```
 
 #### Winter_Samurai ShapeKey
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks
 
@@ -1179,7 +1229,7 @@ conda run --no-capture-output -n ogd-lbs \
   python scripts/debug/import_fitbox_to_blend.py \
   --input_dir /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode shape_key \
-  --output_blend /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks/import_fitbox_vdb_shape_key_60f.blend \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks/import_fitbox_vdb_shape_key_200f.blend \
   --open
 ```
 
@@ -1188,7 +1238,7 @@ conda run --no-capture-output -n ogd-lbs \
 Winter Samurai 模型相对 Griffin_A2 更小，建议使用较短骨骼显示长度：
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks
 
@@ -1197,7 +1247,7 @@ conda run --no-capture-output -n ogd-lbs \
   --input_dir /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/data_prep_05/fitbox_vdb \
   --import_mode LBS \
   --bone_length 0.08 \
-  --output_blend /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks/import_fitbox_vdb_lbs_60f_bonelen0p08.blend \
+  --output_blend /workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir/visual_checks/import_fitbox_vdb_lbs_200f_bonelen0p08.blend \
   --open
 ```
 
@@ -1222,7 +1272,7 @@ export OGD_FITBOX_IMPORT_BONE_LENGTH=0.08
 #### Griffin_A2 Step 03 ShapeKey 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
 
@@ -1238,7 +1288,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Griffin_A2 Step 03 LBS 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
 
@@ -1254,7 +1304,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Winter_Samurai Step 03 ShapeKey 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
 
@@ -1270,7 +1320,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Winter_Samurai Step 03 LBS 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
 
@@ -1299,7 +1349,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Griffin_A2 Step 04 ShapeKey 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
 
@@ -1315,7 +1365,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Griffin_A2 Step 04 LBS 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Griffin_A2/ssdr_work_dir/visual_checks
 
@@ -1331,7 +1381,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Winter_Samurai Step 04 ShapeKey 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
 
@@ -1347,7 +1397,7 @@ conda run --no-capture-output -n ogd-lbs \
 #### Winter_Samurai Step 04 LBS 200 帧
 
 ```bash
-cd /workspace/git_projects/OGD-LBS
+cd /workspace/OGD-LBS
 
 mkdir -p /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks
 
@@ -1360,3 +1410,4 @@ conda run --no-capture-output -n ogd-lbs \
   --output_blend /workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir/visual_checks/import_data4_opt_out_lbs_200f_bonelen0p08.blend \
   --open
 ```
+
