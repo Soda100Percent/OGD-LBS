@@ -51,6 +51,7 @@ SSDR_STAGE_INPUT_DIR_BY_STEP: dict[str, str] = {
     "01": "data0",
     "02": "data1",
     "03": "data2",
+    "04": "data3",
 }
 
 SSDR_STAGE_OUTPUT_DIR_BY_STEP: dict[str, str] = {
@@ -58,6 +59,7 @@ SSDR_STAGE_OUTPUT_DIR_BY_STEP: dict[str, str] = {
     "01": "data1",
     "02": "data2",
     "03": "data3",
+    "04": "data4",
 }
 
 SSDR_KNOWN_STAGE_DIR_NAMES: tuple[str, ...] = (

@@ -12,6 +12,7 @@ KEY_REST_POSE = "rest_pose"
 KEY_ANIMATION_POSES = "animation_poses"
 KEY_BONE_NAMES = "bone_names"
 KEY_SCENE_FRAMES = "scene_frames"
+KEY_FIXED_BONES = "fixed_bones"
 
 KEY_VERTICES = "vertices"
 KEY_FACES = "faces"

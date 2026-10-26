@@ -27,33 +27,10 @@ Raw .blend discovery:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    """
-    Make src/ and scripts/data_prep/ importable before importing ogd_lbs.
-
-    This keeps the script robust in both:
-        - editable install environments
-        - standalone Blender/bpy environments
-    """
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            data_prep_dir = parent / "scripts" / "data_prep"
-
-            for item in [src_dir, data_prep_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-
-ensure_repo_paths_in_syspath()
+import _env  # noqa: F401
 
 import bpy  # noqa: E402
 
@@ -64,6 +41,7 @@ from ogd_lbs.blender.object import (  # noqa: E402
     print_scene_inspect_summary,
 )
 from ogd_lbs.blender.animation import concat_all_actions_to_nla  # noqa: E402
+from ogd_lbs.blender.blend_io import open_blend_file, save_blend_file  # noqa: E402
 
 from paths import (  # noqa: E402
     resolve_data_prep_stage_dirs,
@@ -80,15 +58,6 @@ def parse_exclude_names(text: str) -> list[str]:
         return []
 
     return [item.strip() for item in text.split(",") if item.strip()]
-
-
-def save_blend(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n💾 Saving to: {path}", flush=True)
-    save_result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
-    if save_result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to save blend file: {path}, result={save_result}")
 
 
 def main() -> None:
@@ -161,10 +130,7 @@ def main() -> None:
     print(f"   base_stem   : {base_stem}", flush=True)
     print(f"   output_blend: {output_path}", flush=True)
 
-    print(f"\n📂 Loading: {input_path}", flush=True)
-    result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
+    open_blend_file(input_path, role="Prep 01 input blend")
 
     ensure_object_mode()
 
@@ -197,7 +163,7 @@ def main() -> None:
         flush=True,
     )
 
-    save_blend(output_path)
+    save_blend_file(output_path, role="Prep 01 output blend")
 
     print("🎉 Prep 01 done.", flush=True)
 

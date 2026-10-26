@@ -31,6 +31,7 @@ Typical examples:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -59,10 +60,39 @@ from ogd_lbs.fitbox.blender_io import (  # noqa: E402
 
 
 def resolve_default_output_blend(input_dir: Path, import_mode: str, mesh_name: str | None) -> Path:
-    mesh_tag = mesh_name or "auto_mesh"
+    mesh_tag = mesh_name or "ALL"
     mode_tag = str(import_mode).lower()
     return (input_dir / f"import_fitbox_{mesh_tag}_{mode_tag}.blend").resolve(strict=False)
 
+
+
+def default_bone_length_from_env() -> float:
+    """
+    Default LBS import edit-bone display length.
+
+    CLI --bone_length has highest priority. This env var is only a convenience
+    for asset-specific visual checks, e.g. Winter Samurai can use shorter bones:
+
+        export OGD_FITBOX_IMPORT_BONE_LENGTH=0.08
+    """
+    raw = os.environ.get("OGD_FITBOX_IMPORT_BONE_LENGTH", "").strip()
+
+    if not raw:
+        return 0.5
+
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Invalid OGD_FITBOX_IMPORT_BONE_LENGTH={raw!r}; expected positive float."
+        ) from exc
+
+    if value <= 0.0:
+        raise RuntimeError(
+            f"Invalid OGD_FITBOX_IMPORT_BONE_LENGTH={raw!r}; expected positive float."
+        )
+
+    return value
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -70,7 +100,7 @@ def main() -> None:
     )
 
     parser.add_argument("-i", "--input_dir", type=str, required=True)
-    parser.add_argument("--mesh", type=str, default=None)
+    parser.add_argument("--mesh", type=str, default=None, help="Mesh name/stem. Use ALL, or omit, to import all mesh files.")
     parser.add_argument(
         "-o",
         "--output_blend",
@@ -124,8 +154,21 @@ def main() -> None:
     parser.add_argument(
         "--bone_length",
         type=float,
-        default=0.5,
-        help="LBS mode edit-bone length. Default 0.5 matches tested plugin.",
+        default=default_bone_length_from_env(),
+        help=(
+            "LBS mode edit-bone display length. "
+            "Default: $OGD_FITBOX_IMPORT_BONE_LENGTH if set, otherwise 0.5."
+        ),
+    )
+    parser.add_argument(
+        "--matrix_space",
+        type=str,
+        choices=["POSE", "WORLD"],
+        default="POSE",
+        help=(
+            "LBS mode matrix interpretation. POSE matches the current plugin-aligned importer. "
+            "WORLD converts animation matrices from WORLD to POSE space, useful for legacy data checks."
+        ),
     )
 
     parser.add_argument(
@@ -170,12 +213,15 @@ def main() -> None:
         clear_existing_scene=True,
         use_scene_frames=bool(args.use_scene_frames),
         bone_length=float(args.bone_length),
+        matrix_space=str(args.matrix_space),
     )
 
     print("\nImport summary:")
     for key in [
         "import_mode",
         "use_scene_frames",
+        "matrix_space",
+        "bone_length",
         "mesh_name",
         "vertex_count",
         "face_count",

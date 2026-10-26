@@ -46,34 +46,17 @@ When --drive_mode SURFACE or LBS:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 
-def ensure_repo_paths_in_syspath() -> None:
-    this_file = Path(__file__).resolve(strict=False)
-
-    for parent in [this_file.parent, *this_file.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "src").exists():
-            src_dir = parent / "src"
-            data_prep_dir = parent / "scripts" / "data_prep"
-
-            for item in [src_dir, data_prep_dir]:
-                item_s = str(item)
-                if item_s not in sys.path:
-                    sys.path.insert(0, item_s)
-            return
-
-    raise RuntimeError("Could not locate repository root containing pyproject.toml and src/.")
-
-
-ensure_repo_paths_in_syspath()
+import _env  # noqa: F401
 
 import bpy  # noqa: E402
 
-from ogd_lbs.utils.common import script_argv  # noqa: E402
-from ogd_lbs.blender.object import ensure_object_mode, find_armature  # noqa: E402
+from ogd_lbs.utils.common import script_argv, require_file  # noqa: E402
+from ogd_lbs.blender.object import ensure_object_mode, find_armature, find_mesh  # noqa: E402
 from ogd_lbs.blender.context import align_scene_pose_frame, update_view_layer  # noqa: E402
+from ogd_lbs.blender.blend_io import open_blend_file, save_blend_file  # noqa: E402
 from ogd_lbs.blender.surface_deform import (  # noqa: E402
     process_surface_deform_pair,
     apply_drive_mode_to_target,
@@ -95,35 +78,6 @@ from manifest import (  # noqa: E402
     require_vdb_mapping,
     get_source_objects_mapping,
 )
-
-
-def require_file(path: Path, *, role: str) -> Path:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing required {role}: {path}")
-    if not path.is_file():
-        raise FileNotFoundError(f"Required {role} is not a file: {path}")
-    return path
-
-
-def find_required_mesh(name: str) -> bpy.types.Object:
-    obj = bpy.data.objects.get(name)
-
-    if obj is None:
-        raise RuntimeError(f"Required mesh object not found: {name}")
-
-    if obj.type != "MESH":
-        raise RuntimeError(f"Required object is not MESH: {name}, type={obj.type}")
-
-    return obj
-
-
-def save_blend(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n💾 Saving to: {path}", flush=True)
-    result = bpy.ops.wm.save_as_mainfile(filepath=str(path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to save blend file: {path}, result={result}")
 
 
 def main() -> None:
@@ -168,6 +122,26 @@ def main() -> None:
     parser.add_argument("--falloff_start", type=float, default=4.0)
     parser.add_argument("--falloff_step", type=float, default=2.0)
     parser.add_argument("--weight_eps", type=float, default=1e-8)
+    parser.add_argument(
+        "--surface_bind_proxy_mode",
+        type=str,
+        choices=["off", "auto", "always"],
+        default="auto",
+        help=(
+            "Surface Deform bind target repair mode. "
+            "off keeps the original Source_<VDB> target. "
+            "auto creates a repaired hidden proxy only when the source target "
+            "has edge>2 topology after triangulation. "
+            "always always creates a repaired hidden proxy. "
+            "This does NOT fallback to LBS; Surface Deform binding still must succeed."
+        ),
+    )
+    parser.add_argument(
+        "--surface_bind_proxy_repair_max_iters",
+        type=int,
+        default=8,
+        help="Maximum edge-split repair iterations for Surface Deform bind proxy.",
+    )
 
     args = parser.parse_args(script_argv())
 
@@ -219,6 +193,8 @@ def main() -> None:
     print(f"   base_stem           : {base_stem}", flush=True)
     print(f"   manifest            : {manifest_path}", flush=True)
     print(f"   drive_mode          : {drive_mode}", flush=True)
+    print(f"   bind_proxy_mode     : {args.surface_bind_proxy_mode}", flush=True)
+    print(f"   bind_proxy_max_iters: {args.surface_bind_proxy_repair_max_iters}", flush=True)
     if drive_mode == "BOTH":
         print(f"   output_blend_surface: {output_surface_path}", flush=True)
         print(f"   output_blend_lbs    : {output_lbs_path}", flush=True)
@@ -229,10 +205,7 @@ def main() -> None:
     vdb_mapping = require_vdb_mapping(manifest_obj)
     source_objects = get_source_objects_mapping(manifest_obj, vdb_mapping)
 
-    print(f"\n📂 Loading: {input_path}", flush=True)
-    result = bpy.ops.wm.open_mainfile(filepath=str(input_path))
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"Failed to open blend file: {input_path}, result={result}")
+    open_blend_file(input_path, role="Prep 03 input blend")
 
     ensure_object_mode()
 
@@ -255,8 +228,11 @@ def main() -> None:
     for vdb_name in vdb_mapping.keys():
         source_name = source_objects.get(vdb_name, f"Source_{vdb_name}")
 
-        source_mesh = find_required_mesh(source_name)
-        target_mesh = find_required_mesh(vdb_name)
+        source_mesh = find_mesh(source_name, required=True)
+        target_mesh = find_mesh(vdb_name, required=True)
+
+        assert source_mesh is not None
+        assert target_mesh is not None
 
         print(f"   {source_mesh.name} -> {target_mesh.name}", flush=True)
 
@@ -267,8 +243,11 @@ def main() -> None:
     for vdb_name in vdb_mapping.keys():
         source_name = source_objects.get(vdb_name, f"Source_{vdb_name}")
 
-        source_mesh = find_required_mesh(source_name)
-        target_mesh = find_required_mesh(vdb_name)
+        source_mesh = find_mesh(source_name, required=True)
+        target_mesh = find_mesh(vdb_name, required=True)
+
+        assert source_mesh is not None
+        assert target_mesh is not None
 
         process_surface_deform_pair(
             armature=armature,
@@ -279,6 +258,8 @@ def main() -> None:
             falloff_start=float(args.falloff_start),
             falloff_step=float(args.falloff_step),
             weight_eps=float(args.weight_eps),
+            surface_bind_proxy_mode=str(args.surface_bind_proxy_mode),
+            surface_bind_proxy_repair_max_iters=int(args.surface_bind_proxy_repair_max_iters),
         )
 
     print("\n▶️ Setting Armature to POSE mode for playback...", flush=True)
@@ -291,14 +272,14 @@ def main() -> None:
             apply_drive_mode_to_target(target_mesh, drive_mode="SURFACE")
             print_modifier_summary(target_mesh)
 
-        save_blend(output_surface_path)
+        save_blend_file(output_surface_path, role="Prep 03 surface drive-mode blend")
 
         print("\n🎛️ Applying LBS drive mode to all VDB targets...", flush=True)
         for target_mesh in target_meshes:
             apply_drive_mode_to_target(target_mesh, drive_mode="LBS")
             print_modifier_summary(target_mesh)
 
-        save_blend(output_lbs_path)
+        save_blend_file(output_lbs_path, role="Prep 03 LBS drive-mode blend")
 
         print("\n🎉 Prep 03 done. BOTH drive-mode outputs saved.", flush=True)
         print(f"   surface: {output_surface_path}", flush=True)
@@ -313,7 +294,7 @@ def main() -> None:
             apply_drive_mode_to_target(target_mesh, drive_mode=drive_mode)
             print_modifier_summary(target_mesh)
 
-        save_blend(output_single_path)
+        save_blend_file(output_single_path, role=f"Prep 03 {drive_mode} drive-mode blend")
 
         print(f"\n🎉 Prep 03 done. {drive_mode} drive-mode output saved.", flush=True)
         print(f"   output: {output_single_path}", flush=True)

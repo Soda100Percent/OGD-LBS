@@ -1,0 +1,103 @@
+{
+    "schema": "ogd_lbs_prep02_sdf_merge_config_v2",
+    "asset": "Winter_Samurai",
+    "description": "Winter Samurai Prep 02 SDF config. Explicitly separates merge_groups from unmerged_meshes so Prep 02a can validate mesh coverage before SDF fusion. VDB target names are allowed to match consumed source mesh names; internal placeholders are used during fusion/import to avoid name collisions.",
+    "voxel_note": "Retest parameters: voxel_size=1.0, offset=1.5, auto_offset=false for all groups.",
+    "unmerged_meshes": [
+        "Body2",
+        "Eye",
+        "Lashes",
+        "Mask",
+        "Boots",
+        "Weapon"
+    ],
+    "merge_groups": {
+        "Main_Hair": {
+            "source_meshes": [
+                "Main_Hair"
+            ],
+            "voxel_size": 1.0,
+            "offset": 1.5,
+            "auto_offset": false
+        },
+        "top": {
+            "source_meshes": [
+                "Armor_Cloth",
+                "Armor_Hand2",
+                "Armor_Hands",
+                "Armor_Hands2",
+                "Armor_Hands3",
+                "Cloth_Belts",
+                "ClothUp",
+                "Fur_Part1",
+                "Fur_Part2",
+                "Glowers",
+                "Hads_Srtings",
+                "Hads_Srtings1",
+                "Strings",
+                "Strings_Part2"
+            ],
+            "voxel_size": 1.0,
+            "offset": 1.5,
+            "auto_offset": false
+        },
+        "Belt": {
+            "source_meshes": [
+                "Belt1",
+                "Belt_Part1",
+                "Belt_Part2",
+                "Belt_Part3",
+                "Belt_Part4",
+                "Belt_Part5",
+                "Botle",
+                "Botle2"
+            ],
+            "voxel_size": 1.0,
+            "offset": 1.5,
+            "auto_offset": false
+        },
+        "trousers": {
+            "source_meshes": [
+                "Legs_Bandages",
+                "Legs_Bandages_Part2",
+                "Legs_BandagesPart3",
+                "Pants",
+                "Pants_Part1"
+            ],
+            "voxel_size": 1.0,
+            "offset": 1.5,
+            "auto_offset": false
+        },
+        "Armor Skirt": {
+            "source_meshes": [
+                "Armor_Belt",
+                "Armor_Part1",
+                "Armor_Part2",
+                "Cloak"
+            ],
+            "voxel_size": 1.0,
+            "offset": 1.5,
+            "auto_offset": false
+        },
+        "Helm": {
+            "source_meshes": [
+                "Helm",
+                "Helm_Partt2"
+            ],
+            "voxel_size": 1.0,
+            "offset": 1.5,
+            "auto_offset": false
+        }
+    },
+    "notes": [
+        "The screenshot shows the second helmet mesh as Helm_Partt2, with double 't'. If the actual blend uses Helm_Part2 instead, Prep 02a will fail fast and report the missing declared mesh.",
+        "Unmerged meshes are not sent to SDF fusion. They are preserved and validated by Prep 02b against the post-import scene classification.",
+        "Final expected mesh names include VDB targets, Source_<VDB> lineage meshes, and unmerged meshes.",
+        "Corrected Winter Samurai commercial asset mesh names: Bottle/Bottle2 -> Botle/Botle2.",
+        "Retested Winter Samurai Prep 02 with voxel_size=5.0, offset=10.0, auto_offset=false.",
+        "Retested Winter Samurai Prep 02 with voxel_size=2.0, offset=3.0, auto_offset=false.",
+        "Retested Winter Samurai Prep 02 with voxel_size=1.0, offset=1.0, auto_offset=false.",
+        "Retested Winter Samurai Prep 02 with voxel_size=1.0, offset=2.0, auto_offset=false.",
+        "Retested Winter Samurai Prep 02 with voxel_size=1.0, offset=1.5, auto_offset=false."
+    ]
+}

@@ -261,3 +261,83 @@ class Timer:
         record_metric(self.name, elapsed)
         if self.enabled:
             log(f"[PROFILER] {self.name} took {elapsed:.4f} seconds")
+
+# -----------------------------------------------------------------------------
+# Required path checks and sequence helpers
+# -----------------------------------------------------------------------------
+
+def require_file(path: str | Path, *, role: str = "file") -> Path:
+    """
+    Resolve and require an existing regular file.
+
+    Args:
+        path: Path-like value.
+        role: Human-readable role used in error messages.
+
+    Returns:
+        Resolved Path.
+
+    Raises:
+        FileNotFoundError if the path does not exist or is not a file.
+    """
+    resolved = Path(path).expanduser().resolve(strict=False)
+
+    if not resolved.exists():
+        raise FileNotFoundError(f"Missing required {role}: {resolved}")
+
+    if not resolved.is_file():
+        raise FileNotFoundError(f"Required {role} is not a file: {resolved}")
+
+    return resolved
+
+
+def require_dir(path: str | Path, *, role: str = "directory") -> Path:
+    """
+    Resolve and require an existing directory.
+
+    Args:
+        path: Path-like value.
+        role: Human-readable role used in error messages.
+
+    Returns:
+        Resolved Path.
+
+    Raises:
+        FileNotFoundError if the path does not exist or is not a directory.
+    """
+    resolved = Path(path).expanduser().resolve(strict=False)
+
+    if not resolved.exists():
+        raise FileNotFoundError(f"Missing required {role}: {resolved}")
+
+    if not resolved.is_dir():
+        raise FileNotFoundError(f"Required {role} is not a directory: {resolved}")
+
+    return resolved
+
+
+def unique_keep_order(items: Iterable[Any]) -> list[Any]:
+    """
+    Return unique items while preserving first-seen order.
+
+    Hashable items use a set for efficiency. Unhashable items fall back to
+    equality comparison against previously seen unhashable items.
+    """
+    out: list[Any] = []
+    seen_hashable: set[Any] = set()
+    seen_unhashable: list[Any] = []
+
+    for item in items:
+        try:
+            if item in seen_hashable:
+                continue
+            seen_hashable.add(item)
+        except TypeError:
+            if any(item == old for old in seen_unhashable):
+                continue
+            seen_unhashable.append(item)
+
+        out.append(item)
+
+    return out
+
