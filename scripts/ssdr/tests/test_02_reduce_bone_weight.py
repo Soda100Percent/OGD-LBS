@@ -307,6 +307,159 @@ class TestSSDRStep02ReduceBoneWeight(unittest.TestCase):
             out_skel = load_pkl(data2 / "skeleton_hierarchy_data.pkl")
             self.assertEqual(out_skel["bone_names"], full_bones)
 
+
+    def test_new_vdb_root_extra_remove_middle_bone_repairs_parent(self) -> None:
+        mod = load_step02_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_ssdr_step02_extra_remove_") as td:
+            root = Path(td)
+            data1 = root / "data1"
+            data2 = root / "data2"
+
+            write_new_vdb_root_dataset(data1)
+
+            summary = mod.reduce_bone_weight_tree(
+                input_tree=data1,
+                output_tree=data2,
+                variant="cleaned_full",
+                par_weight=0.5,
+                bone_weight=0.3,
+                child_weight=0.2,
+                affinity_eps=1e-5,
+                max_workers=1,
+                overwrite_output=False,
+                allow_merge=False,
+                write_summary_file=True,
+                extra_remove_bones=["a"],
+                extra_variant_name="cleaned_full_minus_a",
+                extra_remove_missing_ok=False,
+            )
+
+            self.assertEqual(summary["layout"]["variant_name"], "cleaned_full")
+            self.assertEqual(summary["layout"]["effective_variant_name"], "cleaned_full_minus_a")
+            self.assertTrue(summary["layout"]["extra_remove_bones_enabled"])
+            self.assertEqual(summary["extra_remove_bones"]["removed_bones"], ["a"])
+            self.assertEqual(summary["extra_remove_bones"]["base_bone_count"], 3)
+            self.assertEqual(summary["extra_remove_bones"]["target_bone_count"], 2)
+
+            out_skel = load_pkl(data2 / "skeleton_hierarchy_data.pkl")
+            out_anim = load_pkl(data2 / "animation_data.pkl")
+            out_mesh = load_pkl(data2 / "main_mesh_VDB.pkl")
+
+            self.assertEqual(out_skel["bone_names"], ["root", "b"])
+            # Original chain root -> a -> b. After removing a, b is reparented to root.
+            self.assertEqual(out_skel["parent_indices"], [None, 0])
+
+            self.assertEqual(out_anim["bone_names"], ["root", "b"])
+            self.assertEqual(out_anim["animation_poses"].shape, (4, 2, 4, 4))
+            self.assertEqual(out_anim["rest_pose"].shape, (2, 4, 4))
+            self.assertEqual(out_anim["ssdr_step02_variant"]["variant_name"], "cleaned_full_minus_a")
+
+            self.assertEqual(out_mesh["bone_names"], ["root", "b"])
+            self.assertEqual(out_mesh["vertex_bone_weights"].shape, (4, 2))
+            self.assertTrue(np.allclose(out_mesh["vertex_bone_weights"].sum(axis=1), 1.0, atol=1e-8))
+            self.assertTrue((data2 / "step02_reduce_bone_weight_summary.json").is_file())
+
+    def test_new_vdb_root_extra_remove_leaf_bone(self) -> None:
+        mod = load_step02_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_ssdr_step02_extra_remove_") as td:
+            root = Path(td)
+            data1 = root / "data1"
+            data2 = root / "data2"
+
+            write_new_vdb_root_dataset(data1)
+
+            summary = mod.reduce_bone_weight_tree(
+                input_tree=data1,
+                output_tree=data2,
+                variant="cleaned_full",
+                par_weight=0.5,
+                bone_weight=0.3,
+                child_weight=0.2,
+                affinity_eps=1e-5,
+                max_workers=1,
+                overwrite_output=False,
+                allow_merge=False,
+                write_summary_file=False,
+                extra_remove_bones=["b"],
+                extra_variant_name="cleaned_full_minus_b",
+                extra_remove_missing_ok=False,
+            )
+
+            self.assertEqual(summary["layout"]["effective_variant_name"], "cleaned_full_minus_b")
+            self.assertEqual(summary["extra_remove_bones"]["removed_bones"], ["b"])
+
+            out_skel = load_pkl(data2 / "skeleton_hierarchy_data.pkl")
+            out_anim = load_pkl(data2 / "animation_data.pkl")
+            out_mesh = load_pkl(data2 / "main_mesh_VDB.pkl")
+
+            self.assertEqual(out_skel["bone_names"], ["root", "a"])
+            self.assertEqual(out_skel["parent_indices"], [None, 0])
+            self.assertEqual(out_anim["bone_names"], ["root", "a"])
+            self.assertEqual(out_mesh["bone_names"], ["root", "a"])
+            self.assertEqual(out_mesh["vertex_bone_weights"].shape, (4, 2))
+            self.assertTrue(np.allclose(out_mesh["vertex_bone_weights"].sum(axis=1), 1.0, atol=1e-8))
+
+    def test_new_vdb_root_extra_remove_missing_bone_fails_by_default(self) -> None:
+        mod = load_step02_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_ssdr_step02_extra_remove_") as td:
+            root = Path(td)
+            data1 = root / "data1"
+            data2 = root / "data2"
+
+            write_new_vdb_root_dataset(data1)
+
+            with self.assertRaises(RuntimeError):
+                mod.reduce_bone_weight_tree(
+                    input_tree=data1,
+                    output_tree=data2,
+                    variant="cleaned_full",
+                    par_weight=0.5,
+                    bone_weight=0.3,
+                    child_weight=0.2,
+                    affinity_eps=1e-5,
+                    max_workers=1,
+                    overwrite_output=False,
+                    allow_merge=False,
+                    write_summary_file=False,
+                    extra_remove_bones=["missing_bone"],
+                    extra_variant_name="bad_missing",
+                    extra_remove_missing_ok=False,
+                )
+
+    def test_new_vdb_root_extra_remove_missing_bone_ok(self) -> None:
+        mod = load_step02_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_ssdr_step02_extra_remove_") as td:
+            root = Path(td)
+            data1 = root / "data1"
+            data2 = root / "data2"
+
+            write_new_vdb_root_dataset(data1)
+
+            summary = mod.reduce_bone_weight_tree(
+                input_tree=data1,
+                output_tree=data2,
+                variant="cleaned_full",
+                par_weight=0.5,
+                bone_weight=0.3,
+                child_weight=0.2,
+                affinity_eps=1e-5,
+                max_workers=1,
+                overwrite_output=False,
+                allow_merge=False,
+                write_summary_file=False,
+                extra_remove_bones=["missing_bone", "a"],
+                extra_variant_name="missing_ok_minus_a",
+                extra_remove_missing_ok=True,
+            )
+
+            self.assertEqual(summary["extra_remove_bones"]["missing_bones"], ["missing_bone"])
+            self.assertEqual(summary["extra_remove_bones"]["removed_bones"], ["a"])
+            self.assertEqual(summary["skeleton"]["reduced_bone_count"], 2)
+
     def test_wrapper_fitbox_vdb_layout_is_intentionally_not_supported(self) -> None:
         mod = load_step02_module()
 

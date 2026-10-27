@@ -38,6 +38,7 @@ def make_mesh(faces) -> dict:
                 [1.0, 0.0, 0.0],
                 [1.0, 1.0, 0.0],
                 [0.0, 1.0, 0.0],
+                [0.5, 0.5, 1.0],
             ],
             dtype=np.float64,
         ),
@@ -59,7 +60,7 @@ class TestFitboxValidation(unittest.TestCase):
 
         validate_fitbox_mesh(mesh, name="tri_mesh")
 
-    def test_quad_faces_fail(self) -> None:
+    def test_quad_faces_pass(self) -> None:
         mesh = make_mesh(
             np.array(
                 [
@@ -69,18 +70,38 @@ class TestFitboxValidation(unittest.TestCase):
             )
         )
 
-        with self.assertRaises(RuntimeError) as ctx:
-            validate_fitbox_mesh(mesh, name="quad_mesh")
-
-        self.assertIn("faces must have shape (F, 3)", str(ctx.exception))
+        validate_fitbox_mesh(mesh, name="quad_mesh")
 
     def test_empty_triangle_faces_fail(self) -> None:
         mesh = make_mesh(np.zeros((0, 3), dtype=np.int64))
 
         with self.assertRaises(RuntimeError) as ctx:
-            validate_fitbox_mesh(mesh, name="empty_faces_mesh")
+            validate_fitbox_mesh(mesh, name="empty_tri_faces_mesh")
 
-        self.assertIn("faces must have shape (F, 3)", str(ctx.exception))
+        self.assertIn("faces must have shape (F, 3) or (F, 4)", str(ctx.exception))
+
+    def test_empty_quad_faces_fail(self) -> None:
+        mesh = make_mesh(np.zeros((0, 4), dtype=np.int64))
+
+        with self.assertRaises(RuntimeError) as ctx:
+            validate_fitbox_mesh(mesh, name="empty_quad_faces_mesh")
+
+        self.assertIn("faces must have shape (F, 3) or (F, 4)", str(ctx.exception))
+
+    def test_pentagon_faces_fail(self) -> None:
+        mesh = make_mesh(
+            np.array(
+                [
+                    [0, 1, 2, 3, 4],
+                ],
+                dtype=np.int64,
+            )
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            validate_fitbox_mesh(mesh, name="pentagon_mesh")
+
+        self.assertIn("faces must have shape (F, 3) or (F, 4)", str(ctx.exception))
 
     def test_ragged_faces_fail(self) -> None:
         mesh = make_mesh(

@@ -249,6 +249,347 @@ def validate_flat_output_name_collisions(mesh_paths: list[Path]) -> None:
         )
 
 
+
+def _append_unique_bone_name(out: list[str], seen: set[str], name: str) -> None:
+    name = str(name).strip()
+    if not name:
+        return
+    if name in seen:
+        return
+    seen.add(name)
+    out.append(name)
+
+
+def _parse_bone_names_text(text: str | None) -> list[str]:
+    """
+    Parse a bone-name list from comma-separated and/or newline-separated text.
+
+    Comments are supported with '#'. Example:
+
+        Bip01_Spine1
+        Bip01_L_Finger0, Bip01_R_Finger0
+        # ignored
+    """
+    if text is None:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    normalized = str(text).replace(",", "\n")
+    for raw_line in normalized.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        _append_unique_bone_name(out, seen, line)
+
+    return out
+
+
+def load_extra_remove_bone_names(
+    *,
+    inline_text: str | None,
+    file_path: str | None,
+) -> list[str]:
+    """
+    Load extra bone removals from CLI text and/or a text file.
+
+    The returned list preserves first occurrence order and removes duplicates.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for name in _parse_bone_names_text(inline_text):
+        _append_unique_bone_name(out, seen, name)
+
+    if file_path is not None and str(file_path).strip():
+        path = Path(file_path).expanduser().resolve(strict=False)
+        if not path.is_file():
+            fail(f"--extra_remove_bones_file does not exist: {path}")
+
+        for name in _parse_bone_names_text(path.read_text(encoding="utf-8")):
+            _append_unique_bone_name(out, seen, name)
+
+    return out
+
+
+def prune_skeleton_by_removing_bones(
+    skeleton_obj: dict[str, Any],
+    remove_bone_names: list[str],
+    *,
+    missing_ok: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Remove named bones from a skeleton and repair parent_indices.
+
+    Parent repair policy:
+        If a kept bone's direct parent is removed, climb upward until the
+        nearest kept ancestor is found. If none exists, parent becomes None.
+    """
+    bone_names = [str(x) for x in skeleton_obj.get("bone_names", [])]
+    raw_parent_indices = list(skeleton_obj.get("parent_indices", []))
+
+    if len(bone_names) != len(raw_parent_indices):
+        fail(
+            "Cannot extra-remove bones from skeleton with mismatched fields: "
+            f"bone_names={len(bone_names)}, parent_indices={len(raw_parent_indices)}"
+        )
+
+    parent_indices: list[int | None] = []
+    for value in raw_parent_indices:
+        if value is None:
+            parent_indices.append(None)
+        else:
+            idx = int(value)
+            parent_indices.append(idx if 0 <= idx < len(bone_names) else None)
+
+    requested: list[str] = []
+    seen: set[str] = set()
+    for name in remove_bone_names:
+        _append_unique_bone_name(requested, seen, name)
+
+    bone_set = set(bone_names)
+    missing = [name for name in requested if name not in bone_set]
+    removed = [name for name in requested if name in bone_set]
+
+    if missing and not bool(missing_ok):
+        fail(
+            "Requested extra-remove bones are missing from selected base variant: "
+            f"{missing}"
+        )
+
+    remove_set = set(removed)
+    kept_old_indices = [
+        idx
+        for idx, name in enumerate(bone_names)
+        if name not in remove_set
+    ]
+
+    if not kept_old_indices:
+        fail("extra_remove_bones would remove all bones from the selected skeleton.")
+
+    old_to_new = {
+        old_idx: new_idx
+        for new_idx, old_idx in enumerate(kept_old_indices)
+    }
+
+    def nearest_kept_parent_new_index(old_idx: int) -> int | None:
+        parent = parent_indices[int(old_idx)]
+        visited: set[int] = set()
+
+        while parent is not None:
+            parent_i = int(parent)
+            if parent_i in visited:
+                warn(
+                    "Cycle detected while repairing parent_indices after extra bone removal; "
+                    f"old_idx={old_idx}, parent={parent_i}. Treating as root."
+                )
+                return None
+
+            visited.add(parent_i)
+
+            if parent_i in old_to_new:
+                return int(old_to_new[parent_i])
+
+            if parent_i < 0 or parent_i >= len(parent_indices):
+                return None
+
+            parent = parent_indices[parent_i]
+
+        return None
+
+    pruned_bone_names = [bone_names[old_idx] for old_idx in kept_old_indices]
+    pruned_parent_indices = [
+        nearest_kept_parent_new_index(old_idx)
+        for old_idx in kept_old_indices
+    ]
+
+    out = dict(skeleton_obj)
+    out["bone_names"] = pruned_bone_names
+    out["parent_indices"] = pruned_parent_indices
+
+    children_of_removed: dict[str, list[str]] = {}
+    for child_idx, parent_idx in enumerate(parent_indices):
+        if parent_idx is None:
+            continue
+        parent_name = bone_names[int(parent_idx)]
+        if parent_name in remove_set:
+            children_of_removed.setdefault(parent_name, []).append(bone_names[child_idx])
+
+    info = {
+        "requested_bones": requested,
+        "removed_bones": removed,
+        "missing_bones": missing,
+        "base_bone_count": int(len(bone_names)),
+        "target_bone_count": int(len(pruned_bone_names)),
+        "removed_count": int(len(removed)),
+        "missing_count": int(len(missing)),
+        "parent_repair_mode": "nearest_kept_ancestor",
+        "children_of_removed_bones": children_of_removed,
+    }
+
+    return out, info
+
+
+def subset_animation_to_bone_names(
+    animation_obj: dict[str, Any],
+    target_bone_names: list[str],
+    *,
+    role: str,
+) -> dict[str, Any]:
+    """
+    Subset animation-side bone arrays to target_bone_names.
+
+    This is mainly used for virtual Step02 variants generated by
+    --extra_remove_bones*. build_reduced_animation_output() will still rebuild
+    animation_poses from the full animation later, but keeping this object
+    internally consistent makes summaries/debugging safer.
+    """
+    out = dict(animation_obj)
+
+    source_bone_names = [str(x) for x in out.get("bone_names", [])]
+    target_bone_names = [str(x) for x in target_bone_names]
+
+    if not source_bone_names:
+        fail(f"{role} animation is missing bone_names; cannot apply extra_remove_bones.")
+
+    missing = [name for name in target_bone_names if name not in source_bone_names]
+    if missing:
+        fail(
+            f"{role} animation is missing target bones after extra_remove_bones: "
+            f"{missing}"
+        )
+
+    indices = np.asarray(
+        [source_bone_names.index(name) for name in target_bone_names],
+        dtype=np.int64,
+    )
+
+    out["bone_names"] = list(target_bone_names)
+
+    if "rest_pose" in out:
+        rest_pose = np.asarray(out["rest_pose"])
+        if rest_pose.ndim >= 1 and rest_pose.shape[0] == len(source_bone_names):
+            out["rest_pose"] = rest_pose[indices, ...]
+        else:
+            warn(
+                f"{role} rest_pose shape is not aligned with bone_names; "
+                f"shape={rest_pose.shape}, bone_count={len(source_bone_names)}. "
+                "Leaving rest_pose unchanged."
+            )
+
+    if "animation_poses" in out:
+        poses = np.asarray(out["animation_poses"])
+        if poses.ndim >= 2 and poses.shape[1] == len(source_bone_names):
+            out["animation_poses"] = poses[:, indices, ...]
+        else:
+            warn(
+                f"{role} animation_poses shape is not aligned with bone_names; "
+                f"shape={poses.shape}, bone_count={len(source_bone_names)}. "
+                "Leaving animation_poses unchanged; Step02 output animation_poses "
+                "will still be rebuilt from the full animation."
+            )
+
+    if "fixed_bones" in out:
+        fixed = out.get("fixed_bones", [])
+        filtered_fixed: list[Any] = []
+        target_set = set(target_bone_names)
+        target_name_to_idx = {name: i for i, name in enumerate(target_bone_names)}
+
+        if isinstance(fixed, np.ndarray):
+            fixed_items = fixed.tolist()
+        elif isinstance(fixed, (list, tuple, set)):
+            fixed_items = list(fixed)
+        else:
+            fixed_items = [fixed]
+
+        for item in fixed_items:
+            if isinstance(item, str):
+                if item in target_set:
+                    filtered_fixed.append(item)
+                continue
+
+            try:
+                src_idx = int(item)
+            except Exception:
+                continue
+
+            if 0 <= src_idx < len(source_bone_names):
+                name = source_bone_names[src_idx]
+                if name in target_name_to_idx:
+                    filtered_fixed.append(int(target_name_to_idx[name]))
+
+        out["fixed_bones"] = filtered_fixed
+
+    return out
+
+
+def apply_extra_remove_bones_to_variant(
+    *,
+    base_variant_name: str,
+    reduced_skeleton: dict[str, Any],
+    reduced_animation: dict[str, Any],
+    extra_remove_bones: list[str],
+    extra_variant_name: str | None,
+    missing_ok: bool,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+    """
+    Build a virtual reduced variant by deleting extra bones from a selected base variant.
+    """
+    requested = list(extra_remove_bones or [])
+
+    if not requested:
+        metadata = {
+            "enabled": False,
+            "base_variant_name": base_variant_name,
+            "effective_variant_name": base_variant_name,
+            "requested_bones": [],
+            "removed_bones": [],
+            "missing_bones": [],
+            "removed_count": 0,
+            "missing_count": 0,
+            "base_bone_count": None,
+            "target_bone_count": None,
+            "parent_repair_mode": None,
+        }
+        return reduced_skeleton, reduced_animation, metadata, base_variant_name
+
+    pruned_skeleton, prune_info = prune_skeleton_by_removing_bones(
+        reduced_skeleton,
+        requested,
+        missing_ok=bool(missing_ok),
+    )
+
+    target_bone_names = [str(x) for x in pruned_skeleton.get("bone_names", [])]
+    pruned_animation = subset_animation_to_bone_names(
+        reduced_animation,
+        target_bone_names,
+        role=f"variant {base_variant_name!r}",
+    )
+
+    if extra_variant_name is not None and str(extra_variant_name).strip():
+        effective_variant_name = str(extra_variant_name).strip()
+    else:
+        effective_variant_name = (
+            f"{base_variant_name}_minus_{int(prune_info['removed_count'])}_extra_bones"
+        )
+
+    metadata = {
+        "enabled": True,
+        "base_variant_name": base_variant_name,
+        "effective_variant_name": effective_variant_name,
+        "missing_ok": bool(missing_ok),
+        **prune_info,
+    }
+
+    pruned_skeleton = dict(pruned_skeleton)
+    pruned_skeleton["ssdr_step02_extra_remove_bones"] = dict(metadata)
+
+    pruned_animation = dict(pruned_animation)
+    pruned_animation["ssdr_step02_extra_remove_bones"] = dict(metadata)
+
+    return pruned_skeleton, pruned_animation, metadata, effective_variant_name
+
 def select_dataset_layout(
     *,
     input_tree: Path,
@@ -512,6 +853,9 @@ def reduce_bone_weight_tree(
     overwrite_output: bool,
     allow_merge: bool,
     write_summary_file: bool,
+    extra_remove_bones: list[str] | None = None,
+    extra_variant_name: str | None = None,
+    extra_remove_missing_ok: bool = False,
 ) -> dict[str, Any]:
     with Timer("time_02_select_layout"):
         layout = select_dataset_layout(
@@ -556,6 +900,27 @@ def reduce_bone_weight_tree(
             role="reduced",
         )
 
+        (
+            reduced_skeleton,
+            reduced_animation,
+            extra_remove_info,
+            effective_variant_name,
+        ) = apply_extra_remove_bones_to_variant(
+            base_variant_name=layout.variant_name,
+            reduced_skeleton=reduced_skeleton,
+            reduced_animation=reduced_animation,
+            extra_remove_bones=list(extra_remove_bones or []),
+            extra_variant_name=extra_variant_name,
+            missing_ok=bool(extra_remove_missing_ok),
+        )
+
+    if extra_remove_info.get("enabled"):
+        log("Applied Step 02 extra bone removals:")
+        log(f"  base_variant_name      : {extra_remove_info.get('base_variant_name')}")
+        log(f"  effective_variant_name : {extra_remove_info.get('effective_variant_name')}")
+        log(f"  removed_count          : {extra_remove_info.get('removed_count')}")
+        log(f"  target_bone_count      : {extra_remove_info.get('target_bone_count')}")
+
     with Timer("time_02_prepare_skeleton_context"):
         ctx = SkeletonContext(full_skeleton, reduced_skeleton)
 
@@ -567,7 +932,7 @@ def reduce_bone_weight_tree(
             full_animation=full_animation,
             reduced_animation=reduced_animation,
             ctx=ctx,
-            variant_name=layout.variant_name,
+            variant_name=effective_variant_name,
         )
 
         dump_pkl(output_tree / FULL_SKELETON, reduced_skeleton)
@@ -626,6 +991,8 @@ def reduce_bone_weight_tree(
         "layout": {
             "layout_kind": layout.layout_kind,
             "variant_name": layout.variant_name,
+            "effective_variant_name": effective_variant_name,
+            "extra_remove_bones_enabled": bool(extra_remove_info.get("enabled", False)),
             "full_root": str(layout.full_root),
             "reduced_root": str(layout.reduced_root) if layout.reduced_root is not None else None,
             "full_skeleton_path": str(layout.full_skeleton_path),
@@ -639,6 +1006,7 @@ def reduce_bone_weight_tree(
             "child_weight": float(child_weight),
             "affinity_eps": float(affinity_eps),
         },
+        "extra_remove_bones": extra_remove_info,
         "skeleton": {
             "full_bone_count": int(ctx.sh_bones_count),
             "reduced_bone_count": int(ctx.sh_br_bones_count),
@@ -667,6 +1035,7 @@ def reduce_bone_weight_tree(
     record_metric("02_reduced_mesh_count", int(reduced_mesh_count))
     record_metric("02_skipped_count", int(skipped_count))
     record_metric("02_invalid_affinity_count", int(total_invalid_affinity_count))
+    record_metric("02_extra_remove_bone_count", int(extra_remove_info.get("removed_count", 0) or 0))
 
     return summary
 
@@ -709,6 +1078,38 @@ def main() -> None:
             "If omitted, auto-select lexicographically smallest variant with cleaned_full last."
         ),
     )
+    parser.add_argument(
+        "--extra_remove_bones",
+        type=str,
+        default="",
+        help=(
+            "Optional comma/newline-separated bone names to remove from the selected "
+            "base variant before Step 02 weight reduction."
+        ),
+    )
+    parser.add_argument(
+        "--extra_remove_bones_file",
+        type=str,
+        default=None,
+        help=(
+            "Optional text file containing one bone name per line, with '#' comments. "
+            "Applied in addition to --extra_remove_bones."
+        ),
+    )
+    parser.add_argument(
+        "--extra_variant_name",
+        type=str,
+        default=None,
+        help=(
+            "Optional effective variant name recorded in Step02 outputs when using "
+            "--extra_remove_bones*."
+        ),
+    )
+    parser.add_argument(
+        "--extra_remove_missing_ok",
+        action="store_true",
+        help="Do not fail if requested extra-remove bones are missing from the selected base variant.",
+    )
 
     parser.add_argument("--par_weight", type=float, default=0.5)
     parser.add_argument("--bone_weight", type=float, default=0.3)
@@ -737,6 +1138,11 @@ def main() -> None:
     except Exception as exc:
         raise RuntimeError(str(exc)) from exc
 
+    extra_remove_bones = load_extra_remove_bone_names(
+        inline_text=args.extra_remove_bones,
+        file_path=args.extra_remove_bones_file,
+    )
+
     log("=" * 80)
     log("SSDR Step 02: data1 -> data2 Bone Weight Reduction")
     log(f"work_dir          : {resolution.work_dir}")
@@ -745,6 +1151,10 @@ def main() -> None:
     log(f"input_source      : {resolution.input_source}")
     log(f"output_source     : {resolution.output_source}")
     log(f"variant           : {args.variant}")
+    log(f"extra_remove_bones: {extra_remove_bones}")
+    log(f"extra_remove_file : {args.extra_remove_bones_file}")
+    log(f"extra_variant_name: {args.extra_variant_name}")
+    log(f"extra_missing_ok  : {bool(args.extra_remove_missing_ok)}")
     log(f"par_weight        : {float(args.par_weight)}")
     log(f"bone_weight       : {float(args.bone_weight)}")
     log(f"child_weight      : {float(args.child_weight)}")
@@ -767,6 +1177,9 @@ def main() -> None:
             overwrite_output=bool(args.overwrite_output),
             allow_merge=bool(args.allow_merge),
             write_summary_file=not bool(args.no_summary),
+            extra_remove_bones=extra_remove_bones,
+            extra_variant_name=args.extra_variant_name,
+            extra_remove_missing_ok=bool(args.extra_remove_missing_ok),
         )
 
     if args.metrics_dir:
@@ -775,6 +1188,8 @@ def main() -> None:
     log("SSDR Step 02 complete.")
     log(f"layout_kind                  : {summary['layout']['layout_kind']}")
     log(f"variant_name                 : {summary['layout']['variant_name']}")
+    log(f"effective_variant_name       : {summary['layout'].get('effective_variant_name')}")
+    log(f"extra_remove_bones_enabled   : {summary['layout'].get('extra_remove_bones_enabled')}")
     log(f"full_bone_count              : {summary['skeleton']['full_bone_count']}")
     log(f"reduced_bone_count           : {summary['skeleton']['reduced_bone_count']}")
     log(f"reduced_mesh_count           : {summary['reduced_mesh_count']}")
