@@ -6,11 +6,11 @@
         "reference_original_armature": "Armature_Original",
         "semantics": "delete_bones is a requested removal list. During Prep 04a, bones present in Armature_Cleaned_Full are actually deleted. Bones absent from Armature_Cleaned_Full but present in Armature_Original are reported as already removed by automatic cleaned-full pruning. Bones absent from both armatures are treated as naming errors."
     },
-    "description": "Aggressive Griffin_A2 requested bone-removal list. Corrected manual marking from L/R_Features0..10 to confirmed L/R_Feathers00..10.",
+    "description": "Griffin_A2 requested bone-removal lists. L/R_Feathers07 are intentionally kept in conservative, moderate, and aggressive variants after SSDR visual ablation tests showed this feather pair is quality-sensitive.",
     "variants": {
         "bone_reduced_conservative": {
             "armature_name": "Armature_Bone_Reduced_conservative",
-            "description": "Conservative Griffin_A2 reduction. Removes toes, fingers, eyelids, Tail1, Spine1, and a sparse subset of L/R_Feathers01/04/07/10. This is a strict subset of bone_reduced_aggressive.",
+            "description": "Conservative Griffin_A2 reduction. Removes toes, fingers, eyelids, Tail1, Spine1, and a sparse subset of L/R_Feathers01/04/10. L/R_Feathers07 are intentionally kept after visual ablation tests. This remains a strict subset of bone_reduced_aggressive after the same L/R_Feathers07 keep-rule is applied.",
             "delete_bones": [
                 "Bip01_L_Toe0",
                 "Bip01_L_Toe1",
@@ -34,17 +34,15 @@
                 "Bip01_Spine1",
                 "L_Feathers01",
                 "L_Feathers04",
-                "L_Feathers07",
                 "L_Feathers10",
                 "R_Feathers01",
                 "R_Feathers04",
-                "R_Feathers07",
                 "R_Feathers10"
             ]
         },
         "bone_reduced_moderate": {
             "armature_name": "Armature_Bone_Reduced_moderate",
-            "description": "Moderate Griffin_A2 reduction. Starts from bone_reduced_conservative and additionally removes Tail3, Spine3, Neck1, Tongue02, Head, L/R_Feathers00/03/05, hands, clavicles, and L/R_Wing02.",
+            "description": "Moderate Griffin_A2 reduction. Starts from bone_reduced_conservative and additionally removes Tail3, Spine3, Neck1, Tongue02, Head, L/R_Feathers00/03/05, hands, clavicles, and L/R_Wing02. L/R_Feathers07 are intentionally kept after visual ablation tests.",
             "delete_bones": [
                 "Bip01_L_Toe0",
                 "Bip01_L_Toe1",
@@ -76,14 +74,12 @@
                 "L_Feathers03",
                 "L_Feathers04",
                 "L_Feathers05",
-                "L_Feathers07",
                 "L_Feathers10",
                 "R_Feathers00",
                 "R_Feathers01",
                 "R_Feathers03",
                 "R_Feathers04",
                 "R_Feathers05",
-                "R_Feathers07",
                 "R_Feathers10",
                 "Bip01_L_Hand",
                 "Bip01_R_Hand",
@@ -95,7 +91,7 @@
         },
         "bone_reduced_aggressive": {
             "armature_name": "Armature_Bone_Reduced_aggressive",
-            "description": "Most aggressive Griffin_A2 reduction currently marked by manual review. Includes corrected L/R_Feathers00..10 names.",
+            "description": "Most aggressive Griffin_A2 reduction currently marked by manual review. Includes corrected L/R_Feathers00..10 names, but intentionally keeps L/R_Feathers07 after visual ablation tests showed that removing this pair causes unacceptable quality loss.",
             "delete_bones": [
                 "Bip01_L_Toe0",
                 "Bip01_L_Toe1",
@@ -126,7 +122,6 @@
                 "L_Feathers04",
                 "L_Feathers05",
                 "L_Feathers06",
-                "L_Feathers07",
                 "L_Feathers08",
                 "L_Feathers09",
                 "L_Feathers10",
@@ -137,7 +132,6 @@
                 "R_Feathers04",
                 "R_Feathers05",
                 "R_Feathers06",
-                "R_Feathers07",
                 "R_Feathers08",
                 "R_Feathers09",
                 "R_Feathers10",
@@ -196,6 +190,7 @@
         "L/R_Features0..10 were wrong names and have been replaced by L/R_Feathers00..10.",
         "delete_bones are requested removals, not necessarily all still present in Armature_Cleaned_Full.",
         "Added bone_reduced_conservative: 28 requested delete bones, confirmed as a strict subset of bone_reduced_aggressive.",
-        "Added bone_reduced_moderate: 45 requested delete bones, confirmed as a strict superset of conservative and subset of aggressive."
+        "Added bone_reduced_moderate: 45 requested delete bones, confirmed as a strict superset of conservative and subset of aggressive.",
+        "2026-10-28: Removed L_Feathers07 and R_Feathers07 from conservative, moderate, and aggressive delete_bones lists. Visual ablation showed that removing Feathers07 caused quality failure, while removing Feathers01/04/10 without Feathers07 passed visual inspection."
     ]
 }
