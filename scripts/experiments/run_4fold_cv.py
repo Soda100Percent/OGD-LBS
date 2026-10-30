@@ -30,7 +30,12 @@ except ModuleNotFoundError:  # pragma: no cover
     from ._env import REPO_ROOT
 
 try:
-    from cv_utils import infer_reference_frame_count, make_kfold_frame_split, write_split_tree
+    from cv_utils import (
+        infer_reference_frame_count,
+        make_kfold_frame_split,
+        resolve_special_train_ranges_for_dataset,
+        write_split_tree,
+    )
     from experiment_io import (
         append_optional,
         append_store_true,
@@ -40,7 +45,12 @@ try:
         run_logged_command,
     )
 except ModuleNotFoundError:  # pragma: no cover
-    from .cv_utils import infer_reference_frame_count, make_kfold_frame_split, write_split_tree
+    from .cv_utils import (
+        infer_reference_frame_count,
+        make_kfold_frame_split,
+        resolve_special_train_ranges_for_dataset,
+        write_split_tree,
+    )
     from .experiment_io import (
         append_optional,
         append_store_true,
@@ -315,11 +325,17 @@ def run_fold(
     base_data1 = dataset_data1_dir(dataset)
 
     frame_count, ref_path = infer_reference_frame_count(base_data1)
+    special_train_ranges = resolve_special_train_ranges_for_dataset(
+        frame_count=frame_count,
+        dataset=dataset,
+        cfg=cfg,
+    )
+
     split = make_kfold_frame_split(
         frame_count,
         kfold=kfold,
         fold_index=fold_index,
-        special_train_ranges=cfg.get("special_train_ranges", []),
+        special_train_ranges=special_train_ranges,
     )
 
     fold_root.mkdir(parents=True, exist_ok=True)

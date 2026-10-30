@@ -9,27 +9,37 @@
         {
             "model": "Vroid_18",
             "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_18/ssdr_work_dir",
-            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json"
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json",
+            "special_train_fraction": 0.1,
+            "special_train_note": "First 10% of data1 frames are always included in train and excluded from all test folds."
         },
         {
             "model": "Vroid_19",
             "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_19/ssdr_work_dir",
-            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json"
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json",
+            "special_train_fraction": 0.1,
+            "special_train_note": "First 10% of data1 frames are always included in train and excluded from all test folds."
         },
         {
             "model": "Vroid_20",
             "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_20/ssdr_work_dir",
-            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json"
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json",
+            "special_train_fraction": 0.1,
+            "special_train_note": "First 10% of data1 frames are always included in train and excluded from all test folds."
         },
         {
             "model": "Griffin_A2",
             "ssdr_work_dir": "/workspace/ogd_dataset/Griffin_A2/ssdr_work_dir",
-            "qem_config": null
+            "qem_config": null,
+            "special_train_ranges": [],
+            "special_train_note": "No core training block."
         },
         {
             "model": "Winter_Samurai",
             "ssdr_work_dir": "/workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir",
-            "qem_config": null
+            "qem_config": null,
+            "special_train_ranges": [],
+            "special_train_note": "No core training block."
         }
     ],
     "ssdr_defaults": {

@@ -126,6 +126,105 @@ def parse_ranges_to_indices(
     return np.flatnonzero(mask).astype(np.int64)
 
 
+
+def _normalize_special_train_ranges(raw: Any) -> list[list[int]]:
+    """
+    Normalize JSON-style special train ranges.
+
+    Range convention:
+        0-based frame indices on data1 frame axis.
+        left-closed, right-open: [start, end).
+    """
+    if raw is None:
+        return []
+
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            f"special_train_ranges must be a list of [start, end] pairs, got {type(raw)}"
+        )
+
+    out: list[list[int]] = []
+
+    for item in raw:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError(f"special_train_ranges item must be [start, end], got {item!r}")
+
+        start = int(item[0])
+        end = int(item[1])
+        out.append([start, end])
+
+    return out
+
+
+def _fraction_to_special_train_ranges(
+    *,
+    frame_count: int,
+    fraction: Any,
+    role: str,
+) -> list[list[int]]:
+    frame_count = int(frame_count)
+    frac = float(fraction)
+
+    if frame_count <= 0:
+        raise ValueError(f"frame_count must be positive, got {frame_count}")
+
+    if frac < 0.0 or frac >= 1.0:
+        raise ValueError(
+            f"{role} special_train_fraction must be in [0, 1), got {frac}"
+        )
+
+    end = int(round(frame_count * frac))
+    end = max(0, min(end, frame_count))
+
+    if end <= 0:
+        return []
+
+    return [[0, end]]
+
+
+def resolve_special_train_ranges_for_dataset(
+    *,
+    frame_count: int,
+    dataset: dict[str, Any],
+    cfg: dict[str, Any],
+) -> list[list[int]]:
+    """
+    Resolve special/core training frames for one dataset.
+
+    Priority:
+        1. dataset.special_train_ranges if present, including [].
+        2. dataset.special_train_fraction if present.
+        3. cfg.special_train_ranges if present.
+        4. cfg.special_train_fraction if present.
+        5. [].
+
+    Semantics:
+        - Frame indices are data1 frame-axis indices, not Blender scene frames.
+        - Ranges are 0-based, left-closed, right-open: [start, end).
+        - Special/core frames are always included in train and excluded from test.
+    """
+    if "special_train_ranges" in dataset and dataset.get("special_train_ranges") is not None:
+        return _normalize_special_train_ranges(dataset.get("special_train_ranges"))
+
+    if "special_train_fraction" in dataset and dataset.get("special_train_fraction") is not None:
+        return _fraction_to_special_train_ranges(
+            frame_count=frame_count,
+            fraction=dataset.get("special_train_fraction"),
+            role=f"dataset {dataset.get('model', '<unknown>')}",
+        )
+
+    if "special_train_ranges" in cfg and cfg.get("special_train_ranges") is not None:
+        return _normalize_special_train_ranges(cfg.get("special_train_ranges"))
+
+    if "special_train_fraction" in cfg and cfg.get("special_train_fraction") is not None:
+        return _fraction_to_special_train_ranges(
+            frame_count=frame_count,
+            fraction=cfg.get("special_train_fraction"),
+            role="global config",
+        )
+
+    return []
+
 def make_kfold_frame_split(
     frame_count: int,
     *,

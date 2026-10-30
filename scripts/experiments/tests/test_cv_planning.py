@@ -214,5 +214,84 @@ class TestCVPlanning(unittest.TestCase):
             self.assertIn("adaptive", cmd)
 
 
+class TestCVDatasetSpecialTrainConfig(unittest.TestCase):
+    def test_dataset_special_train_fraction_resolves_first_10_percent(self) -> None:
+        cv_utils = load_cv_utils()
+
+        ranges = cv_utils.resolve_special_train_ranges_for_dataset(
+            frame_count=200,
+            dataset={
+                "model": "Vroid_18",
+                "special_train_fraction": 0.10,
+            },
+            cfg={
+                "special_train_ranges": [],
+            },
+        )
+
+        self.assertEqual(ranges, [[0, 20]])
+
+        split = cv_utils.make_kfold_frame_split(
+            200,
+            kfold=4,
+            fold_index=0,
+            special_train_ranges=ranges,
+        )
+
+        self.assertEqual(split.stats["special_count"], 20)
+        self.assertEqual(split.stats["pool_count"], 180)
+        self.assertEqual(split.stats["train_count"], 155)
+        self.assertEqual(split.stats["test_count"], 45)
+
+        core = set(range(20))
+        self.assertTrue(core.issubset(set(split.train_indices.tolist())))
+        self.assertFalse(core & set(split.test_indices.tolist()))
+
+    def test_dataset_empty_ranges_override_global_core_block(self) -> None:
+        cv_utils = load_cv_utils()
+
+        ranges = cv_utils.resolve_special_train_ranges_for_dataset(
+            frame_count=200,
+            dataset={
+                "model": "Griffin_A2",
+                "special_train_ranges": [],
+            },
+            cfg={
+                "special_train_ranges": [[0, 20]],
+            },
+        )
+
+        self.assertEqual(ranges, [])
+
+        split = cv_utils.make_kfold_frame_split(
+            200,
+            kfold=4,
+            fold_index=0,
+            special_train_ranges=ranges,
+        )
+
+        self.assertEqual(split.stats["special_count"], 0)
+        self.assertEqual(split.stats["pool_count"], 200)
+        self.assertEqual(split.stats["train_count"], 150)
+        self.assertEqual(split.stats["test_count"], 50)
+
+    def test_dataset_explicit_ranges_have_priority_over_fraction(self) -> None:
+        cv_utils = load_cv_utils()
+
+        ranges = cv_utils.resolve_special_train_ranges_for_dataset(
+            frame_count=200,
+            dataset={
+                "model": "SomeModel",
+                "special_train_ranges": [[5, 15]],
+                "special_train_fraction": 0.10,
+            },
+            cfg={
+                "special_train_ranges": [],
+            },
+        )
+
+        self.assertEqual(ranges, [[5, 15]])
+
+
 if __name__ == "__main__":
     unittest.main()
