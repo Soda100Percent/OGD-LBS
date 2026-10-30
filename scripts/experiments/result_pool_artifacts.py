@@ -1,0 +1,574 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+"""
+Stage artifact cache utilities for OGD-LBS local result pool.
+
+This module extends result_pool.py with stage-level artifact support.
+
+Supported artifact types in this first version:
+    - ssdr_data2
+    - ssdr_data3
+
+Design:
+    - flat canonical dimensions are the primary match mechanism
+    - missing dimensions are filled from current profile defaults
+    - equivalence rules are applied to both query and record
+    - lookup uses linear scan
+    - dimension_fingerprint is diagnostic only, not the identity
+"""
+
+import argparse
+import json
+import shutil
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def ensure_repo_paths() -> Path:
+    cur = Path(__file__).resolve(strict=False)
+    for parent in [cur.parent, *cur.parents]:
+        if (parent / "pyproject.toml").is_file() and (parent / "src").is_dir():
+            repo = parent
+            break
+    else:
+        repo = Path.cwd()
+
+    for item in [
+        repo / "src",
+        repo / "scripts" / "experiments",
+        repo / "scripts" / "ssdr",
+        repo / "scripts" / "data_prep",
+    ]:
+        s = str(item)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+
+    return repo
+
+
+REPO_ROOT = ensure_repo_paths()
+
+import result_pool as rp  # noqa: E402
+
+
+SSDR_DATA2_DIMENSIONS = [
+    "artifact_type",
+    "model",
+
+    "bone_variant",
+    "frame_sampling_policy",
+    "max_frames",
+    "target_frames",
+
+    "alpha",
+    "beta",
+    "gamma",
+    "step02_affinity_eps",
+
+    "step01_code_version",
+    "step02_code_version",
+]
+
+SSDR_DATA2_DEFAULTS = {
+    "artifact_type": "ssdr_data2",
+
+    "bone_variant": "default",
+    "frame_sampling_policy": "target_200",
+    "max_frames": 210,
+    "target_frames": 200,
+
+    "alpha": 0.5,
+    "beta": 0.3,
+    "gamma": 0.2,
+    "step02_affinity_eps": 1e-5,
+
+    "step01_code_version": "step01_v1",
+    "step02_code_version": "step02_v1",
+}
+
+SSDR_DATA3_DIMENSIONS = [
+    *SSDR_DATA2_DIMENSIONS,
+
+    "omega_b",
+    "qem_config_name",
+    "qem_config_fingerprint",
+
+    "step03_code_version",
+]
+
+SSDR_DATA3_DEFAULTS = {
+    **SSDR_DATA2_DEFAULTS,
+    "artifact_type": "ssdr_data3",
+
+    "omega_b": 1000.0,
+    "qem_config_name": "default",
+    "qem_config_fingerprint": None,
+
+    "step03_code_version": "step03_v1",
+}
+
+STAGE_TO_PAYLOAD_DIR = {
+    "ssdr_data2": "data2",
+    "ssdr_data3": "data3",
+}
+
+
+def normalize_stage_name(stage: str) -> str:
+    text = str(stage).strip()
+    aliases = {
+        "data2": "ssdr_data2",
+        "ssdr_data2": "ssdr_data2",
+        "stage02": "ssdr_data2",
+        "stage02_data2": "ssdr_data2",
+
+        "data3": "ssdr_data3",
+        "ssdr_data3": "ssdr_data3",
+        "stage03": "ssdr_data3",
+        "stage03_data3": "ssdr_data3",
+    }
+    if text not in aliases:
+        raise ValueError(f"Unsupported artifact stage: {stage!r}")
+    return aliases[text]
+
+
+def supported_stages() -> list[str]:
+    return ["ssdr_data2", "ssdr_data3"]
+
+
+def ensure_artifact_profiles(pool: Path) -> None:
+    """
+    Ensure dimensions.json has ssdr_data2 and ssdr_data3 profiles.
+
+    This is intentionally non-destructive:
+      - existing profiles are preserved
+      - missing profiles are added
+      - optional_fast_indexes are invalidated only if dimensions change
+    """
+    rp.init_pool(pool, force=False)
+    paths = rp.get_pool_paths(pool)
+    dimensions_obj, _eq_profile, index = rp.require_pool(pool)
+
+    profiles = dimensions_obj.setdefault("profiles", {})
+    changed = False
+
+    if "ssdr_data2" not in profiles:
+        profiles["ssdr_data2"] = {
+            "profile_version": 1,
+            "dimensions": list(SSDR_DATA2_DIMENSIONS),
+            "defaults": dict(SSDR_DATA2_DEFAULTS),
+        }
+        changed = True
+
+    if "ssdr_data3" not in profiles:
+        profiles["ssdr_data3"] = {
+            "profile_version": 1,
+            "dimensions": list(SSDR_DATA3_DIMENSIONS),
+            "defaults": dict(SSDR_DATA3_DEFAULTS),
+        }
+        changed = True
+
+    if changed:
+        dimensions_obj["profiles"] = profiles
+        rp.dump_json(paths["dimensions"], dimensions_obj)
+
+        index["optional_fast_indexes"] = {}
+        rp.save_index(pool, index)
+
+
+def infer_bone_variant(dataset: dict[str, Any] | None) -> str:
+    dataset = dataset or {}
+    return str(dataset.get("variant") or "default")
+
+
+def infer_qem_config_name(dataset: dict[str, Any] | None) -> str:
+    dataset = dataset or {}
+    qem = dataset.get("qem_config")
+    if qem is None or str(qem).strip() == "":
+        return "default"
+    return Path(str(qem)).name
+
+
+def raw_stage_dims_from_case_config(
+    case_cfg: dict[str, Any],
+    *,
+    artifact_type: str,
+    step04_config: dict[str, Any] | None = None,
+    config_defaults: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    artifact_type = normalize_stage_name(artifact_type)
+    step04_config = dict(step04_config or {})
+    config_defaults = dict(config_defaults or {})
+    dataset = dict(case_cfg.get("dataset") or {})
+    eff = dict(case_cfg.get("effective_params") or {})
+
+    def first(*values: Any) -> Any:
+        for v in values:
+            if v is not None:
+                return v
+        return None
+
+    raw: dict[str, Any] = {
+        "artifact_type": artifact_type,
+        "model": case_cfg.get("model"),
+
+        "bone_variant": infer_bone_variant(dataset),
+        "frame_sampling_policy": config_defaults.get("frame_sampling_policy"),
+        "max_frames": config_defaults.get("max_frames"),
+        "target_frames": config_defaults.get("target_frames"),
+
+        "alpha": first(eff.get("alpha"), config_defaults.get("alpha")),
+        "beta": first(eff.get("beta"), config_defaults.get("beta")),
+        "gamma": first(eff.get("gamma"), config_defaults.get("gamma")),
+        "step02_affinity_eps": config_defaults.get("step02_affinity_eps"),
+
+        "step01_code_version": config_defaults.get("step01_code_version"),
+        "step02_code_version": config_defaults.get("step02_code_version"),
+    }
+
+    if artifact_type == "ssdr_data3":
+        raw.update(
+            {
+                "omega_b": first(eff.get("omega_b"), config_defaults.get("omega_b")),
+                "qem_config_name": infer_qem_config_name(dataset),
+                "qem_config_fingerprint": config_defaults.get("qem_config_fingerprint"),
+                "step03_code_version": config_defaults.get("step03_code_version"),
+            }
+        )
+
+    return raw
+
+
+def stage_payload_path(run_root: Path, artifact_type: str) -> Path:
+    artifact_type = normalize_stage_name(artifact_type)
+    return run_root / STAGE_TO_PAYLOAD_DIR[artifact_type]
+
+
+def iter_case_run_roots(input_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    for p in sorted(input_root.rglob("case_config.json")):
+        if p.parent.is_dir():
+            roots.append(p.parent)
+    return roots
+
+
+def load_step04_config_if_any(run_root: Path) -> dict[str, Any]:
+    try:
+        return rp.load_summary_config(run_root)
+    except Exception:
+        return {}
+
+
+def copy_payload(src: Path, dst: Path) -> None:
+    if src.is_dir():
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+    else:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
+def ingest_artifacts(
+    *,
+    pool: Path,
+    input_root: Path,
+    stages: list[str],
+    overwrite: bool = False,
+    allow_no_done: bool = False,
+    copy_payloads: bool = True,
+) -> dict[str, Any]:
+    rp.init_pool(pool, force=False)
+    ensure_artifact_profiles(pool)
+    dimensions_obj, eq_profile, index = rp.require_pool(pool)
+
+    normalized_stages = [normalize_stage_name(s) for s in stages]
+
+    run_roots = iter_case_run_roots(input_root)
+
+    records: list[dict[str, Any]] = []
+    ingested = 0
+    skipped_existing = 0
+    skipped_missing_payload = 0
+    skipped_no_done = 0
+
+    for run_root in run_roots:
+        done_path = run_root / "done"
+        if not done_path.exists() and not allow_no_done:
+            skipped_no_done += 1
+            continue
+
+        case_cfg_path = run_root / "case_config.json"
+        if not case_cfg_path.is_file():
+            continue
+
+        try:
+            case_cfg = rp.load_json(case_cfg_path)
+        except Exception as exc:
+            records.append(
+                {
+                    "run_root": str(run_root),
+                    "status": "skip_bad_case_config",
+                    "error": repr(exc),
+                }
+            )
+            continue
+
+        step04_config = load_step04_config_if_any(run_root)
+
+        for stage in normalized_stages:
+            payload_src = stage_payload_path(run_root, stage)
+
+            if not payload_src.exists():
+                skipped_missing_payload += 1
+                records.append(
+                    {
+                        "run_root": str(run_root),
+                        "stage": stage,
+                        "status": "skip_missing_payload",
+                        "payload": str(payload_src),
+                    }
+                )
+                continue
+
+            raw_dims = raw_stage_dims_from_case_config(
+                case_cfg,
+                artifact_type=stage,
+                step04_config=step04_config,
+                config_defaults={},
+            )
+
+            normalized_dims, traces, fingerprint = rp.normalize_dimensions(
+                raw_dims,
+                dimensions_obj=dimensions_obj,
+                equivalence_profile_obj=eq_profile,
+                profile_name=stage,
+                context={
+                    "source": "ingest-artifacts",
+                    "stage": stage,
+                    "run_root": str(run_root),
+                },
+            )
+
+            existing = rp.lookup_artifacts(pool=pool, raw_dims=raw_dims, profile_name=stage)
+
+            if existing and not overwrite:
+                skipped_existing += 1
+                records.append(
+                    {
+                        "artifact_id": existing[0]["artifact_id"],
+                        "dimension_fingerprint": fingerprint,
+                        "run_root": str(run_root),
+                        "stage": stage,
+                        "status": "skipped_existing",
+                    }
+                )
+                continue
+
+            if existing and overwrite:
+                artifact_id = existing[0]["artifact_id"]
+            else:
+                artifact_id = rp.allocate_artifact_id(index)
+
+            adir = rp.artifact_dir(pool, artifact_id)
+
+            if adir.exists() and overwrite:
+                shutil.rmtree(adir)
+            adir.mkdir(parents=True, exist_ok=True)
+
+            rp.dump_json(adir / "raw_dimensions.json", {
+                "schema": "ogd_lbs_result_pool_raw_dimensions_v1",
+                "dimensions": raw_dims,
+            })
+            rp.dump_json(adir / "canonical_dimensions.json", {
+                "schema": "ogd_lbs_result_pool_canonical_dimensions_v1",
+                "profile": stage,
+                "dimensions": normalized_dims,
+                "dimension_fingerprint": fingerprint,
+            })
+            rp.dump_json(adir / "override_trace.json", traces)
+            rp.dump_json(adir / "source_info.json", {
+                "source_run_root": str(run_root),
+                "source_input_root": str(input_root),
+                "source_case_config": str(case_cfg_path),
+                "ingested_at_utc": rp.utc_now_iso(),
+            })
+
+            shutil.copy2(case_cfg_path, adir / "case_config.json")
+            if done_path.exists():
+                shutil.copy2(done_path, adir / "done")
+
+            if copy_payloads:
+                payload_dst = adir / "payload" / STAGE_TO_PAYLOAD_DIR[stage]
+                copy_payload(payload_src, payload_dst)
+                payload_rel = str(payload_dst.relative_to(adir))
+            else:
+                payload_rel = None
+
+            rp.dump_json(adir / "artifact_manifest.json", {
+                "schema": "ogd_lbs_result_pool_artifact_manifest_v1",
+                "artifact_id": artifact_id,
+                "artifact_type": stage,
+                "status": "succeeded",
+                "dimension_fingerprint": fingerprint,
+                "created_at_utc": rp.utc_now_iso(),
+                "source_run_root": str(run_root),
+                "payload_path": payload_rel,
+                "payload_source": str(payload_src),
+            })
+
+            index.setdefault("artifacts", {})[artifact_id] = {
+                "artifact_id": artifact_id,
+                "artifact_type": stage,
+                "status": "succeeded",
+                "artifact_dir": str(adir.relative_to(pool)),
+                "created_at_utc": rp.utc_now_iso(),
+                "updated_at_utc": rp.utc_now_iso(),
+                "dimension_fingerprint": fingerprint,
+                "model": normalized_dims.get("model"),
+                "param": case_cfg.get("param"),
+                "value": case_cfg.get("value"),
+                "payload_path": payload_rel,
+            }
+
+            ingested += 1
+            records.append(
+                {
+                    "artifact_id": artifact_id,
+                    "dimension_fingerprint": fingerprint,
+                    "run_root": str(run_root),
+                    "stage": stage,
+                    "status": "ingested",
+                }
+            )
+
+    index["optional_fast_indexes"] = {}
+    rp.save_index(pool, index)
+
+    return {
+        "schema": "ogd_lbs_result_pool_artifact_ingest_report_v1",
+        "pool": str(pool),
+        "input_root": str(input_root),
+        "stages": normalized_stages,
+        "run_root_count": len(run_roots),
+        "ingested": ingested,
+        "skipped_existing": skipped_existing,
+        "skipped_missing_payload": skipped_missing_payload,
+        "skipped_no_done": skipped_no_done,
+        "records": records,
+    }
+
+
+def lookup_artifact(
+    *,
+    pool: Path,
+    stage: str,
+    key_json: Path,
+) -> dict[str, Any]:
+    rp.init_pool(pool, force=False)
+    ensure_artifact_profiles(pool)
+
+    stage = normalize_stage_name(stage)
+
+    obj = rp.load_json(key_json)
+    if not isinstance(obj, dict):
+        raise ValueError(f"key_json must contain a JSON object: {key_json}")
+
+    if "dimensions" in obj and isinstance(obj["dimensions"], dict):
+        raw_dims = dict(obj["dimensions"])
+    else:
+        raw_dims = dict(obj)
+
+    raw_dims["artifact_type"] = stage
+
+    hits = rp.lookup_artifacts(pool=pool, raw_dims=raw_dims, profile_name=stage)
+
+    return {
+        "schema": "ogd_lbs_result_pool_artifact_lookup_report_v1",
+        "pool": str(pool),
+        "stage": stage,
+        "key_json": str(key_json),
+        "hit_count": len(hits),
+        "hits": hits,
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Stage artifact cache helpers for OGD-LBS result pool.")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("ensure-profiles")
+    p.add_argument("--pool", required=True)
+
+    p = sub.add_parser("ingest-artifacts")
+    p.add_argument("--pool", required=True)
+    p.add_argument("--input_root", required=True)
+    p.add_argument("--stages", nargs="+", default=["ssdr_data2", "ssdr_data3"])
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--allow_no_done", action="store_true")
+    p.add_argument("--no_payload", action="store_true")
+    p.add_argument("--report", default=None)
+
+    p = sub.add_parser("lookup-artifact")
+    p.add_argument("--pool", required=True)
+    p.add_argument("--stage", required=True)
+    p.add_argument("--key_json", required=True)
+
+    p = sub.add_parser("supported-stages")
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.cmd == "supported-stages":
+        print(json.dumps({"supported_stages": supported_stages()}, indent=2, ensure_ascii=False))
+        return
+
+    if args.cmd == "ensure-profiles":
+        pool = Path(args.pool).expanduser().resolve(strict=False)
+        rp.init_pool(pool, force=False)
+        ensure_artifact_profiles(pool)
+        print(f"Ensured artifact profiles in pool: {pool}")
+        return
+
+    if args.cmd == "ingest-artifacts":
+        pool = Path(args.pool).expanduser().resolve(strict=False)
+        input_root = Path(args.input_root).expanduser().resolve(strict=False)
+
+        report = ingest_artifacts(
+            pool=pool,
+            input_root=input_root,
+            stages=list(args.stages),
+            overwrite=bool(args.overwrite),
+            allow_no_done=bool(args.allow_no_done),
+            copy_payloads=not bool(args.no_payload),
+        )
+
+        if args.report:
+            rp.dump_json(args.report, report)
+
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+
+    if args.cmd == "lookup-artifact":
+        pool = Path(args.pool).expanduser().resolve(strict=False)
+        key_json = Path(args.key_json).expanduser().resolve(strict=False)
+
+        report = lookup_artifact(
+            pool=pool,
+            stage=str(args.stage),
+            key_json=key_json,
+        )
+
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+
+    raise RuntimeError(f"Unsupported command: {args.cmd}")
+
+
+if __name__ == "__main__":
+    main()
