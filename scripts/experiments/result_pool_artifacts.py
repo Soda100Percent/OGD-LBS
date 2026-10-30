@@ -5,9 +5,8 @@ from __future__ import annotations
 """
 Stage artifact cache utilities for OGD-LBS local result pool.
 
-This module extends result_pool.py with stage-level artifact support.
-
-Supported artifact types in this first version:
+Supported artifact types:
+    - ssdr_data1
     - ssdr_data2
     - ssdr_data3
 
@@ -42,9 +41,9 @@ def ensure_repo_paths() -> Path:
         repo / "scripts" / "ssdr",
         repo / "scripts" / "data_prep",
     ]:
-        s = str(item)
-        if s not in sys.path:
-            sys.path.insert(0, s)
+        item_s = str(item)
+        if item_s not in sys.path:
+            sys.path.insert(0, item_s)
 
     return repo
 
@@ -54,38 +53,67 @@ REPO_ROOT = ensure_repo_paths()
 import result_pool as rp  # noqa: E402
 
 
-SSDR_DATA2_DIMENSIONS = [
+SSDR_DATA1_DIMENSIONS = [
     "artifact_type",
     "model",
 
-    "bone_variant",
+    "input_source_kind",
+    "input_dataset_version",
+
     "frame_sampling_policy",
     "max_frames",
     "target_frames",
+    "frame_sampling_config_name",
+    "frame_removal_idx_ranges",
+
+    "step00_code_version",
+    "step01_code_version",
+]
+
+SSDR_DATA1_DEFAULTS = {
+    "artifact_type": "ssdr_data1",
+
+    # Default to the commercial/DataPrep handoff source so older/minimal
+    # data2/data3 lookup keys that omit input_source_kind still match
+    # non-VRoid artifacts. VRoid cache-prep records should explicitly set
+    # input_source_kind="vroid_data0".
+    "input_source_kind": "fitbox_vdb",
+    "input_dataset_version": "v1",
+
+    "frame_sampling_policy": "target_200",
+    "max_frames": 210,
+    "target_frames": 200,
+    "frame_sampling_config_name": "default",
+    "frame_removal_idx_ranges": "",
+
+    "step00_code_version": "step00_v1",
+    "step01_code_version": "step01_v1",
+}
+
+SSDR_DATA2_DIMENSIONS = [
+    *SSDR_DATA1_DIMENSIONS,
+
+    "bone_variant",
 
     "alpha",
     "beta",
     "gamma",
     "step02_affinity_eps",
 
-    "step01_code_version",
     "step02_code_version",
 ]
 
 SSDR_DATA2_DEFAULTS = {
+    **SSDR_DATA1_DEFAULTS,
     "artifact_type": "ssdr_data2",
 
     "bone_variant": "default",
-    "frame_sampling_policy": "target_200",
-    "max_frames": 210,
-    "target_frames": 200,
 
     "alpha": 0.5,
     "beta": 0.3,
     "gamma": 0.2,
     "step02_affinity_eps": 1e-5,
 
-    "step01_code_version": "step01_v1",
     "step02_code_version": "step02_v1",
 }
 
@@ -111,6 +139,7 @@ SSDR_DATA3_DEFAULTS = {
 }
 
 STAGE_TO_PAYLOAD_DIR = {
+    "ssdr_data1": "data1",
     "ssdr_data2": "data2",
     "ssdr_data3": "data3",
 }
@@ -119,6 +148,11 @@ STAGE_TO_PAYLOAD_DIR = {
 def normalize_stage_name(stage: str) -> str:
     text = str(stage).strip()
     aliases = {
+        "data1": "ssdr_data1",
+        "ssdr_data1": "ssdr_data1",
+        "stage01": "ssdr_data1",
+        "stage01_data1": "ssdr_data1",
+
         "data2": "ssdr_data2",
         "ssdr_data2": "ssdr_data2",
         "stage02": "ssdr_data2",
@@ -135,12 +169,12 @@ def normalize_stage_name(stage: str) -> str:
 
 
 def supported_stages() -> list[str]:
-    return ["ssdr_data2", "ssdr_data3"]
+    return ["ssdr_data1", "ssdr_data2", "ssdr_data3"]
 
 
 def ensure_artifact_profiles(pool: Path) -> None:
     """
-    Ensure dimensions.json has ssdr_data2 and ssdr_data3 profiles.
+    Ensure dimensions.json has ssdr_data1, ssdr_data2, and ssdr_data3 profiles.
 
     This is intentionally non-destructive:
       - existing profiles are preserved
@@ -154,21 +188,28 @@ def ensure_artifact_profiles(pool: Path) -> None:
     profiles = dimensions_obj.setdefault("profiles", {})
     changed = False
 
-    if "ssdr_data2" not in profiles:
-        profiles["ssdr_data2"] = {
+    wanted = {
+        "ssdr_data1": {
+            "profile_version": 1,
+            "dimensions": list(SSDR_DATA1_DIMENSIONS),
+            "defaults": dict(SSDR_DATA1_DEFAULTS),
+        },
+        "ssdr_data2": {
             "profile_version": 1,
             "dimensions": list(SSDR_DATA2_DIMENSIONS),
             "defaults": dict(SSDR_DATA2_DEFAULTS),
-        }
-        changed = True
-
-    if "ssdr_data3" not in profiles:
-        profiles["ssdr_data3"] = {
+        },
+        "ssdr_data3": {
             "profile_version": 1,
             "dimensions": list(SSDR_DATA3_DIMENSIONS),
             "defaults": dict(SSDR_DATA3_DEFAULTS),
-        }
-        changed = True
+        },
+    }
+
+    for name, profile in wanted.items():
+        if name not in profiles:
+            profiles[name] = profile
+            changed = True
 
     if changed:
         dimensions_obj["profiles"] = profiles
@@ -176,6 +217,54 @@ def ensure_artifact_profiles(pool: Path) -> None:
 
         index["optional_fast_indexes"] = {}
         rp.save_index(pool, index)
+
+
+def case_dim_value(
+    case_cfg: dict[str, Any],
+    key: str,
+    default: Any = None,
+) -> Any:
+    """
+    Read artifact dimensions from several possible locations.
+
+    Preferred future shape:
+        case_config["artifact_dimensions"][key]
+
+    Also supports top-level keys for simple cache-prep jobs.
+    """
+    for container_key in ["artifact_dimensions", "dimensions", "stage_dimensions"]:
+        container = case_cfg.get(container_key)
+        if isinstance(container, dict) and key in container:
+            return container[key]
+
+    if key in case_cfg:
+        return case_cfg[key]
+
+    return default
+
+
+def infer_input_source_kind(case_cfg: dict[str, Any]) -> str:
+    value = case_dim_value(case_cfg, "input_source_kind", None)
+    if value is not None:
+        return str(value)
+
+    model = str(case_cfg.get("model", ""))
+    if model.startswith("Vroid_"):
+        return "vroid_data0"
+
+    return "fitbox_vdb"
+
+
+def infer_frame_sampling_config_name(case_cfg: dict[str, Any]) -> str:
+    value = case_dim_value(case_cfg, "frame_sampling_config_name", None)
+    if value is not None:
+        return str(value)
+
+    model = str(case_cfg.get("model", ""))
+    if model.startswith("Vroid_"):
+        return "frame_sampling_config_vroid.json"
+
+    return "default"
 
 
 def infer_bone_variant(dataset: dict[str, Any] | None) -> str:
@@ -199,7 +288,7 @@ def raw_stage_dims_from_case_config(
     config_defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     artifact_type = normalize_stage_name(artifact_type)
-    step04_config = dict(step04_config or {})
+    _step04_config = dict(step04_config or {})
     config_defaults = dict(config_defaults or {})
     dataset = dict(case_cfg.get("dataset") or {})
     eff = dict(case_cfg.get("effective_params") or {})
@@ -214,31 +303,110 @@ def raw_stage_dims_from_case_config(
         "artifact_type": artifact_type,
         "model": case_cfg.get("model"),
 
-        "bone_variant": infer_bone_variant(dataset),
-        "frame_sampling_policy": config_defaults.get("frame_sampling_policy"),
-        "max_frames": config_defaults.get("max_frames"),
-        "target_frames": config_defaults.get("target_frames"),
+        "input_source_kind": case_dim_value(
+            case_cfg,
+            "input_source_kind",
+            infer_input_source_kind(case_cfg),
+        ),
+        "input_dataset_version": case_dim_value(
+            case_cfg,
+            "input_dataset_version",
+            config_defaults.get("input_dataset_version"),
+        ),
 
-        "alpha": first(eff.get("alpha"), config_defaults.get("alpha")),
-        "beta": first(eff.get("beta"), config_defaults.get("beta")),
-        "gamma": first(eff.get("gamma"), config_defaults.get("gamma")),
-        "step02_affinity_eps": config_defaults.get("step02_affinity_eps"),
+        "frame_sampling_policy": case_dim_value(
+            case_cfg,
+            "frame_sampling_policy",
+            config_defaults.get("frame_sampling_policy"),
+        ),
+        "max_frames": case_dim_value(
+            case_cfg,
+            "max_frames",
+            config_defaults.get("max_frames"),
+        ),
+        "target_frames": case_dim_value(
+            case_cfg,
+            "target_frames",
+            config_defaults.get("target_frames"),
+        ),
+        "frame_sampling_config_name": case_dim_value(
+            case_cfg,
+            "frame_sampling_config_name",
+            infer_frame_sampling_config_name(case_cfg),
+        ),
+        "frame_removal_idx_ranges": case_dim_value(
+            case_cfg,
+            "frame_removal_idx_ranges",
+            config_defaults.get("frame_removal_idx_ranges"),
+        ),
 
-        "step01_code_version": config_defaults.get("step01_code_version"),
-        "step02_code_version": config_defaults.get("step02_code_version"),
+        "step00_code_version": case_dim_value(
+            case_cfg,
+            "step00_code_version",
+            config_defaults.get("step00_code_version"),
+        ),
+        "step01_code_version": case_dim_value(
+            case_cfg,
+            "step01_code_version",
+            config_defaults.get("step01_code_version"),
+        ),
     }
+
+    if artifact_type == "ssdr_data1":
+        return raw
+
+    raw.update(
+        {
+            "bone_variant": case_dim_value(
+                case_cfg,
+                "bone_variant",
+                infer_bone_variant(dataset),
+            ),
+
+            "alpha": first(eff.get("alpha"), case_dim_value(case_cfg, "alpha", None), config_defaults.get("alpha")),
+            "beta": first(eff.get("beta"), case_dim_value(case_cfg, "beta", None), config_defaults.get("beta")),
+            "gamma": first(eff.get("gamma"), case_dim_value(case_cfg, "gamma", None), config_defaults.get("gamma")),
+            "step02_affinity_eps": case_dim_value(
+                case_cfg,
+                "step02_affinity_eps",
+                config_defaults.get("step02_affinity_eps"),
+            ),
+
+            "step02_code_version": case_dim_value(
+                case_cfg,
+                "step02_code_version",
+                config_defaults.get("step02_code_version"),
+            ),
+        }
+    )
+
+    if artifact_type == "ssdr_data2":
+        return raw
 
     if artifact_type == "ssdr_data3":
         raw.update(
             {
-                "omega_b": first(eff.get("omega_b"), config_defaults.get("omega_b")),
-                "qem_config_name": infer_qem_config_name(dataset),
-                "qem_config_fingerprint": config_defaults.get("qem_config_fingerprint"),
-                "step03_code_version": config_defaults.get("step03_code_version"),
+                "omega_b": first(eff.get("omega_b"), case_dim_value(case_cfg, "omega_b", None), config_defaults.get("omega_b")),
+                "qem_config_name": case_dim_value(
+                    case_cfg,
+                    "qem_config_name",
+                    infer_qem_config_name(dataset),
+                ),
+                "qem_config_fingerprint": case_dim_value(
+                    case_cfg,
+                    "qem_config_fingerprint",
+                    config_defaults.get("qem_config_fingerprint"),
+                ),
+                "step03_code_version": case_dim_value(
+                    case_cfg,
+                    "step03_code_version",
+                    config_defaults.get("step03_code_version"),
+                ),
             }
         )
+        return raw
 
-    return raw
+    raise ValueError(f"Unsupported artifact type: {artifact_type}")
 
 
 def stage_payload_path(run_root: Path, artifact_type: str) -> Path:
