@@ -42,17 +42,41 @@ def dump_json(path: Path, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-class TestResultPool(unittest.TestCase):
-    def test_adaptive_tau_equivalence(self) -> None:
+def make_step04_config(s_max: int = 2) -> dict:
+    return {
+        "iter": 70,
+        "org_type": 3,
+        "opt_weight": True,
+        "input_poses": True,
+        "use_weight_mask": True,
+        "mask_mode": "adaptive",
+        "mask_threshold": -1.0,
+        "weight_solver": "simplex",
+        "bt_covariance_mode": "corrected",
+        "use_weight_smoothness": False,
+        "weights_smooth_step": 1.0,
+        "weight_soft_lock": 0.0,
+        "lambda_reg": 0.1,
+        "trans_affine": 0.0,
+        "trans_affine_norm": 4.0,
+        "roll_affinity": 0.0,
+        "roll_affinity_norm": 2.0,
+        "s_max": s_max,
+    }
+
+
+class TestResultPoolFlatV2(unittest.TestCase):
+    def test_adaptive_tau_equivalence_by_flat_match(self) -> None:
         rp = load_module()
 
         with tempfile.TemporaryDirectory(prefix="ogd_pool_") as td:
             pool = Path(td) / "pool"
             rp.init_pool(pool)
 
-            dims, profile, _index = rp.require_pool(pool)
+            dims, eq_profile, _index = rp.require_pool(pool)
 
             raw_a = {
+                "artifact_type": "ssdr_data4",
                 "model": "M",
                 "param": "tau",
                 "value": "adaptive",
@@ -61,6 +85,7 @@ class TestResultPool(unittest.TestCase):
                 "step04_mask_threshold": -1.0,
             }
             raw_b = {
+                "artifact_type": "ssdr_data4",
                 "model": "M",
                 "param": "tau",
                 "value": "adaptive",
@@ -69,12 +94,82 @@ class TestResultPool(unittest.TestCase):
                 "step04_mask_threshold": 0.123,
             }
 
-            _ra, ca, _ta, ha = rp.canonicalize_key(raw_a, dimensions_obj=dims, profile_obj=profile, context={})
-            _rb, cb, _tb, hb = rp.canonicalize_key(raw_b, dimensions_obj=dims, profile_obj=profile, context={})
+            na, _ta, fa = rp.normalize_dimensions(
+                raw_a,
+                dimensions_obj=dims,
+                equivalence_profile_obj=eq_profile,
+                profile_name="ssdr_data4",
+            )
+            nb, _tb, fb = rp.normalize_dimensions(
+                raw_b,
+                dimensions_obj=dims,
+                equivalence_profile_obj=eq_profile,
+                profile_name="ssdr_data4",
+            )
 
-            self.assertEqual(ha, hb)
-            self.assertIsNone(ca["dimensions"]["step04_mask_threshold"])
-            self.assertIsNone(cb["dimensions"]["step04_mask_threshold"])
+            self.assertEqual(na, nb)
+            self.assertEqual(fa, fb)
+            self.assertIsNone(na["step04_mask_threshold"])
+            self.assertIsNone(nb["step04_mask_threshold"])
+
+    def test_add_dimension_default_matches_old_record_without_rewrite(self) -> None:
+        rp = load_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_pool_dim_match_") as td:
+            root = Path(td)
+            pool = root / "pool"
+            rp.init_pool(pool)
+
+            # Manually create one old-style artifact record that lacks the future dimension.
+            dims_old = {
+                "artifact_type": "ssdr_data4",
+                "model": "M",
+                "param": "s_max",
+                "value": 2,
+                "s_max": 2,
+                "tau": "adaptive",
+                "step04_mask_mode": "adaptive",
+                "step04_mask_threshold": -1.0,
+            }
+
+            index_path = pool / "index.json"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+
+            artifact_id = "a000001"
+            adir = pool / "artifacts" / artifact_id
+            adir.mkdir(parents=True)
+
+            dump_json(adir / "raw_dimensions.json", {"dimensions": dims_old})
+            dump_json(adir / "artifact_manifest.json", {"artifact_id": artifact_id, "artifact_type": "ssdr_data4", "status": "succeeded"})
+
+            index["artifacts"][artifact_id] = {
+                "artifact_id": artifact_id,
+                "artifact_type": "ssdr_data4",
+                "status": "succeeded",
+                "artifact_dir": f"artifacts/{artifact_id}",
+                "dimension_fingerprint": "old",
+                "model": "M",
+                "param": "s_max",
+                "value": 2,
+            }
+            index_path.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+            # Add a new dimension with default zero. The old artifact file is not rewritten.
+            report = rp.add_dimension(pool, profile_name="ssdr_data4", name="new_dim", default=0)
+            self.assertTrue(report["changed"])
+
+            # Query with default new_dim should match old artifact.
+            query_default = dict(dims_old)
+            query_default["new_dim"] = 0
+            hits = rp.lookup_artifacts(pool=pool, raw_dims=query_default, profile_name="ssdr_data4")
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0]["artifact_id"], artifact_id)
+
+            # Query with non-default new_dim should not match.
+            query_non_default = dict(dims_old)
+            query_non_default["new_dim"] = 1
+            hits2 = rp.lookup_artifacts(pool=pool, raw_dims=query_non_default, profile_name="ssdr_data4")
+            self.assertEqual(len(hits2), 0)
 
     def test_ingest_and_plan_ofat_filters_existing_case(self) -> None:
         rp = load_module()
@@ -111,28 +206,7 @@ class TestResultPool(unittest.TestCase):
             (run_root / "data4").mkdir()
             dump_json(
                 run_root / "data4" / "step04_optimize_summary.json",
-                {
-                    "config": {
-                        "iter": 70,
-                        "org_type": 3,
-                        "opt_weight": True,
-                        "input_poses": True,
-                        "use_weight_mask": True,
-                        "mask_mode": "adaptive",
-                        "mask_threshold": -1.0,
-                        "weight_solver": "simplex",
-                        "bt_covariance_mode": "corrected",
-                        "use_weight_smoothness": False,
-                        "weights_smooth_step": 1.0,
-                        "weight_soft_lock": 0.0,
-                        "lambda_reg": 0.1,
-                        "trans_affine": 0.0,
-                        "trans_affine_norm": 4.0,
-                        "roll_affinity": 0.0,
-                        "roll_affinity_norm": 2.0,
-                        "s_max": 2,
-                    }
-                },
+                {"config": make_step04_config(s_max=2)},
             )
 
             rp.init_pool(pool)
@@ -159,25 +233,11 @@ class TestResultPool(unittest.TestCase):
                 "abc_coupling": {"mode": "keep_sum_one"},
                 "sweeps": {"s_max": [2, 4]},
                 "delta_sweeps_by_model": {},
-                "step04_defaults": {
-                    "iter": 70,
-                    "org_type": 3,
-                    "opt_weight": True,
-                    "input_poses": True,
-                    "use_weight_mask": True,
-                    "weight_solver": "simplex",
-                    "bt_covariance_mode": "corrected",
-                    "use_weight_smoothness": False,
-                    "weights_smooth_step": 1.0,
-                    "weight_soft_lock": 0.0,
-                    "lambda_reg": 0.1,
-                    "trans_affine": 0.0,
-                    "trans_affine_norm": 4.0,
-                    "roll_affinity": 0.0,
-                    "roll_affinity_norm": 2.0,
-                    "s_max": 4,
+                "step04_defaults": make_step04_config(s_max=4),
+                "ssdr_defaults": {
+                    "max_frames": 210,
+                    "target_frames": 200,
                 },
-                "ssdr_defaults": {},
             }
             cfg_path = root / "config.json"
             dump_json(cfg_path, cfg)
@@ -205,20 +265,15 @@ class TestResultPool(unittest.TestCase):
             self.assertEqual(manifest["cases"][0]["value"], 4)
             self.assertIn("--no_conda", manifest["cases"][0]["command"])
 
-    def test_add_dimension_updates_index(self) -> None:
+    def test_stats_empty_pool(self) -> None:
         rp = load_module()
 
-        with tempfile.TemporaryDirectory(prefix="ogd_pool_dim_") as td:
+        with tempfile.TemporaryDirectory(prefix="ogd_pool_stats_") as td:
             pool = Path(td) / "pool"
             rp.init_pool(pool)
-
-            # Empty pool should still accept dimension addition.
-            report = rp.add_dimension(pool, name="new_dimension", default=0)
-            self.assertEqual(report["updated_cases"], 0)
-
-            dims, _profile, _index = rp.require_pool(pool)
-            self.assertIn("new_dimension", dims["dimensions"])
-            self.assertEqual(dims["defaults"]["new_dimension"], 0)
+            st = rp.stats(pool)
+            self.assertEqual(st["artifact_count"], 0)
+            self.assertIn("ssdr_data4", st["profiles"])
 
 
 if __name__ == "__main__":

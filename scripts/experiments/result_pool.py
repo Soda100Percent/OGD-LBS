@@ -39,19 +39,29 @@ def ensure_repo_paths() -> Path:
 REPO_ROOT = ensure_repo_paths()
 
 
-DEFAULT_DIMENSIONS = [
+SSDR_DATA4_DIMENSIONS = [
+    "artifact_type",
     "experiment_family",
     "model",
     "param",
     "value",
 
+    "bone_variant",
+    "frame_sampling_policy",
+    "max_frames",
+    "target_frames",
+
     "alpha",
     "beta",
     "gamma",
+    "step02_affinity_eps",
+
+    "omega_b",
+    "qem_config_name",
+    "qem_config_fingerprint",
+
     "s_max",
     "tau",
-    "omega_b",
-
     "step04_iter",
     "step04_org_type",
     "step04_opt_weight",
@@ -69,18 +79,33 @@ DEFAULT_DIMENSIONS = [
     "step04_trans_affine_norm",
     "step04_roll_affinity",
     "step04_roll_affinity_norm",
+
+    "step01_code_version",
+    "step02_code_version",
+    "step03_code_version",
+    "step04_code_version",
 ]
 
-DEFAULTS = {
+SSDR_DATA4_DEFAULTS = {
+    "artifact_type": "ssdr_data4",
     "experiment_family": "ofat",
+
+    "bone_variant": "default",
+    "frame_sampling_policy": "target_200",
+    "max_frames": 210,
+    "target_frames": 200,
 
     "alpha": 0.5,
     "beta": 0.3,
     "gamma": 0.2,
+    "step02_affinity_eps": 1e-5,
+
+    "omega_b": 1000.0,
+    "qem_config_name": "default",
+    "qem_config_fingerprint": None,
+
     "s_max": 4,
     "tau": "adaptive",
-    "omega_b": 1000.0,
-
     "step04_iter": 70,
     "step04_org_type": 3,
     "step04_opt_weight": True,
@@ -98,6 +123,19 @@ DEFAULTS = {
     "step04_trans_affine_norm": 4.0,
     "step04_roll_affinity": 0.0,
     "step04_roll_affinity_norm": 2.0,
+
+    "step01_code_version": "step01_v1",
+    "step02_code_version": "step02_v1",
+    "step03_code_version": "step03_v1",
+    "step04_code_version": "step04_v1",
+}
+
+DEFAULT_PROFILES = {
+    "ssdr_data4": {
+        "profile_version": 2,
+        "dimensions": list(SSDR_DATA4_DIMENSIONS),
+        "defaults": dict(SSDR_DATA4_DEFAULTS),
+    }
 }
 
 DEFAULT_EQUIVALENCE_ITEMS = [
@@ -173,7 +211,13 @@ def json_safe(obj: Any) -> Any:
 
 
 def canonical_json(obj: Any) -> str:
-    return json.dumps(json_safe(obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        json_safe(obj),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def sha256_obj(obj: Any) -> str:
@@ -187,8 +231,18 @@ def get_pool_paths(pool: Path) -> dict[str, Path]:
         "dimensions": pool / "dimensions.json",
         "profile": pool / "equivalence_profile.json",
         "index": pool / "index.json",
-        "cases": pool / "cases",
+        "artifacts": pool / "artifacts",
     }
+
+
+def profile_fingerprint(profile: dict[str, Any]) -> str:
+    return sha256_obj(
+        {
+            "profile_version": profile.get("profile_version"),
+            "dimensions": profile.get("dimensions", []),
+            "defaults": profile.get("defaults", {}),
+        }
+    )
 
 
 def init_pool(pool: Path, *, force: bool = False) -> None:
@@ -197,15 +251,15 @@ def init_pool(pool: Path, *, force: bool = False) -> None:
     if pool.exists() and force:
         shutil.rmtree(pool)
 
-    paths["cases"].mkdir(parents=True, exist_ok=True)
+    paths["artifacts"].mkdir(parents=True, exist_ok=True)
 
     if not paths["manifest"].exists():
         dump_json(
             paths["manifest"],
             {
-                "schema": "ogd_lbs_result_pool_manifest_v1",
+                "schema": "ogd_lbs_result_pool_manifest_v2",
                 "created_at_utc": utc_now_iso(),
-                "description": "OGD-LBS local experiment result pool.",
+                "description": "OGD-LBS local experiment result/artifact pool using flat dimension matching.",
             },
         )
 
@@ -213,11 +267,12 @@ def init_pool(pool: Path, *, force: bool = False) -> None:
         dump_json(
             paths["dimensions"],
             {
-                "schema": "ogd_lbs_result_pool_dimensions_v1",
-                "dimensions": list(DEFAULT_DIMENSIONS),
-                "defaults": dict(DEFAULTS),
+                "schema": "ogd_lbs_result_pool_dimensions_v2",
+                "profiles": copy.deepcopy(DEFAULT_PROFILES),
             },
         )
+    else:
+        maybe_migrate_dimensions_to_v2(paths["dimensions"])
 
     if not paths["profile"].exists():
         dump_json(
@@ -233,11 +288,77 @@ def init_pool(pool: Path, *, force: bool = False) -> None:
         dump_json(
             paths["index"],
             {
-                "schema": "ogd_lbs_result_pool_index_v1",
+                "schema": "ogd_lbs_result_pool_index_v2",
                 "updated_at_utc": utc_now_iso(),
-                "cases": {},
+                "next_artifact_id": 1,
+                "artifacts": {},
+                "optional_fast_indexes": {},
             },
         )
+    else:
+        maybe_migrate_index_to_v2(paths["index"])
+
+
+def maybe_migrate_dimensions_to_v2(dimensions_path: Path) -> None:
+    obj = load_json(dimensions_path)
+    if not isinstance(obj, dict):
+        return
+
+    if obj.get("schema") == "ogd_lbs_result_pool_dimensions_v2" and "profiles" in obj:
+        return
+
+    # Best-effort conversion from v1 single dimension list to v2 ssdr_data4 profile.
+    dims = obj.get("dimensions", list(SSDR_DATA4_DIMENSIONS))
+    defaults = dict(SSDR_DATA4_DEFAULTS)
+    defaults.update(obj.get("defaults", {}))
+
+    converted = {
+        "schema": "ogd_lbs_result_pool_dimensions_v2",
+        "profiles": {
+            "ssdr_data4": {
+                "profile_version": 2,
+                "dimensions": list(dims),
+                "defaults": defaults,
+            }
+        },
+        "migrated_from": obj.get("schema", "unknown"),
+        "migrated_at_utc": utc_now_iso(),
+    }
+    dump_json(dimensions_path, converted)
+
+
+def maybe_migrate_index_to_v2(index_path: Path) -> None:
+    obj = load_json(index_path)
+    if not isinstance(obj, dict):
+        return
+
+    if obj.get("schema") == "ogd_lbs_result_pool_index_v2" and "artifacts" in obj:
+        return
+
+    # Keep existing content but move old cases under artifacts if present.
+    artifacts = {}
+    for i, (old_key, rec) in enumerate(sorted((obj.get("cases") or {}).items()), start=1):
+        artifact_id = f"a{i:06d}"
+        artifacts[artifact_id] = {
+            "artifact_id": artifact_id,
+            "legacy_key": old_key,
+            "artifact_type": "ssdr_data4",
+            "status": rec.get("status", "succeeded"),
+            "artifact_dir": rec.get("case_dir", ""),
+            "created_at_utc": rec.get("updated_at_utc", utc_now_iso()),
+            "dimension_fingerprint": old_key,
+            "migrated_from_v1": True,
+        }
+
+    converted = {
+        "schema": "ogd_lbs_result_pool_index_v2",
+        "updated_at_utc": utc_now_iso(),
+        "next_artifact_id": len(artifacts) + 1,
+        "artifacts": artifacts,
+        "optional_fast_indexes": {},
+        "migrated_from": obj.get("schema", "unknown"),
+    }
+    dump_json(index_path, converted)
 
 
 def require_pool(pool: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -247,6 +368,9 @@ def require_pool(pool: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, 
             f"Result pool is not initialized: {pool}\n"
             f"Run first: python scripts/experiments/result_pool.py init --pool {pool}"
         )
+
+    maybe_migrate_dimensions_to_v2(paths["dimensions"])
+    maybe_migrate_index_to_v2(paths["index"])
 
     dims = load_json(paths["dimensions"])
     profile = load_json(paths["profile"])
@@ -259,81 +383,171 @@ def save_index(pool: Path, index: dict[str, Any]) -> None:
     dump_json(get_pool_paths(pool)["index"], index)
 
 
-def apply_defaults(raw: dict[str, Any], dimensions_obj: dict[str, Any]) -> dict[str, Any]:
-    dims = list(dimensions_obj.get("dimensions", []))
-    defaults = dict(dimensions_obj.get("defaults", {}))
+def get_dimension_profile(dimensions_obj: dict[str, Any], profile_name: str = "ssdr_data4") -> dict[str, Any]:
+    profiles = dimensions_obj.get("profiles", {})
+    if profile_name not in profiles:
+        raise KeyError(f"Dimension profile not found: {profile_name}")
+    return profiles[profile_name]
+
+
+def normalize_dimensions(
+    raw_dims: dict[str, Any],
+    *,
+    dimensions_obj: dict[str, Any],
+    equivalence_profile_obj: dict[str, Any],
+    profile_name: str = "ssdr_data4",
+    context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    profile = get_dimension_profile(dimensions_obj, profile_name)
+    dim_names = list(profile.get("dimensions", []))
+    defaults = dict(profile.get("defaults", {}))
 
     out: dict[str, Any] = {}
-    for key in dims:
-        if key in raw and raw[key] is not None:
-            out[key] = raw[key]
+    for key in dim_names:
+        if key in raw_dims and raw_dims[key] is not None:
+            out[key] = raw_dims[key]
         else:
             out[key] = defaults.get(key)
 
-    return out
-
-
-def apply_equivalence_profile(
-    dims: dict[str, Any],
-    profile_obj: dict[str, Any],
-    *,
-    context: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    out = dict(dims)
     traces: list[dict[str, Any]] = []
+    ctx = dict(context or {})
+    ctx.setdefault("dimension_profile", profile_name)
 
-    for item in profile_obj.get("items", []):
+    for item in equivalence_profile_obj.get("items", []):
         module_name = str(item["module"])
         func_name = str(item["function"])
 
         module = importlib.import_module(module_name)
         func = getattr(module, func_name)
 
-        new_out, trace = func(out, context=context)
+        new_out, trace = func(out, context=ctx)
         trace = dict(trace)
         trace.setdefault("name", item.get("name"))
         trace.setdefault("version", item.get("version"))
         trace.setdefault("module", module_name)
         trace.setdefault("function", func_name)
 
-        out = dict(new_out)
+        # Keep only profile dimensions even if a rule adds temporary keys.
+        out = {k: new_out.get(k) for k in dim_names}
         traces.append(trace)
 
-    return out, traces
+    fingerprint = sha256_obj(
+        {
+            "schema": "ogd_lbs_dimension_fingerprint_v1",
+            "profile": profile_name,
+            "normalized_dimensions": out,
+        }
+    )
+    return out, traces, fingerprint
 
 
-def canonicalize_key(
-    raw_dims: dict[str, Any],
+def dimensions_equal(
+    query_raw: dict[str, Any],
+    record_raw: dict[str, Any],
     *,
     dimensions_obj: dict[str, Any],
-    profile_obj: dict[str, Any],
-    context: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str]:
-    with_defaults = apply_defaults(raw_dims, dimensions_obj)
-    canonical_dims, traces = apply_equivalence_profile(
-        with_defaults,
-        profile_obj,
-        context=context,
+    equivalence_profile_obj: dict[str, Any],
+    profile_name: str = "ssdr_data4",
+) -> bool:
+    q, _qt, _qh = normalize_dimensions(
+        query_raw,
+        dimensions_obj=dimensions_obj,
+        equivalence_profile_obj=equivalence_profile_obj,
+        profile_name=profile_name,
+        context={"source": "query"},
     )
+    r, _rt, _rh = normalize_dimensions(
+        record_raw,
+        dimensions_obj=dimensions_obj,
+        equivalence_profile_obj=equivalence_profile_obj,
+        profile_name=profile_name,
+        context={"source": "record"},
+    )
+    return q == r
 
-    key_obj = {
-        "schema": "ogd_lbs_result_pool_canonical_key_v1",
-        "dimensions": canonical_dims,
-        "equivalence_profile": profile_obj.get("profile_name", "unknown"),
-    }
-    h = sha256_obj(key_obj)
 
-    raw_key = {
-        "schema": "ogd_lbs_result_pool_raw_key_v1",
-        "dimensions": with_defaults,
-    }
+def allocate_artifact_id(index: dict[str, Any]) -> str:
+    n = int(index.get("next_artifact_id", 1))
+    index["next_artifact_id"] = n + 1
+    return f"a{n:06d}"
 
-    canonical_key = {
-        **key_obj,
-        "case_hash": h,
-    }
 
-    return raw_key, canonical_key, traces, h
+def artifact_dir(pool: Path, artifact_id: str) -> Path:
+    return get_pool_paths(pool)["artifacts"] / artifact_id
+
+
+def load_artifact_raw_dimensions(pool: Path, artifact_id: str, rec: dict[str, Any]) -> dict[str, Any] | None:
+    adir = artifact_dir(pool, artifact_id)
+
+    candidates = [
+        adir / "raw_dimensions.json",
+        adir / "canonical_dimensions.json",
+        adir / "raw_key.json",
+        adir / "canonical_key.json",
+    ]
+
+    for p in candidates:
+        if not p.is_file():
+            continue
+        try:
+            obj = load_json(p)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+
+        if "dimensions" in obj and isinstance(obj["dimensions"], dict):
+            return dict(obj["dimensions"])
+
+        if "canonical_dimensions" in obj and isinstance(obj["canonical_dimensions"], dict):
+            return dict(obj["canonical_dimensions"])
+
+        if "raw_dimensions" in obj and isinstance(obj["raw_dimensions"], dict):
+            return dict(obj["raw_dimensions"])
+
+    # v1 migrated artifact may have missing files. No match by default.
+    return None
+
+
+def lookup_artifacts(
+    *,
+    pool: Path,
+    raw_dims: dict[str, Any],
+    profile_name: str = "ssdr_data4",
+) -> list[dict[str, Any]]:
+    init_pool(pool, force=False)
+    dimensions_obj, eq_profile, index = require_pool(pool)
+
+    matches: list[dict[str, Any]] = []
+
+    for artifact_id, rec in sorted(index.get("artifacts", {}).items()):
+        if rec.get("status") != "succeeded":
+            continue
+
+        artifact_type = rec.get("artifact_type", "ssdr_data4")
+        if artifact_type != profile_name:
+            continue
+
+        record_raw = load_artifact_raw_dimensions(pool, artifact_id, rec)
+        if record_raw is None:
+            continue
+
+        if dimensions_equal(
+            raw_dims,
+            record_raw,
+            dimensions_obj=dimensions_obj,
+            equivalence_profile_obj=eq_profile,
+            profile_name=profile_name,
+        ):
+            matches.append(
+                {
+                    "artifact_id": artifact_id,
+                    "record": rec,
+                    "artifact_dir": str(artifact_dir(pool, artifact_id)),
+                }
+            )
+
+    return matches
 
 
 def find_step04_summary(run_root: Path) -> Path | None:
@@ -364,6 +578,14 @@ def load_summary_config(run_root: Path) -> dict[str, Any]:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def infer_qem_config_name(dataset: dict[str, Any] | None) -> str:
+    dataset = dataset or {}
+    qem = dataset.get("qem_config")
+    if qem is None or str(qem).strip() == "":
+        return "default"
+    return Path(str(qem)).name
+
+
 def raw_dims_from_case_config(
     case_cfg: dict[str, Any],
     *,
@@ -372,7 +594,7 @@ def raw_dims_from_case_config(
 ) -> dict[str, Any]:
     step04_config = dict(step04_config or {})
     config_defaults = dict(config_defaults or {})
-
+    dataset = dict(case_cfg.get("dataset") or {})
     eff = dict(case_cfg.get("effective_params") or {})
 
     def first(*values: Any) -> Any:
@@ -381,18 +603,31 @@ def raw_dims_from_case_config(
                 return v
         return None
 
+    tau = first(eff.get("tau"), config_defaults.get("tau"))
+
     raw: dict[str, Any] = {
+        "artifact_type": "ssdr_data4",
         "experiment_family": "ofat",
         "model": case_cfg.get("model"),
         "param": case_cfg.get("param"),
         "value": case_cfg.get("value"),
 
+        "bone_variant": dataset.get("variant") or "default",
+        "frame_sampling_policy": "target_200",
+        "max_frames": config_defaults.get("max_frames"),
+        "target_frames": config_defaults.get("target_frames"),
+
         "alpha": first(eff.get("alpha"), config_defaults.get("alpha")),
         "beta": first(eff.get("beta"), config_defaults.get("beta")),
         "gamma": first(eff.get("gamma"), config_defaults.get("gamma")),
-        "s_max": first(eff.get("s_max"), step04_config.get("s_max"), config_defaults.get("s_max")),
-        "tau": first(eff.get("tau"), config_defaults.get("tau")),
+        "step02_affinity_eps": config_defaults.get("step02_affinity_eps"),
+
         "omega_b": first(eff.get("omega_b"), config_defaults.get("omega_b")),
+        "qem_config_name": infer_qem_config_name(dataset),
+        "qem_config_fingerprint": None,
+
+        "s_max": first(eff.get("s_max"), step04_config.get("s_max"), config_defaults.get("s_max")),
+        "tau": tau,
 
         "step04_iter": step04_config.get("iter"),
         "step04_org_type": step04_config.get("org_type"),
@@ -413,7 +648,6 @@ def raw_dims_from_case_config(
         "step04_roll_affinity_norm": step04_config.get("roll_affinity_norm"),
     }
 
-    tau = raw.get("tau")
     if raw.get("step04_mask_mode") is None:
         if str(tau).strip().lower() == "adaptive":
             raw["step04_mask_mode"] = "adaptive"
@@ -432,7 +666,7 @@ def raw_dims_from_case_config(
     return raw
 
 
-def build_case_from_rps_case(case: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+def build_raw_dims_from_rps_case(case: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
     case_cfg = {
         "schema": case.get("schema", "ogd_lbs_ofat_case_v1"),
         "model": case.get("model"),
@@ -443,9 +677,20 @@ def build_case_from_rps_case(case: dict[str, Any], cfg: dict[str, Any]) -> dict[
         "effective_params": case.get("effective_params", {}),
         "dataset": case.get("dataset", {}),
     }
+
     step04_config = dict(cfg.get("step04_defaults") or {})
     defaults = dict(cfg.get("defaults") or {})
-    return raw_dims_from_case_config(case_cfg, step04_config=step04_config, config_defaults=defaults)
+
+    ssdr_defaults = dict(cfg.get("ssdr_defaults") or {})
+    defaults.setdefault("max_frames", ssdr_defaults.get("max_frames", 210))
+    defaults.setdefault("target_frames", ssdr_defaults.get("target_frames", 200))
+    defaults.setdefault("step02_affinity_eps", 1e-5)
+
+    return raw_dims_from_case_config(
+        case_cfg,
+        step04_config=step04_config,
+        config_defaults=defaults,
+    )
 
 
 def iter_ofat_run_roots(input_root: Path) -> list[Path]:
@@ -465,8 +710,7 @@ def ingest_ofat(
     allow_no_done: bool = False,
 ) -> dict[str, Any]:
     init_pool(pool, force=False)
-    dimensions_obj, profile_obj, index = require_pool(pool)
-    paths = get_pool_paths(pool)
+    dimensions_obj, eq_profile, index = require_pool(pool)
 
     run_roots = iter_ofat_run_roots(input_root)
 
@@ -488,81 +732,107 @@ def ingest_ofat(
         step04_config = load_summary_config(run_root)
         raw_dims = raw_dims_from_case_config(case_cfg, step04_config=step04_config)
 
-        raw_key, canonical_key, traces, case_hash = canonicalize_key(
+        normalized_dims, traces, fingerprint = normalize_dimensions(
             raw_dims,
             dimensions_obj=dimensions_obj,
-            profile_obj=profile_obj,
+            equivalence_profile_obj=eq_profile,
+            profile_name="ssdr_data4",
             context={
                 "source": "ingest-ofat",
                 "run_root": str(run_root),
-                "case_config_path": str(case_cfg_path),
             },
         )
 
-        case_dir = paths["cases"] / case_hash
+        existing = lookup_artifacts(pool=pool, raw_dims=raw_dims, profile_name="ssdr_data4")
 
-        if case_hash in index.get("cases", {}) and case_dir.exists() and not overwrite:
+        if existing and not overwrite:
             skipped_existing += 1
             records.append(
                 {
-                    "case_hash": case_hash,
+                    "artifact_id": existing[0]["artifact_id"],
+                    "dimension_fingerprint": fingerprint,
                     "run_root": str(run_root),
                     "status": "skipped_existing",
                 }
             )
             continue
 
-        case_dir.mkdir(parents=True, exist_ok=True)
+        if existing and overwrite:
+            artifact_id = existing[0]["artifact_id"]
+        else:
+            artifact_id = allocate_artifact_id(index)
 
-        dump_json(case_dir / "raw_key.json", raw_key)
-        dump_json(case_dir / "canonical_key.json", canonical_key)
-        dump_json(case_dir / "override_trace.json", traces)
-        dump_json(case_dir / "source_info.json", {
+        adir = artifact_dir(pool, artifact_id)
+        if adir.exists() and overwrite:
+            shutil.rmtree(adir)
+        adir.mkdir(parents=True, exist_ok=True)
+
+        dump_json(adir / "raw_dimensions.json", {
+            "schema": "ogd_lbs_result_pool_raw_dimensions_v1",
+            "dimensions": raw_dims,
+        })
+        dump_json(adir / "canonical_dimensions.json", {
+            "schema": "ogd_lbs_result_pool_canonical_dimensions_v1",
+            "profile": "ssdr_data4",
+            "dimensions": normalized_dims,
+            "dimension_fingerprint": fingerprint,
+        })
+        dump_json(adir / "override_trace.json", traces)
+        dump_json(adir / "source_info.json", {
             "source_run_root": str(run_root),
             "source_input_root": str(input_root),
             "ingested_at_utc": utc_now_iso(),
         })
 
-        shutil.copy2(case_cfg_path, case_dir / "case_config.json")
-        shutil.copy2(metrics_path, case_dir / "metrics_04.json")
+        shutil.copy2(case_cfg_path, adir / "case_config.json")
+        shutil.copy2(metrics_path, adir / "metrics_04.json")
 
         summary_path = find_step04_summary(run_root)
         if summary_path:
-            shutil.copy2(summary_path, case_dir / "step04_optimize_summary.json")
+            shutil.copy2(summary_path, adir / "step04_optimize_summary.json")
 
         if done_path.exists():
-            shutil.copy2(done_path, case_dir / "done")
+            shutil.copy2(done_path, adir / "done")
 
-        dump_json(case_dir / "done.json", {
-            "case_hash": case_hash,
+        dump_json(adir / "artifact_manifest.json", {
+            "schema": "ogd_lbs_result_pool_artifact_manifest_v1",
+            "artifact_id": artifact_id,
+            "artifact_type": "ssdr_data4",
             "status": "succeeded",
+            "dimension_fingerprint": fingerprint,
             "created_at_utc": utc_now_iso(),
             "source_run_root": str(run_root),
         })
 
-        index.setdefault("cases", {})[case_hash] = {
+        index.setdefault("artifacts", {})[artifact_id] = {
+            "artifact_id": artifact_id,
+            "artifact_type": "ssdr_data4",
             "status": "succeeded",
-            "model": raw_key["dimensions"].get("model"),
-            "param": raw_key["dimensions"].get("param"),
-            "value": raw_key["dimensions"].get("value"),
-            "case_dir": str(case_dir.relative_to(pool)),
-            "source_run_root": str(run_root),
+            "artifact_dir": str(adir.relative_to(pool)),
+            "created_at_utc": utc_now_iso(),
             "updated_at_utc": utc_now_iso(),
+            "dimension_fingerprint": fingerprint,
+            "model": normalized_dims.get("model"),
+            "param": normalized_dims.get("param"),
+            "value": normalized_dims.get("value"),
         }
 
         ingested += 1
         records.append(
             {
-                "case_hash": case_hash,
+                "artifact_id": artifact_id,
+                "dimension_fingerprint": fingerprint,
                 "run_root": str(run_root),
                 "status": "ingested",
             }
         )
 
+    # Any ingest invalidates optional indexes because pool contents changed.
+    index["optional_fast_indexes"] = {}
     save_index(pool, index)
 
-    report = {
-        "schema": "ogd_lbs_result_pool_ingest_report_v1",
+    return {
+        "schema": "ogd_lbs_result_pool_ingest_report_v2",
         "pool": str(pool),
         "input_root": str(input_root),
         "run_root_count": len(run_roots),
@@ -571,12 +841,12 @@ def ingest_ofat(
         "skipped_no_done": skipped_no_done,
         "records": records,
     }
-    return report
 
 
 def make_single_case_config(cfg: dict[str, Any], case: dict[str, Any], output_root: str | None) -> dict[str, Any]:
     single = copy.deepcopy(cfg)
     single["datasets"] = [copy.deepcopy(case["dataset"])]
+
     if output_root:
         single["output_root"] = output_root
 
@@ -609,7 +879,7 @@ def plan_ofat(
     import run_param_sweep as rps  # type: ignore
 
     init_pool(pool, force=False)
-    dimensions_obj, profile_obj, index = require_pool(pool)
+    dimensions_obj, eq_profile, _index = require_pool(pool)
 
     cfg_raw = rps.load_json(config_path)
     cfg = rps.normalize_config(cfg_raw, output_root_override=output_root)
@@ -624,15 +894,16 @@ def plan_ofat(
     logs_dir = output_plan_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    hit_records = []
-    miss_cases = []
+    hit_records: list[dict[str, Any]] = []
+    miss_cases: list[dict[str, Any]] = []
 
     for idx, case in enumerate(cases):
-        raw_dims = build_case_from_rps_case(case, cfg)
-        raw_key, canonical_key, traces, case_hash = canonicalize_key(
+        raw_dims = build_raw_dims_from_rps_case(case, cfg)
+        normalized_dims, traces, fingerprint = normalize_dimensions(
             raw_dims,
             dimensions_obj=dimensions_obj,
-            profile_obj=profile_obj,
+            equivalence_profile_obj=eq_profile,
+            profile_name="ssdr_data4",
             context={
                 "source": "plan-ofat",
                 "config": str(config_path),
@@ -646,23 +917,25 @@ def plan_ofat(
             "param": case.get("param"),
             "value": case.get("value"),
             "case_id": case.get("case_id"),
-            "case_hash": case_hash,
-            "raw_dimensions": raw_key["dimensions"],
-            "canonical_dimensions": canonical_key["dimensions"],
+            "dimension_fingerprint": fingerprint,
+            "raw_dimensions": raw_dims,
+            "canonical_dimensions": normalized_dims,
             "override_trace": traces,
         }
 
-        if case_hash in index.get("cases", {}):
+        hits = lookup_artifacts(pool=pool, raw_dims=raw_dims, profile_name="ssdr_data4")
+
+        if hits:
             rec = dict(record_base)
             rec["pool_hit"] = True
-            rec["pool_record"] = index["cases"][case_hash]
+            rec["pool_artifacts"] = hits
             hit_records.append(rec)
             continue
 
         safe = f"case_{len(miss_cases):05d}_{case['model']}_{case['param']}_{rps.slugify(case['value'])}"
         single_cfg_path = single_cfg_dir / f"{safe}.json"
         single_cfg = make_single_case_config(cfg, case, output_root)
-        rps.dump_json(single_cfg_path, single_cfg)
+        dump_json(single_cfg_path, single_cfg)
 
         cmd = [
             sys.executable,
@@ -699,6 +972,7 @@ def plan_ofat(
             "candidate_count": len(cases),
             "hit_count": len(hit_records),
             "miss_count": len(miss_cases),
+            "match_mode": "flat_dimensions_linear_scan",
         },
         "case_count": len(miss_cases),
         "cases": miss_cases,
@@ -706,12 +980,13 @@ def plan_ofat(
     dump_json(output_manifest, manifest)
 
     report = {
-        "schema": "ogd_lbs_result_pool_filter_report_v1",
+        "schema": "ogd_lbs_result_pool_filter_report_v2",
         "source_config": str(config_path),
         "pool": str(pool),
         "candidate_count": len(cases),
         "hit_count": len(hit_records),
         "miss_count": len(miss_cases),
+        "match_mode": "flat_dimensions_linear_scan",
         "hits": hit_records,
         "manifest": str(output_manifest),
         "plan_dir": str(output_plan_dir),
@@ -721,95 +996,86 @@ def plan_ofat(
     return report
 
 
-def add_dimension(pool: Path, *, name: str, default: Any) -> dict[str, Any]:
+def add_dimension(pool: Path, *, profile_name: str, name: str, default: Any) -> dict[str, Any]:
     init_pool(pool, force=False)
-    dimensions_obj, profile_obj, index = require_pool(pool)
+    dimensions_obj, _profile, index = require_pool(pool)
     paths = get_pool_paths(pool)
 
-    dims = list(dimensions_obj.get("dimensions", []))
-    defaults = dict(dimensions_obj.get("defaults", {}))
+    profiles = dimensions_obj.setdefault("profiles", {})
+    if profile_name not in profiles:
+        raise KeyError(f"Unknown dimension profile: {profile_name}")
+
+    prof = profiles[profile_name]
+    dims = list(prof.get("dimensions", []))
+    defaults = dict(prof.get("defaults", {}))
+
+    changed = False
 
     if name not in dims:
         dims.append(name)
-    defaults[name] = default
+        changed = True
 
-    dimensions_obj["dimensions"] = dims
-    dimensions_obj["defaults"] = defaults
+    if defaults.get(name) != default:
+        defaults[name] = default
+        changed = True
+
+    prof["dimensions"] = dims
+    prof["defaults"] = defaults
+    prof["profile_version"] = int(prof.get("profile_version", 1)) + (1 if changed else 0)
+
+    dimensions_obj["profiles"] = profiles
     dump_json(paths["dimensions"], dimensions_obj)
 
-    updated = 0
-    new_cases_index: dict[str, Any] = {}
-
-    for old_hash, rec in list(index.get("cases", {}).items()):
-        case_dir = pool / rec["case_dir"]
-        canon_path = case_dir / "canonical_key.json"
-        raw_path = case_dir / "raw_key.json"
-
-        if not canon_path.is_file():
-            continue
-
-        raw_key = load_json(raw_path) if raw_path.is_file() else None
-        canonical_key = load_json(canon_path)
-
-        raw_dims = dict((raw_key or canonical_key).get("dimensions", {}))
-        if name not in raw_dims:
-            raw_dims[name] = default
-
-        new_raw, new_canon, traces, new_hash = canonicalize_key(
-            raw_dims,
-            dimensions_obj=dimensions_obj,
-            profile_obj=profile_obj,
-            context={"source": "add-dimension", "old_hash": old_hash},
-        )
-
-        new_canon["legacy_hashes"] = sorted(set([old_hash] + list(canonical_key.get("legacy_hashes", []))))
-
-        dump_json(raw_path, new_raw)
-        dump_json(canon_path, new_canon)
-        dump_json(case_dir / "override_trace.json", traces)
-
-        new_rec = dict(rec)
-        new_rec["current_case_hash"] = new_hash
-        new_rec["legacy_hashes"] = new_canon["legacy_hashes"]
-        new_rec["updated_at_utc"] = utc_now_iso()
-
-        new_cases_index[new_hash] = new_rec
-        updated += 1
-
-    index["cases"] = new_cases_index
+    # Dimensions changed; optional fast indexes are no longer trusted.
+    index["optional_fast_indexes"] = {}
     save_index(pool, index)
 
     return {
-        "schema": "ogd_lbs_result_pool_add_dimension_report_v1",
+        "schema": "ogd_lbs_result_pool_add_dimension_report_v2",
         "pool": str(pool),
+        "profile": profile_name,
         "dimension": name,
         "default": default,
-        "updated_cases": updated,
+        "changed": changed,
+        "note": "Existing artifact files are not rewritten; missing dimensions are filled from defaults at query time.",
     }
 
 
 def stats(pool: Path) -> dict[str, Any]:
     init_pool(pool, force=False)
-    dimensions_obj, profile_obj, index = require_pool(pool)
+    dimensions_obj, eq_profile, index = require_pool(pool)
 
-    cases = index.get("cases", {})
+    artifacts = index.get("artifacts", {})
     by_model: dict[str, int] = {}
     by_param: dict[str, int] = {}
+    by_type: dict[str, int] = {}
 
-    for rec in cases.values():
+    for artifact_id, rec in artifacts.items():
+        atype = str(rec.get("artifact_type", "<unknown>"))
         model = str(rec.get("model", "<unknown>"))
         param = str(rec.get("param", "<unknown>"))
+
+        by_type[atype] = by_type.get(atype, 0) + 1
         by_model[model] = by_model.get(model, 0) + 1
         by_param[param] = by_param.get(param, 0) + 1
 
     return {
-        "schema": "ogd_lbs_result_pool_stats_v1",
+        "schema": "ogd_lbs_result_pool_stats_v2",
         "pool": str(pool),
-        "case_count": len(cases),
+        "artifact_count": len(artifacts),
+        "by_artifact_type": dict(sorted(by_type.items())),
         "by_model": dict(sorted(by_model.items())),
         "by_param": dict(sorted(by_param.items())),
-        "dimensions": dimensions_obj.get("dimensions", []),
-        "equivalence_profile": profile_obj.get("profile_name", "unknown"),
+        "profiles": {
+            name: {
+                "profile_version": prof.get("profile_version"),
+                "dimension_count": len(prof.get("dimensions", [])),
+                "profile_fingerprint": profile_fingerprint(prof),
+            }
+            for name, prof in (dimensions_obj.get("profiles") or {}).items()
+        },
+        "equivalence_profile": eq_profile.get("profile_name", "unknown"),
+        "match_mode": "flat_dimensions_linear_scan",
     }
 
 
@@ -819,7 +1085,7 @@ def parse_value(text: str) -> Any:
     if text.lower() in {"none", "null"}:
         return None
     try:
-        if "." in text:
+        if "." in text or "e" in text.lower():
             return float(text)
         return int(text)
     except Exception:
@@ -856,6 +1122,7 @@ def parse_args() -> argparse.Namespace:
 
     p = sub.add_parser("add-dimension")
     p.add_argument("--pool", required=True)
+    p.add_argument("--profile", default="ssdr_data4")
     p.add_argument("--name", required=True)
     p.add_argument("--default", required=True)
 
@@ -900,6 +1167,7 @@ def main() -> None:
     elif args.cmd == "add-dimension":
         report = add_dimension(
             pool=pool,
+            profile_name=str(args.profile),
             name=str(args.name),
             default=parse_value(str(args.default)),
         )
