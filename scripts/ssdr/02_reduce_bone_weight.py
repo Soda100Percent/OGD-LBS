@@ -1111,9 +1111,9 @@ def main() -> None:
         help="Do not fail if requested extra-remove bones are missing from the selected base variant.",
     )
 
-    parser.add_argument("--par_weight", type=float, default=0.5)
-    parser.add_argument("--bone_weight", type=float, default=0.3)
-    parser.add_argument("--child_weight", type=float, default=0.2)
+    parser.add_argument("--par_weight", "--alpha", dest="par_weight", type=float, default=0.5)
+    parser.add_argument("--bone_weight", "--beta", dest="bone_weight", type=float, default=0.3)
+    parser.add_argument("--child_weight", "--gamma", dest="child_weight", type=float, default=0.2)
     parser.add_argument("--affinity_eps", type=float, default=1e-5)
 
     parser.add_argument("--max_workers", type=int, default=None)

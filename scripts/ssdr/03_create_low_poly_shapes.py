@@ -673,6 +673,35 @@ def process_single_mesh(
 
     mesh_obj[KEY_VERTEX_BONE_WEIGHTS] = safe_normalize_weights(result.vertex_attributes["vbw"])
 
+    # Persist QEM lineage so downstream experiments can reuse the exact
+    # train-fold low-poly topology on held-out test motions.
+    mesh_obj["qem_vertex_map"] = np.asarray(result.vertex_map, dtype=np.int64)
+    mesh_obj["qem_face_map"] = (
+        None
+        if result.face_map is None
+        else np.asarray(result.face_map, dtype=np.int64)
+    )
+    mesh_obj["qem_lineage"] = {
+        "schema": "ogd_lbs_qem_lineage_v1",
+        "source_mesh": str(mesh_path),
+        "mesh_name": mesh_name,
+        "input_vertices": int(input_vertices),
+        "input_faces": int(input_faces),
+        "qem_input_faces": int(qem_input_faces),
+        "target_faces": int(stats.target_faces),
+        "actual_faces": int(stats.actual_faces),
+        "target_source": str(target_source),
+        "stop_reason": str(stats.stop_reason),
+        "vertex_map_semantics": (
+            "qem_vertex_map maps output low-poly vertex index to the input "
+            "triangulated data2 vertex index."
+        ),
+        "face_map_semantics": (
+            "qem_face_map maps output low-poly face index to the input "
+            "triangulated data2 face index when available."
+        ),
+    }
+
     if validate_output:
         validate_fitbox_mesh(
             mesh_obj,
@@ -696,6 +725,10 @@ def process_single_mesh(
         "triangulation": triangulation_info,
         "target_faces": int(stats.target_faces),
         "actual_faces": int(stats.actual_faces),
+        "has_qem_vertex_map": bool(result.vertex_map is not None),
+        "qem_vertex_map_length": int(0 if result.vertex_map is None else len(result.vertex_map)),
+        "has_qem_face_map": bool(result.face_map is not None),
+        "qem_face_map_length": int(0 if result.face_map is None else len(result.face_map)),
         "target_source": target_source,
         "simp_rate_base": float(cfg["simp_rate_base"]),
         "simp_rate_multiplier": float(cfg.get("simp_rate_multiplier", 1.0)),

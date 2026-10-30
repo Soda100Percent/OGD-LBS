@@ -1,0 +1,110 @@
+{
+    "schema": "ogd_lbs_cv_4fold_config_v1",
+    "description": "4-fold CV config for unseen-motion generalization. Test folds reuse train Step03 topology and run Step04 with freeze_weights.",
+    "output_root": "/workspace/ogd_experiments/cv4",
+    "conda_env": "lao-lbs",
+    "kfold": 4,
+    "special_train_ranges": [],
+    "datasets": [
+        {
+            "model": "Vroid_18",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_18/ssdr_work_dir",
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json"
+        },
+        {
+            "model": "Vroid_19",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_19/ssdr_work_dir",
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json"
+        },
+        {
+            "model": "Vroid_20",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_20/ssdr_work_dir",
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json"
+        },
+        {
+            "model": "Griffin_A2",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Griffin_A2/ssdr_work_dir",
+            "qem_config": null
+        },
+        {
+            "model": "Winter_Samurai",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir",
+            "qem_config": null
+        }
+    ],
+    "ssdr_defaults": {
+        "max_workers": 16,
+        "qem_max_workers": 16
+    },
+    "step02_defaults": {
+        "alpha": 0.5,
+        "beta": 0.3,
+        "gamma": 0.2,
+        "max_workers": 16
+    },
+    "step03_defaults": {
+        "omega_b": 1000.0,
+        "max_workers": 16
+    },
+    "step04_train": {
+        "iter": 70,
+        "print_every_n": 5,
+        "org_type": 3,
+        "opt_weight": true,
+        "input_poses": true,
+        "use_weight_mask": true,
+        "weight_solver": "simplex",
+        "s_max": 4,
+        "tau": "adaptive",
+        "use_weight_smoothness": false,
+        "weights_smooth_step": 1.0,
+        "weight_soft_lock": 0.0,
+        "lambda_reg": 0.1,
+        "bt_covariance_mode": "corrected",
+        "trans_affine": 0.0,
+        "trans_affine_norm": 4.0,
+        "roll_affinity": 0.0,
+        "roll_affinity_norm": 2.0,
+        "eval_mesh_health": true,
+        "health_level": 1,
+        "health_every": 5,
+        "health_weight_scheme": "uniform",
+        "eval_bone_health": true,
+        "bone_health_every": 5,
+        "max_workers": 16,
+        "validate_output": true,
+        "weak_validate": false,
+        "save_intermediate": false
+    },
+    "step04_test": {
+        "iter": 70,
+        "print_every_n": 5,
+        "org_type": 3,
+        "opt_weight": false,
+        "freeze_weights": true,
+        "input_poses": true,
+        "use_weight_mask": true,
+        "weight_solver": "simplex",
+        "s_max": 4,
+        "tau": "adaptive",
+        "use_weight_smoothness": false,
+        "weights_smooth_step": 1.0,
+        "weight_soft_lock": 0.0,
+        "lambda_reg": 0.1,
+        "bt_covariance_mode": "corrected",
+        "trans_affine": 0.0,
+        "trans_affine_norm": 4.0,
+        "roll_affinity": 0.0,
+        "roll_affinity_norm": 2.0,
+        "eval_mesh_health": true,
+        "health_level": 1,
+        "health_every": 5,
+        "health_weight_scheme": "uniform",
+        "eval_bone_health": true,
+        "bone_health_every": 5,
+        "max_workers": 16,
+        "validate_output": true,
+        "weak_validate": false,
+        "save_intermediate": false
+    }
+}

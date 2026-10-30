@@ -287,6 +287,10 @@ def optimize_weight_and_bone_trans_tree(
     opt_weight: bool,
     input_poses: bool,
     use_weight_mask: bool,
+    s_max: int,
+    mask_mode: str,
+    mask_threshold: float,
+    freeze_weights: bool,
     weight_solver: str,
     use_weight_smoothness: bool,
     weights_smooth_step: float,
@@ -443,7 +447,14 @@ def optimize_weight_and_bone_trans_tree(
             else:
                 health_pre_list.append(None)
 
-            vbw_mask = build_weight_mask(mesh_obj, vbw, bool(use_weight_mask), name)
+            vbw_mask = build_weight_mask(
+                mesh_obj,
+                vbw,
+                bool(use_weight_mask),
+                name,
+                mask_mode=str(mask_mode),
+                mask_threshold=float(mask_threshold),
+            )
 
             v_id_from = v_cb.shape[0]
             v_idxs_list.append(np.arange(v_id_from, v_id_from + rest_v.shape[0], dtype=np.int64))
@@ -477,6 +488,10 @@ def optimize_weight_and_bone_trans_tree(
     log(f"  opt_weight       : {opt_weight}")
     log(f"  input_poses      : {input_poses}")
     log(f"  use_weight_mask  : {use_weight_mask}")
+    log(f"  s_max            : {s_max}")
+    log(f"  mask_mode        : {mask_mode}")
+    log(f"  mask_threshold   : {mask_threshold}")
+    log(f"  freeze_weights   : {freeze_weights}")
     log(f"  weight_solver    : {weight_solver}")
     log(f"  max_workers      : {max_workers}")
     log(f"  fixed_bones      : {sorted(fixed_bones)}")
@@ -485,7 +500,9 @@ def optimize_weight_and_bone_trans_tree(
 
     with Timer("time_04_optimization_loop"):
         org_loss_array = np.zeros((max_iter, n_p), dtype=np.float64)
-        sparseness = 4
+        sparseness = int(s_max)
+        if sparseness <= 0:
+            fail(f"s_max must be positive, got {s_max}")
 
         loss_buffer: dict[str, list[float]] = {
             "err": [],
@@ -637,6 +654,10 @@ def optimize_weight_and_bone_trans_tree(
                 opt_weight=opt_weight,
                 baked_schedule=baked_schedule,
             )
+
+            if bool(freeze_weights):
+                to_opt_weight = False
+                schedule_source = f"{schedule_source}+freeze_weights"
 
             log(
                 f"[Iter {it:02d}] schedule={schedule_source}, "
@@ -826,6 +847,28 @@ def optimize_weight_and_bone_trans_tree(
             "04_Org_Loss": float(org_loss_final),
         }
 
+        if vbw_mask_list:
+            mask_nnz = np.count_nonzero(np.concatenate(vbw_mask_list, axis=0) > 0, axis=1)
+        else:
+            mask_nnz = np.zeros((0,), dtype=np.int64)
+
+        weight_nnz = np.count_nonzero(vbw_cb > 1e-8, axis=1)
+
+        final_metrics.update(
+            {
+                "04_S_Max": int(sparseness),
+                "04_Mask_Mode": str(mask_mode),
+                "04_Mask_Threshold": float(mask_threshold),
+                "04_Freeze_Weights": bool(freeze_weights),
+                "04_Mask_NNZ_Mean": float(np.mean(mask_nnz)) if mask_nnz.size else 0.0,
+                "04_Mask_NNZ_Max": int(np.max(mask_nnz)) if mask_nnz.size else 0,
+                "04_Mask_NNZ_P95": float(np.percentile(mask_nnz, 95)) if mask_nnz.size else 0.0,
+                "04_Final_Weight_NNZ_Mean": float(np.mean(weight_nnz)) if weight_nnz.size else 0.0,
+                "04_Final_Weight_NNZ_Max": int(np.max(weight_nnz)) if weight_nnz.size else 0,
+                "04_Final_Weight_NNZ_P95": float(np.percentile(weight_nnz, 95)) if weight_nnz.size else 0.0,
+            }
+        )
+
         if eval_bone_health and bone_health_pre is not None:
             bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names)
             final_metrics["04_Max_Roll"] = float(bh_res.get("roll_abs_deg_max", 0.0))
@@ -941,6 +984,10 @@ def optimize_weight_and_bone_trans_tree(
             "opt_weight": bool(opt_weight),
             "input_poses": bool(input_poses),
             "use_weight_mask": bool(use_weight_mask),
+            "s_max": int(s_max),
+            "mask_mode": str(mask_mode),
+            "mask_threshold": float(mask_threshold),
+            "freeze_weights": bool(freeze_weights),
             "weight_solver": str(weight_solver),
             "use_weight_smoothness": bool(use_weight_smoothness),
             "weights_smooth_step": float(weights_smooth_step),
@@ -1017,6 +1064,32 @@ def main() -> None:
     parser.add_argument("--input_poses", action="store_true")
     parser.add_argument("--use_weight_mask", action="store_true")
 
+    parser.add_argument(
+        "--s_max",
+        type=int,
+        default=4,
+        help="Maximum number of bones retained per vertex during weight optimization. Paper symbol: s_max.",
+    )
+    parser.add_argument(
+        "--mask_mode",
+        choices=["adaptive", "fixed"],
+        default="adaptive",
+        help="Weight-mask construction mode. Paper symbol tau uses fixed mode.",
+    )
+    parser.add_argument(
+        "--mask_threshold",
+        "--tau",
+        dest="mask_threshold",
+        type=float,
+        default=-1.0,
+        help="Fixed weight-mask threshold tau. Use with --mask_mode fixed.",
+    )
+    parser.add_argument(
+        "--freeze_weights",
+        action="store_true",
+        help="Force bone-transform-only optimization by disabling all weight updates after schedule resolution.",
+    )
+
     parser.add_argument("--weight_solver", choices=["legacy", "simplex"], default="legacy")
     parser.add_argument("--use_weight_smoothness", action="store_true")
     parser.add_argument("--weights_smooth_step", type=float, default=1.0)
@@ -1060,6 +1133,12 @@ def main() -> None:
     if int(args.print_every_n) <= 0:
         fail(f"--print_every_n must be positive, got {args.print_every_n}")
 
+    if int(args.s_max) <= 0:
+        fail(f"--s_max must be positive, got {args.s_max}")
+
+    if str(args.mask_mode) == "fixed" and float(args.mask_threshold) < 0.0:
+        fail("--mask_mode fixed requires --mask_threshold/--tau >= 0")
+
     resolution = resolve_ssdr_stage_dirs(
         step_id="04",
         input_dir=args.input_dir,
@@ -1087,6 +1166,10 @@ def main() -> None:
     log(f"opt_weight        : {bool(args.opt_weight)}")
     log(f"input_poses       : {bool(args.input_poses)}")
     log(f"use_weight_mask   : {bool(args.use_weight_mask)}")
+    log(f"s_max             : {int(args.s_max)}")
+    log(f"mask_mode         : {args.mask_mode}")
+    log(f"mask_threshold    : {float(args.mask_threshold)}")
+    log(f"freeze_weights    : {bool(args.freeze_weights)}")
     log(f"weight_solver     : {args.weight_solver}")
     log(f"max_workers       : {args.max_workers}")
     log(f"overwrite_output  : {bool(args.overwrite_output)}")
@@ -1104,6 +1187,10 @@ def main() -> None:
             opt_weight=bool(args.opt_weight),
             input_poses=bool(args.input_poses),
             use_weight_mask=bool(args.use_weight_mask),
+            s_max=int(args.s_max),
+            mask_mode=str(args.mask_mode),
+            mask_threshold=float(args.mask_threshold),
+            freeze_weights=bool(args.freeze_weights),
             weight_solver=str(args.weight_solver),
             use_weight_smoothness=bool(args.use_weight_smoothness),
             weights_smooth_step=float(args.weights_smooth_step),
