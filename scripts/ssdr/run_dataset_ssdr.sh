@@ -74,6 +74,7 @@ HEALTH_WEIGHT_SCHEME="uniform"
 BONE_HEALTH_EVERY="5"
 
 RUN_STEP04=1
+STOP_AFTER_STEP01=0
 FRAME_REMOVAL_IDX_RANGES=""
 FRAME_SAMPLING_CONFIG=""
 HANDOFF_LEGACY_DATA0=0
@@ -102,6 +103,7 @@ Common options:
   --overwrite_output           Pass --overwrite_output to SSDR Step 00-04
   --max_workers N              Default: 1
   --dry_run                    Print commands without executing them
+  --stop_after_step01          Run handoff/Step00/Step01 only, then stop after data1
 
 Step 01 frame sampling:
   --max_frames N               Default: 210
@@ -208,6 +210,10 @@ parse_args() {
         MAX_WORKERS="$2"; shift 2 ;;
       --dry_run)
         DRY_RUN=1; shift ;;
+      --stop_after_step01)
+        STOP_AFTER_STEP01=1
+        RUN_STEP04=0
+        shift ;;
 
       --max_frames)
         MAX_FRAMES="$2"; shift 2 ;;
@@ -601,12 +607,13 @@ write_run_summary() {
   local work_dir="$2"
   local qem_config="$3"
   local status="$4"
+  local stop_after_step01="${5:-0}"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     return 0
   fi
 
-  python - "$model" "$work_dir" "$INPUT_LAYOUT" "$qem_config" "$status" "$RUN_STEP00" "$RUN_STEP04" <<'PY'
+  python - "$model" "$work_dir" "$INPUT_LAYOUT" "$qem_config" "$status" "$RUN_STEP00" "$RUN_STEP04" "$stop_after_step01" <<'PY'
 from __future__ import annotations
 
 import json
@@ -614,7 +621,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-model, work_dir, input_layout, qem_config, status, run_step00, run_step04 = sys.argv[1:]
+model, work_dir, input_layout, qem_config, status, run_step00, run_step04, stop_after_step01 = sys.argv[1:]
+stop_after_step01_bool = bool(int(stop_after_step01))
 work = Path(work_dir)
 out = work / "run_dataset_ssdr_summary.json"
 
@@ -629,10 +637,11 @@ obj = {
     "steps": {
         "00_convert_json_to_pickle": bool(int(run_step00)),
         "01_reduce_animation_frame": True,
-        "02_reduce_bone_weight": True,
-        "03_create_low_poly_shapes": True,
-        "04_optimize_weight_and_bone_trans": bool(int(run_step04)),
+        "02_reduce_bone_weight": not stop_after_step01_bool,
+        "03_create_low_poly_shapes": not stop_after_step01_bool,
+        "04_optimize_weight_and_bone_trans": bool(int(run_step04)) and not stop_after_step01_bool,
     },
+    "stop_after_step01": stop_after_step01_bool,
 }
 
 out.parent.mkdir(parents=True, exist_ok=True)
@@ -675,6 +684,7 @@ run_one_model() {
   log "qem_config      : ${qem_config:-<Step03 default/builtin>}"
   log "conda_env       : $CONDA_ENV"
   log "dry_run         : $DRY_RUN"
+  log "stop_after_step01: $STOP_AFTER_STEP01"
 
   resolve_frame_sampling_config_note "$model"
 
@@ -715,6 +725,13 @@ run_one_model() {
   fi
 
   run_logged "$logs_dir/01_reduce_animation_frame.log" "${cmd01[@]}"
+
+  if [ "$STOP_AFTER_STEP01" -eq 1 ]; then
+    write_run_summary "$model" "$WORK_DIR" "$qem_config" "complete_step01" "$STOP_AFTER_STEP01"
+    log "Stopping after Step01 because --stop_after_step01 was set."
+    log "data1 should be available at: $WORK_DIR/data1"
+    return 0
+  fi
 
   local -a cmd02=("${py[@]}" "$REPO_ROOT/scripts/ssdr/02_reduce_bone_weight.py"
     --input_dir "$WORK_DIR"
@@ -778,7 +795,7 @@ run_one_model() {
     log "Skipping Step 04 because --no_step04 was set."
   fi
 
-  write_run_summary "$model" "$WORK_DIR" "$qem_config" "complete"
+  write_run_summary "$model" "$WORK_DIR" "$qem_config" "complete" "$STOP_AFTER_STEP01"
 
   log "Completed SSDR dataset pipeline for model: $model"
   log "work_dir: $WORK_DIR"
