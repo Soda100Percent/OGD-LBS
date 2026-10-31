@@ -358,6 +358,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--only_models", nargs="*", default=None)
     parser.add_argument("--only_params", nargs="*", default=None)
     parser.add_argument("--no_conda", action="store_true")
+    parser.add_argument("--target_stage", default="ssdr_data4", choices=["ssdr_data2", "ssdr_data3", "ssdr_data4"])
+    parser.add_argument("--require_input_cache", action="store_true")
     return parser.parse_args()
 
 
