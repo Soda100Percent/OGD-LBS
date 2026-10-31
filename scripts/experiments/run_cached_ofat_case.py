@@ -305,11 +305,39 @@ def build_step04_cmd(
     return cmd
 
 
+
+def normalize_target_stage(value: str) -> str:
+    text = str(value or "ssdr_data4").strip()
+    aliases = {
+        "data2": "ssdr_data2",
+        "ssdr_data2": "ssdr_data2",
+        "stage02": "ssdr_data2",
+        "stage02_data2": "ssdr_data2",
+
+        "data3": "ssdr_data3",
+        "ssdr_data3": "ssdr_data3",
+        "stage03": "ssdr_data3",
+        "stage03_data3": "ssdr_data3",
+
+        "data4": "ssdr_data4",
+        "ssdr_data4": "ssdr_data4",
+        "stage04": "ssdr_data4",
+        "stage04_data4": "ssdr_data4",
+    }
+    if text not in aliases:
+        raise ValueError(
+            f"Unsupported target_stage={value!r}; "
+            "expected ssdr_data2, ssdr_data3, or ssdr_data4."
+        )
+    return aliases[text]
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one OFAT case with optional artifact cache hits.")
     parser.add_argument("--case_json", required=True)
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--no_conda", action="store_true", help="Use current Python instead of conda-run Python.")
+    parser.add_argument("--target_stage", default="ssdr_data4", choices=["ssdr_data2", "ssdr_data3", "ssdr_data4"])
+    parser.add_argument("--require_input_cache", action="store_true", help="Fail if the required upstream cache artifact is missing.")
     return parser.parse_args()
 
 
@@ -362,6 +390,7 @@ def main() -> None:
     base_data3 = ssdr_work_dir / "data3"
 
     py = python_executable_from_cfg(cfg, no_conda=bool(args.no_conda))
+    target_stage = normalize_target_stage(str(args.target_stage))
 
     print("=" * 96, flush=True)
     print("Run cached OFAT case", flush=True)
@@ -371,6 +400,7 @@ def main() -> None:
     print(f"value     : {case_payload.get('value')}", flush=True)
     print(f"case_root : {case_root}", flush=True)
     print(f"dry_run   : {bool(args.dry_run)}", flush=True)
+    print(f"target    : {target_stage}", flush=True)
     print("=" * 96, flush=True)
 
     if not args.dry_run:
@@ -378,83 +408,206 @@ def main() -> None:
         dump_json(case_root / "case_config.json", case_payload)
 
     cache_hits = case.get("cache_hits") or {}
-    data3_hit = cache_hits.get("ssdr_data3")
+    data1_hit = cache_hits.get("ssdr_data1")
     data2_hit = cache_hits.get("ssdr_data2")
+    data3_hit = cache_hits.get("ssdr_data3")
 
+    used_cache = {
+        "ssdr_data1": False,
+        "ssdr_data2": False,
+        "ssdr_data3": False,
+    }
+    steps_run: list[str] = []
+    outputs: dict[str, str] = {}
+
+    data1_out = case_root / "data1"
     step03_input: Path | None = None
     step04_input: Path | None = None
 
-    if data3_hit:
-        payload = resolve_payload_path(data3_hit, "data3")
-        copy_tree(payload, data3_out, dry_run=bool(args.dry_run))
-        step04_input = data3_out
+    def materialize_data1_from_cache() -> Path | None:
+        if not data1_hit:
+            return None
+        payload = resolve_payload_path(data1_hit, "data1")
+        copy_tree(payload, data1_out, dry_run=bool(args.dry_run))
+        used_cache["ssdr_data1"] = True
+        outputs["data1"] = str(data1_out)
+        return data1_out
 
-    elif data2_hit:
-        payload = resolve_payload_path(data2_hit, "data2")
-        copy_tree(payload, data2_out, dry_run=bool(args.dry_run))
-        step03_input = data2_out
+    def run_step02_from(input_data1: Path) -> None:
+        cmd02 = build_step02_cmd(
+            py=py,
+            input_data1=input_data1,
+            output_data2=data2_out,
+            metrics_dir=case_root,
+            cfg=cfg,
+            case_payload=case_payload,
+        )
+        run_logged(cmd02, log_path=logs_dir / "02_reduce_bone_weight.log", dry_run=bool(args.dry_run))
+        steps_run.append("ssdr_step02")
+        outputs["data2"] = str(data2_out)
 
-    else:
-        if param in {"alpha", "beta", "gamma"}:
-            cmd02 = build_step02_cmd(
-                py=py,
-                input_data1=base_data1,
-                output_data2=data2_out,
-                metrics_dir=case_root,
-                cfg=cfg,
-                case_payload=case_payload,
-            )
-            run_logged(cmd02, log_path=logs_dir / "02_reduce_bone_weight.log", dry_run=bool(args.dry_run))
-            step03_input = data2_out
-
-        elif param == "omega_b":
-            step03_input = base_data2
-
-        elif param in {"s_max", "tau"}:
-            step04_input = base_data3
-
-        else:
-            raise RuntimeError(f"Unsupported cached OFAT param for this runner: {param}")
-
-    if step04_input is None:
-        if step03_input is None:
-            raise RuntimeError("Internal error: neither step03_input nor step04_input is set")
-
+    def run_step03_from(input_data2: Path) -> None:
         cmd03 = build_step03_cmd(
             py=py,
-            input_data2=step03_input,
+            input_data2=input_data2,
             output_data3=data3_out,
             metrics_dir=case_root,
             cfg=cfg,
             case_payload=case_payload,
         )
         run_logged(cmd03, log_path=logs_dir / "03_create_low_poly_shapes.log", dry_run=bool(args.dry_run))
-        step04_input = data3_out
+        steps_run.append("ssdr_step03")
+        outputs["data3"] = str(data3_out)
 
-    cmd04 = build_step04_cmd(
-        py=py,
-        input_data3=step04_input,
-        output_data4=data4_out,
-        metrics_dir=case_root,
-        cfg=cfg,
-        eff=eff,
-    )
-    run_logged(cmd04, log_path=logs_dir / "04_optimize_weight_and_bone_trans.log", dry_run=bool(args.dry_run))
+    def run_step04_from(input_data3: Path) -> None:
+        cmd04 = build_step04_cmd(
+            py=py,
+            input_data3=input_data3,
+            output_data4=data4_out,
+            metrics_dir=case_root,
+            cfg=cfg,
+            eff=eff,
+        )
+        run_logged(cmd04, log_path=logs_dir / "04_optimize_weight_and_bone_trans.log", dry_run=bool(args.dry_run))
+        steps_run.append("ssdr_step04")
+        outputs["data4"] = str(data4_out)
 
-    if not args.dry_run:
+    def finish_case() -> None:
+        if args.dry_run:
+            return
+
         done = case_root / "done"
         done.write_text("done\n", encoding="utf-8")
 
         dump_json(case_root / "cache_execution_summary.json", {
-            "schema": "ogd_lbs_cached_ofat_case_execution_summary_v1",
+            "schema": "ogd_lbs_cached_ofat_case_execution_summary_v2",
             "case_json": str(case_path),
             "case_root": str(case_root),
-            "used_cache": {
-                "ssdr_data3": bool(data3_hit),
-                "ssdr_data2": bool(data2_hit),
-            },
-            "step04_input": str(step04_input),
+            "target_stage": target_stage,
+            "used_cache": used_cache,
+            "steps_run": steps_run,
+            "outputs": outputs,
         })
+
+    if target_stage == "ssdr_data2":
+        if data2_hit:
+            payload = resolve_payload_path(data2_hit, "data2")
+            copy_tree(payload, data2_out, dry_run=bool(args.dry_run))
+            used_cache["ssdr_data2"] = True
+            outputs["data2"] = str(data2_out)
+        else:
+            input_data1 = materialize_data1_from_cache()
+
+            if input_data1 is None:
+                if args.require_input_cache:
+                    raise RuntimeError(
+                        f"target_stage=ssdr_data2 requires ssdr_data1 cache for "
+                        f"{model} {param}={case_payload.get('value')}"
+                    )
+
+                if param not in {"alpha", "beta", "gamma"}:
+                    raise RuntimeError(f"Cannot build ssdr_data2 for param={param!r} without data1 cache.")
+
+                input_data1 = base_data1
+
+            if param not in {"alpha", "beta", "gamma"}:
+                raise RuntimeError(
+                    f"target_stage=ssdr_data2 is intended for Step02 params "
+                    f"alpha/beta/gamma, got param={param!r}"
+                )
+
+            run_step02_from(input_data1)
+
+        finish_case()
+
+    elif target_stage == "ssdr_data3":
+        if data3_hit:
+            payload = resolve_payload_path(data3_hit, "data3")
+            copy_tree(payload, data3_out, dry_run=bool(args.dry_run))
+            used_cache["ssdr_data3"] = True
+            outputs["data3"] = str(data3_out)
+        else:
+            if data2_hit:
+                payload = resolve_payload_path(data2_hit, "data2")
+                copy_tree(payload, data2_out, dry_run=bool(args.dry_run))
+                used_cache["ssdr_data2"] = True
+                outputs["data2"] = str(data2_out)
+                step03_input = data2_out
+            else:
+                input_data1 = materialize_data1_from_cache()
+
+                if input_data1 is not None:
+                    if param not in {"alpha", "beta", "gamma"}:
+                        raise RuntimeError(f"Cannot build Step02 for param={param!r} from data1 cache.")
+                    run_step02_from(input_data1)
+                    step03_input = data2_out
+                elif args.require_input_cache:
+                    raise RuntimeError(
+                        f"target_stage=ssdr_data3 requires ssdr_data2 or ssdr_data1 cache for "
+                        f"{model} {param}={case_payload.get('value')}"
+                    )
+                elif param in {"alpha", "beta", "gamma"}:
+                    run_step02_from(base_data1)
+                    step03_input = data2_out
+                elif param == "omega_b":
+                    step03_input = base_data2
+                else:
+                    raise RuntimeError(f"Unsupported target_stage=ssdr_data3 param: {param}")
+
+            if step03_input is None:
+                raise RuntimeError("Internal error: step03_input is not set.")
+
+            run_step03_from(step03_input)
+
+        finish_case()
+
+    else:
+        if data3_hit:
+            payload = resolve_payload_path(data3_hit, "data3")
+            copy_tree(payload, data3_out, dry_run=bool(args.dry_run))
+            used_cache["ssdr_data3"] = True
+            outputs["data3"] = str(data3_out)
+            step04_input = data3_out
+
+        elif data2_hit:
+            payload = resolve_payload_path(data2_hit, "data2")
+            copy_tree(payload, data2_out, dry_run=bool(args.dry_run))
+            used_cache["ssdr_data2"] = True
+            outputs["data2"] = str(data2_out)
+            step03_input = data2_out
+
+        else:
+            if param in {"alpha", "beta", "gamma"}:
+                input_data1 = materialize_data1_from_cache()
+                if input_data1 is None:
+                    if args.require_input_cache:
+                        raise RuntimeError(
+                            f"target_stage=ssdr_data4 requires upstream cache for "
+                            f"{model} {param}={case_payload.get('value')}"
+                        )
+                    input_data1 = base_data1
+
+                run_step02_from(input_data1)
+                step03_input = data2_out
+
+            elif param == "omega_b":
+                step03_input = base_data2
+
+            elif param in {"s_max", "tau"}:
+                step04_input = base_data3
+
+            else:
+                raise RuntimeError(f"Unsupported cached OFAT param for this runner: {param}")
+
+        if step04_input is None:
+            if step03_input is None:
+                raise RuntimeError("Internal error: neither step03_input nor step04_input is set")
+            run_step03_from(step03_input)
+            step04_input = data3_out
+
+        run_step04_from(step04_input)
+        finish_case()
+
 
     print("=" * 96, flush=True)
     print("Cached OFAT case complete", flush=True)

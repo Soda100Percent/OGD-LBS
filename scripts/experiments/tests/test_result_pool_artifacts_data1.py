@@ -227,5 +227,50 @@ class TestResultPoolArtifactsData1(unittest.TestCase):
             self.assertEqual(lookup_non_default["hit_count"], 0)
 
 
+    def test_vroid_frame_removal_ranges_are_inferred_from_repo_config(self) -> None:
+        art = load_module(
+            "ogd_lbs_result_pool_artifacts_for_data1_vroid_infer_tests",
+            "scripts/experiments/result_pool_artifacts.py",
+        )
+
+        cfg_path = REPO_ROOT / "scripts/ssdr/configs/frame_sampling_config_vroid.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        expected = cfg["step01_params"]["removal_idx_ranges_text"]
+
+        raw = art.raw_stage_dims_from_case_config(
+            {"model": "Vroid_20"},
+            artifact_type="ssdr_data1",
+            config_defaults={
+                "max_frames": 210,
+                "target_frames": 200,
+                "frame_sampling_policy": "target_200",
+            },
+        )
+
+        self.assertEqual(raw["input_source_kind"], "vroid_data0")
+        self.assertEqual(raw["frame_sampling_config_name"], "frame_sampling_config_vroid.json")
+        self.assertEqual(raw["frame_removal_idx_ranges"], expected)
+
+    def test_non_vroid_frame_removal_ranges_default_empty(self) -> None:
+        art = load_module(
+            "ogd_lbs_result_pool_artifacts_for_data1_nonvroid_infer_tests",
+            "scripts/experiments/result_pool_artifacts.py",
+        )
+
+        raw = art.raw_stage_dims_from_case_config(
+            {"model": "Griffin_A2"},
+            artifact_type="ssdr_data1",
+            config_defaults={
+                "max_frames": 210,
+                "target_frames": 200,
+                "frame_sampling_policy": "target_200",
+            },
+        )
+
+        self.assertEqual(raw["input_source_kind"], "fitbox_vdb")
+        self.assertEqual(raw["frame_sampling_config_name"], "default")
+        self.assertEqual(raw["frame_removal_idx_ranges"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -267,6 +267,92 @@ def infer_frame_sampling_config_name(case_cfg: dict[str, Any]) -> str:
     return "default"
 
 
+
+def _format_range_pairs_as_text(value: Any) -> str:
+    """
+    Convert JSON-style [[start, end], ...] ranges to the canonical
+    left-closed/right-open text representation used by cache dimensions:
+        "20:60,260:340"
+    """
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if not isinstance(value, (list, tuple)):
+        return ""
+
+    parts: list[str] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            return ""
+        start = int(item[0])
+        end = int(item[1])
+        parts.append(f"{start}:{end}")
+
+    return ",".join(parts)
+
+
+def load_vroid_frame_removal_idx_ranges_text() -> str:
+    """
+    Read the shared VRoid Step01 frame-removal contract from repo config.
+
+    This keeps result-pool lookup dimensions aligned with the R1 data1 cache
+    preparation job and with run_dataset_ssdr.sh.
+    """
+    cfg = REPO_ROOT / "scripts" / "ssdr" / "configs" / "frame_sampling_config_vroid.json"
+    if not cfg.is_file():
+        return ""
+
+    try:
+        obj = json.loads(cfg.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    step01 = obj.get("step01_params", {})
+    if not isinstance(step01, dict):
+        return ""
+
+    text = str(step01.get("removal_idx_ranges_text", "") or "").strip()
+    if text:
+        return text
+
+    return _format_range_pairs_as_text(step01.get("removal_idx_ranges"))
+
+
+def infer_frame_removal_idx_ranges(
+    case_cfg: dict[str, Any],
+    *,
+    config_defaults: dict[str, Any] | None = None,
+) -> str:
+    """
+    Infer the Step01 frame-removal dimension for staged artifacts.
+
+    Priority:
+      1. explicit case artifact_dimensions/dimensions/stage_dimensions/top-level value
+      2. config_defaults["frame_removal_idx_ranges"]
+      3. shared VRoid config for Vroid_* / frame_sampling_config_vroid.json
+      4. empty string
+    """
+    config_defaults = dict(config_defaults or {})
+
+    explicit = case_dim_value(case_cfg, "frame_removal_idx_ranges", None)
+    if explicit is not None:
+        return str(explicit).strip()
+
+    default_value = config_defaults.get("frame_removal_idx_ranges", None)
+    if default_value is not None:
+        return str(default_value).strip()
+
+    model = str(case_cfg.get("model", ""))
+    fs_config = infer_frame_sampling_config_name(case_cfg)
+
+    if model.startswith("Vroid_") or fs_config == "frame_sampling_config_vroid.json":
+        return load_vroid_frame_removal_idx_ranges_text()
+
+    return ""
+
 def infer_bone_variant(dataset: dict[str, Any] | None) -> str:
     dataset = dataset or {}
     return str(dataset.get("variant") or "default")
@@ -334,10 +420,9 @@ def raw_stage_dims_from_case_config(
             "frame_sampling_config_name",
             infer_frame_sampling_config_name(case_cfg),
         ),
-        "frame_removal_idx_ranges": case_dim_value(
+        "frame_removal_idx_ranges": infer_frame_removal_idx_ranges(
             case_cfg,
-            "frame_removal_idx_ranges",
-            config_defaults.get("frame_removal_idx_ranges"),
+            config_defaults=config_defaults,
         ),
 
         "step00_code_version": case_dim_value(

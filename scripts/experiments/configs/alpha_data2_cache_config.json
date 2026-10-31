@@ -1,0 +1,107 @@
+{
+    "schema": "ogd_lbs_ofat_sweep_config_v1",
+    "description": "R2 cache-prep config: 5-model alpha sweep stopping at SSDR Step02/data2. Uses ssdr_data1 artifacts from the local result pool.",
+    "output_root": "/workspace/ogd_experiments/alpha_data2_cache_r2",
+    "conda_env": "lao-lbs",
+    "bpy5_env": "ogd-bpy52",
+    "bpy4_env": "lao-lbs",
+    "datasets": [
+        {
+            "model": "Vroid_18",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_18/ssdr_work_dir",
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json",
+            "supports_data_prep_delta": false
+        },
+        {
+            "model": "Vroid_19",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_19/ssdr_work_dir",
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json",
+            "supports_data_prep_delta": false
+        },
+        {
+            "model": "Vroid_20",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Vroid_20/ssdr_work_dir",
+            "qem_config": "/workspace/git_projects/OGD-LBS/scripts/ssdr/configs/qem_config_vroid.json",
+            "supports_data_prep_delta": false
+        },
+        {
+            "model": "Griffin_A2",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Griffin_A2/ssdr_work_dir",
+            "data_prep_work_dir": "/workspace/ogd_dataset/Griffin_A2/data_prep_work_dir",
+            "prep02_config": "/workspace/git_projects/OGD-LBS/scripts/data_prep/configs/prep_02_sdf_merge_config_griffin_a2.json",
+            "extra_bone_reduce_config": "/workspace/git_projects/OGD-LBS/scripts/data_prep/configs/extra_bone_reduce_griffin_a2.json",
+            "qem_config": null,
+            "variant": "bone_reduced_conservative",
+            "supports_data_prep_delta": true
+        },
+        {
+            "model": "Winter_Samurai",
+            "ssdr_work_dir": "/workspace/ogd_dataset/Winter_Samurai/ssdr_work_dir",
+            "data_prep_work_dir": "/workspace/ogd_dataset/Winter_Samurai/data_prep_work_dir",
+            "prep02_config": "/workspace/git_projects/OGD-LBS/scripts/data_prep/configs/prep_02_sdf_merge_config_winter_samurai.json",
+            "extra_bone_reduce_config": "/workspace/git_projects/OGD-LBS/scripts/data_prep/configs/extra_bone_reduce_winter_samurai.json",
+            "qem_config": null,
+            "variant": "bone_reduced_conservative",
+            "supports_data_prep_delta": true
+        }
+    ],
+    "defaults": {
+        "alpha": 0.5,
+        "beta": 0.3,
+        "gamma": 0.2,
+        "s_max": 4,
+        "tau": "adaptive",
+        "omega_b": 1000.0
+    },
+    "abc_coupling": {
+        "mode": "keep_sum_one",
+        "note": "For alpha sweep, beta/gamma are rescaled proportionally from 0.3:0.2 so alpha+beta+gamma=1."
+    },
+    "sweeps": {
+        "alpha": [
+            0.1,
+            0.3,
+            0.5,
+            0.7,
+            0.9
+        ]
+    },
+    "delta_sweeps_by_model": {},
+    "ssdr_defaults": {
+        "max_workers": 16,
+        "qem_max_workers": 16,
+        "max_frames": 210,
+        "target_frames": 200
+    },
+    "step04_defaults": {
+        "iter": 70,
+        "print_every_n": 5,
+        "org_type": 3,
+        "opt_weight": true,
+        "input_poses": true,
+        "use_weight_mask": true,
+        "weight_solver": "simplex",
+        "s_max": 4,
+        "tau": "adaptive",
+        "use_weight_smoothness": false,
+        "weights_smooth_step": 1.0,
+        "weight_soft_lock": 0.0,
+        "lambda_reg": 0.1,
+        "bt_covariance_mode": "corrected",
+        "trans_affine": 0.0,
+        "trans_affine_norm": 4.0,
+        "roll_affinity": 0.0,
+        "roll_affinity_norm": 2.0,
+        "eval_mesh_health": true,
+        "health_level": 1,
+        "health_every": 5,
+        "health_weight_scheme": "uniform",
+        "eval_bone_health": true,
+        "bone_health_every": 5,
+        "max_workers": 16,
+        "validate_output": true,
+        "weak_validate": false,
+        "save_intermediate": false,
+        "freeze_weights": false
+    }
+}

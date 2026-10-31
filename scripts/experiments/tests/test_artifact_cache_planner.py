@@ -198,5 +198,146 @@ class TestArtifactCachePlanner(unittest.TestCase):
             self.assertIsNotNone(case_record["cache_hits"]["ssdr_data3"])
 
 
+    def test_target_data2_uses_data1_cache_hit(self) -> None:
+        rp = load_module("ogd_lbs_result_pool_i3_data1_target_tests", "scripts/experiments/result_pool.py")
+        art = load_module("ogd_lbs_result_pool_artifacts_i3_data1_target_tests", "scripts/experiments/result_pool_artifacts.py")
+        planner = load_module("ogd_lbs_artifact_cache_planner_data1_target_tests", "scripts/experiments/plan_ofat_with_artifact_cache.py")
+
+        with tempfile.TemporaryDirectory(prefix="ogd_i3_data1_target_") as td:
+            root = Path(td)
+            pool = root / "pool"
+            rp.init_pool(pool)
+            art.ensure_artifact_profiles(pool)
+
+            idx_path = pool / "index.json"
+            index = json.loads(idx_path.read_text(encoding="utf-8"))
+
+            artifact_id = "a000001"
+            adir = pool / "artifacts" / artifact_id
+            (adir / "payload" / "data1").mkdir(parents=True)
+            (adir / "payload" / "data1" / "dummy.txt").write_text("data1\n", encoding="utf-8")
+
+            dump_json(
+                adir / "raw_dimensions.json",
+                {
+                    "dimensions": {
+                        "artifact_type": "ssdr_data1",
+                        "model": "M",
+                        "input_source_kind": "fitbox_vdb",
+                        "input_dataset_version": "v1",
+                        "frame_sampling_policy": "target_200",
+                        "max_frames": 210,
+                        "target_frames": 200,
+                        "frame_sampling_config_name": "default",
+                        "frame_removal_idx_ranges": "",
+                        "step00_code_version": "step00_v1",
+                        "step01_code_version": "step01_v1",
+                    }
+                },
+            )
+            dump_json(
+                adir / "artifact_manifest.json",
+                {
+                    "artifact_id": artifact_id,
+                    "artifact_type": "ssdr_data1",
+                    "status": "succeeded",
+                    "payload_path": "payload/data1",
+                },
+            )
+            index["artifacts"][artifact_id] = {
+                "artifact_id": artifact_id,
+                "artifact_type": "ssdr_data1",
+                "status": "succeeded",
+                "artifact_dir": f"artifacts/{artifact_id}",
+                "model": "M",
+                "payload_path": "payload/data1",
+            }
+            idx_path.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+            cfg = {
+                "schema": "ogd_lbs_ofat_sweep_config_v1",
+                "output_root": str(root / "out"),
+                "datasets": [
+                    {
+                        "model": "M",
+                        "ssdr_work_dir": "/tmp/M/ssdr_work_dir",
+                    }
+                ],
+                "defaults": {
+                    "alpha": 0.5,
+                    "beta": 0.3,
+                    "gamma": 0.2,
+                    "s_max": 4,
+                    "tau": "adaptive",
+                    "omega_b": 1000.0,
+                },
+                "abc_coupling": {"mode": "keep_sum_one"},
+                "sweeps": {"alpha": [0.5]},
+                "delta_sweeps_by_model": {},
+                "step04_defaults": {
+                    "iter": 70,
+                    "org_type": 3,
+                    "opt_weight": True,
+                    "input_poses": True,
+                    "use_weight_mask": True,
+                    "weight_solver": "simplex",
+                    "bt_covariance_mode": "corrected",
+                    "use_weight_smoothness": False,
+                    "weights_smooth_step": 1.0,
+                    "weight_soft_lock": 0.0,
+                    "lambda_reg": 0.1,
+                    "trans_affine": 0.0,
+                    "trans_affine_norm": 4.0,
+                    "roll_affinity": 0.0,
+                    "roll_affinity_norm": 2.0,
+                    "s_max": 4,
+                },
+                "ssdr_defaults": {
+                    "max_frames": 210,
+                    "target_frames": 200,
+                },
+            }
+            cfg_path = root / "config.json"
+            dump_json(cfg_path, cfg)
+
+            plan_dir = root / "plan"
+            manifest_path = plan_dir / "case_manifest.json"
+
+            report = planner.plan(
+                pool=pool,
+                config_path=cfg_path,
+                output_manifest=manifest_path,
+                output_plan_dir=plan_dir,
+                output_root=str(root / "filtered_out"),
+                only_models=None,
+                only_params=None,
+                no_conda=True,
+                target_stage="ssdr_data2",
+                require_input_cache=True,
+            )
+
+            self.assertEqual(report["target_stage"], "ssdr_data2")
+            self.assertEqual(report["candidate_count"], 1)
+            self.assertEqual(report["target_hit_count"], 0)
+            self.assertEqual(report["planned_count"], 1)
+            self.assertEqual(report["data1_cache_hit_count"], 1)
+            self.assertEqual(report["data1_cache_miss_count"], 0)
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["target_stage"], "ssdr_data2")
+            self.assertEqual(manifest["case_count"], 1)
+
+            case = manifest["cases"][0]
+            self.assertEqual(case["target_stage"], "ssdr_data2")
+            self.assertIsNotNone(case["cache_hits"]["ssdr_data1"])
+            self.assertIn("--target_stage", case["command"])
+            self.assertIn("ssdr_data2", case["command"])
+            self.assertIn("--require_input_cache", case["command"])
+
+            case_record = json.loads(Path(case["case_record_json"]).read_text(encoding="utf-8"))
+            self.assertIsNotNone(case_record["cache_hits"]["ssdr_data1"])
+            self.assertEqual(case_record["target_stage"], "ssdr_data2")
+
+
 if __name__ == "__main__":
     unittest.main()
