@@ -614,14 +614,21 @@ function renderModelGroupedRawCharts() {
         const models = chartSpec.models || Array.from(new Set(chartSpec.items.map(i => i.model)));
         const categories = [];
         const data = [];
+        const errorData = [];
 
         models.forEach((model, modelIdx) => {
             const items = chartSpec.items.filter(i => i.model === model);
 
             items.forEach((item) => {
+                const categoryIndex = categories.length;
                 categories.push(`${model}\n${item.value}`);
+
+                const metricValue = Number(item.metricValue);
+                const perFrameStd = finiteNumber(item.perFrameStd);
+                const hasPerFrameStd = Boolean(item.hasPerFrameStd) && perFrameStd !== null;
+
                 data.push({
-                    value: item.metricValue,
+                    value: metricValue,
                     itemStyle: defaultBarStyle(Boolean(item.isDefault), item.value),
                     label: {
                         show: Boolean(item.isDefault),
@@ -632,6 +639,17 @@ function renderModelGroupedRawCharts() {
                     },
                     rawItem: item
                 });
+
+                if (hasPerFrameStd) {
+                    errorData.push([
+                        categoryIndex,
+                        metricValue - perFrameStd,
+                        metricValue + perFrameStd,
+                        perFrameStd,
+                        item.model,
+                        item.value
+                    ]);
+                }
             });
 
             if (modelIdx < models.length - 1) {
@@ -644,6 +662,68 @@ function renderModelGroupedRawCharts() {
             }
         });
 
+        const series = [
+            {
+                type: 'bar',
+                barMaxWidth: 26,
+                data: data
+            }
+        ];
+
+        if (errorData.length > 0) {
+            series.push({
+                name: 'per-frame std',
+                type: 'custom',
+                data: errorData,
+                z: 10,
+                tooltip: { show: false },
+                renderItem: (params, api) => {
+                    const xIndex = api.value(0);
+                    const low = api.value(1);
+                    const high = api.value(2);
+                    const lowPoint = api.coord([xIndex, low]);
+                    const highPoint = api.coord([xIndex, high]);
+                    const halfWidth = 7;
+
+                    return {
+                        type: 'group',
+                        children: [
+                            {
+                                type: 'line',
+                                shape: {
+                                    x1: lowPoint[0],
+                                    y1: lowPoint[1],
+                                    x2: highPoint[0],
+                                    y2: highPoint[1]
+                                },
+                                style: { stroke: '#111827', lineWidth: 1.3 }
+                            },
+                            {
+                                type: 'line',
+                                shape: {
+                                    x1: highPoint[0] - halfWidth,
+                                    y1: highPoint[1],
+                                    x2: highPoint[0] + halfWidth,
+                                    y2: highPoint[1]
+                                },
+                                style: { stroke: '#111827', lineWidth: 1.3 }
+                            },
+                            {
+                                type: 'line',
+                                shape: {
+                                    x1: lowPoint[0] - halfWidth,
+                                    y1: lowPoint[1],
+                                    x2: lowPoint[0] + halfWidth,
+                                    y2: lowPoint[1]
+                                },
+                                style: { stroke: '#111827', lineWidth: 1.3 }
+                            }
+                        ]
+                    };
+                }
+            });
+        }
+
         chart.setOption({
             animation: false,
             textStyle: { fontFamily: customFontFamily },
@@ -652,17 +732,33 @@ function renderModelGroupedRawCharts() {
                 formatter: (p) => {
                     const item = (p.data && p.data.rawItem) || {};
                     if (item.gap) return '';
+
+                    const perFrameStd = finiteNumber(item.perFrameStd);
+                    const stdLine = perFrameStd === null
+                        ? '<br/>per-frame std: <i>not available</i>'
+                        : `<br/>per-frame std: <b>${formatValue(perFrameStd)}</b>`;
+
+                    const stdField = item.perFrameStdField
+                        ? `<br/><span style="color:#667085;">${escapeHtml(item.perFrameStdField)}</span>`
+                        : '';
+
                     return `<b>${escapeHtml(item.model)}</b><br/>`
                         + `${escapeHtml(item.param)}=${escapeHtml(item.value)}`
                         + (item.isDefault ? ' <b>★ default</b>' : '')
-                        + `<br/>${escapeHtml(chartSpec.metric)}: <b>${formatValue(item.metricValue)}</b>`;
+                        + `<br/>${escapeHtml(chartSpec.metric)}: <b>${formatValue(item.metricValue)}</b>`
+                        + stdLine
+                        + stdField;
                 }
             },
             grid: { top: 45, bottom: 130, left: 90, right: 35 },
             xAxis: {
                 type: 'category',
                 data: categories,
-                axisLabel: { rotate: 45, fontSize: 10, interval: 0 },
+                axisLabel: {
+                    rotate: 45,
+                    fontSize: 10,
+                    interval: 0
+                },
                 axisTick: { alignWithLabel: true }
             },
             yAxis: {
@@ -672,17 +768,10 @@ function renderModelGroupedRawCharts() {
                 nameLocation: 'middle',
                 nameGap: 65
             },
-            series: [
-                {
-                    type: 'bar',
-                    barMaxWidth: 26,
-                    data: data
-                }
-            ]
+            series: series
         });
     });
 }
-
 
 function renderAllCharts() {
     allChartInstances.splice(0, allChartInstances.length);

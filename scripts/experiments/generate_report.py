@@ -79,6 +79,23 @@ REPORT_METRIC_CHART_SPECS = [
     ("04_Max_Swing", "Max Swing ↓", "min"),
 ]
 
+PER_FRAME_STD_FIELD_BY_METRIC = {
+    # Per-case, per-frame final standard deviations computed from
+    # opt_out/metrics_history_per_frame.npz by aggregate_metrics.py.
+    #
+    # These std fields are meaningful for model-grouped raw charts:
+    # each raw bar is one model/value case, and the error bar reflects
+    # frame-to-frame variation inside that case.
+    "04_L2_Err": "history_l2_err_final_std",
+    "04_Org_Loss": "history_org_loss_final_std",
+    "04_Max_Roll": "history_bone_roll_max_final_std",
+    "04_Max_Swing": "history_bone_swing_max_final_std",
+
+    # Current history npz does not contain per-frame Hausdorff values.
+    "04_Hausdorff_Mean": None,
+    "04_Hausdorff_Max": None,
+}
+
 CONFIG_COLUMNS_BY_MODE = {
     "sweep": [
         "model",
@@ -581,6 +598,13 @@ def prepare_model_grouped_raw_charts(
             if not model or not param:
                 continue
 
+            per_frame_std_field = PER_FRAME_STD_FIELD_BY_METRIC.get(metric)
+            per_frame_std = (
+                finite_float(row.get(per_frame_std_field))
+                if per_frame_std_field
+                else None
+            )
+
             items.append(
                 {
                     "model": model,
@@ -590,6 +614,11 @@ def prepare_model_grouped_raw_charts(
                     "direction": direction,
                     "isDefault": is_default_sweep_value(param, value, default_sweep_values),
                     "label": f"{model} | {param}={value}",
+                    "perFrameStdField": per_frame_std_field or "",
+                    "perFrameStd": per_frame_std,
+                    "hasPerFrameStd": per_frame_std is not None,
+                    "low": x - per_frame_std if per_frame_std is not None else None,
+                    "high": x + per_frame_std if per_frame_std is not None else None,
                 }
             )
 
@@ -742,7 +771,8 @@ window.DASHBOARD_DATA = {report_json};
     <h2>🧩 Model-grouped Raw Metric Charts</h2>
     <div class="info-note">
         Bars are sorted by model and sweep value. Blank gaps separate models.
-        These raw per-model bars do not show standard deviation because each model/value pair has one run.
+        When available, error bars show per-frame final standard deviation within each case.
+        HD currently has no per-frame history std and is shown without error bars.
     </div>
     <div id="model-grouped-raw-container"></div>
 

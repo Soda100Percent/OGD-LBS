@@ -92,6 +92,12 @@ class TestGenerateReport(unittest.TestCase):
                         "04_L2_Err": "1.2",
                         "04_Hausdorff_Mean": "2.3",
                         "04_Org_Loss": "0.01",
+                        "04_Max_Roll": "10.0",
+                        "04_Max_Swing": "20.0",
+                        "history_l2_err_final_std": "0.11",
+                        "history_org_loss_final_std": "0.001",
+                        "history_bone_roll_max_final_std": "1.5",
+                        "history_bone_swing_max_final_std": "2.5",
                     },
                     {
                         "mode": "sweep",
@@ -104,6 +110,12 @@ class TestGenerateReport(unittest.TestCase):
                         "04_L2_Err": "1.0",
                         "04_Hausdorff_Mean": "2.0",
                         "04_Org_Loss": "0.02",
+                        "04_Max_Roll": "11.0",
+                        "04_Max_Swing": "21.0",
+                        "history_l2_err_final_std": "0.12",
+                        "history_org_loss_final_std": "0.002",
+                        "history_bone_roll_max_final_std": "1.6",
+                        "history_bone_swing_max_final_std": "2.6",
                     },
                 ],
             )
@@ -149,6 +161,16 @@ class TestGenerateReport(unittest.TestCase):
             self.assertIn("modelGroupedRaw", html)
             self.assertIn("defaultSweepValues", html)
             self.assertIn("★ default", html)
+
+            # R2f: per-frame std error bars for model-grouped raw charts.
+            self.assertIn("perFrameStd", html)
+            self.assertIn("perFrameStdField", html)
+            self.assertIn("hasPerFrameStd", html)
+            self.assertIn("history_l2_err_final_std", html)
+            self.assertIn("history_org_loss_final_std", html)
+            self.assertIn("history_bone_roll_max_final_std", html)
+            self.assertIn("history_bone_swing_max_final_std", html)
+            self.assertIn("per-frame std", html)
 
     def test_generate_cv_report_with_ttest(self) -> None:
         mod = load_module()
