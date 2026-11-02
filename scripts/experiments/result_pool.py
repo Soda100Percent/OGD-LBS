@@ -224,6 +224,15 @@ def sha256_obj(obj: Any) -> str:
     return hashlib.sha256(canonical_json(obj).encode("utf-8")).hexdigest()
 
 
+def sha256_file(path: str | Path) -> str:
+    p = Path(path)
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def get_pool_paths(pool: Path) -> dict[str, Path]:
     return {
         "pool": pool,
@@ -567,6 +576,54 @@ def find_step04_summary(run_root: Path) -> Path | None:
     return None
 
 
+def find_history_npz(run_root: Path, *, summary_path: Path | None = None) -> Path | None:
+    """
+    Locate Step04 per-frame history metrics for one run root.
+
+    Expected normal OFAT layout:
+        <case_root>/data4/opt_out/metrics_history_per_frame.npz
+
+    Expected CV test layout:
+        <case_root>/data4_test/opt_out/metrics_history_per_frame.npz
+
+    Result-pool aggregate_metrics.py reads from:
+        <artifact_dir>/opt_out/metrics_history_per_frame.npz
+
+    This helper only locates source files; ingest_ofat() performs the copy.
+    """
+    candidates: list[Path] = []
+
+    if summary_path is not None:
+        candidates.append(Path(summary_path).parent / "opt_out" / "metrics_history_per_frame.npz")
+
+    candidates.extend(
+        [
+            run_root / "data4" / "opt_out" / "metrics_history_per_frame.npz",
+            run_root / "data4_test" / "opt_out" / "metrics_history_per_frame.npz",
+            run_root / "opt_out" / "metrics_history_per_frame.npz",
+        ]
+    )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = Path(candidate)
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if candidate.is_file():
+            return candidate
+
+    # Last-resort fallback.  Keep deterministic ordering and prefer the first
+    # discovered path only after all explicit layouts above were checked.
+    for candidate in sorted(run_root.rglob("metrics_history_per_frame.npz")):
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
 def load_summary_config(run_root: Path) -> dict[str, Any]:
     p = find_step04_summary(run_root)
     if not p:
@@ -708,6 +765,7 @@ def ingest_ofat(
     input_root: Path,
     overwrite: bool = False,
     allow_no_done: bool = False,
+    require_history_npz: bool = False,
 ) -> dict[str, Any]:
     init_pool(pool, force=False)
     dimensions_obj, eq_profile, index = require_pool(pool)
@@ -717,6 +775,9 @@ def ingest_ofat(
     ingested = 0
     skipped_existing = 0
     skipped_no_done = 0
+    skipped_missing_history = 0
+    history_npz_present_count = 0
+    history_npz_missing_count = 0
     records: list[dict[str, Any]] = []
 
     for run_root in run_roots:
@@ -757,6 +818,40 @@ def ingest_ofat(
             )
             continue
 
+        summary_path = find_step04_summary(run_root)
+        history_src = find_history_npz(run_root, summary_path=summary_path)
+
+        if history_src is not None:
+            history_npz_present_count += 1
+            history_info = {
+                "present": True,
+                "source": str(history_src),
+                "path": "opt_out/metrics_history_per_frame.npz",
+                "size_bytes": int(history_src.stat().st_size),
+                "sha256": sha256_file(history_src),
+            }
+        else:
+            history_npz_missing_count += 1
+            history_info = {
+                "present": False,
+                "source": None,
+                "path": None,
+                "size_bytes": 0,
+                "sha256": None,
+            }
+
+            if require_history_npz:
+                skipped_missing_history += 1
+                records.append(
+                    {
+                        "dimension_fingerprint": fingerprint,
+                        "run_root": str(run_root),
+                        "status": "skip_missing_history_npz",
+                        "history_npz_present": False,
+                    }
+                )
+                continue
+
         if existing and overwrite:
             artifact_id = existing[0]["artifact_id"]
         else:
@@ -782,14 +877,19 @@ def ingest_ofat(
             "source_run_root": str(run_root),
             "source_input_root": str(input_root),
             "ingested_at_utc": utc_now_iso(),
+            "history_npz": history_info,
         })
 
         shutil.copy2(case_cfg_path, adir / "case_config.json")
         shutil.copy2(metrics_path, adir / "metrics_04.json")
 
-        summary_path = find_step04_summary(run_root)
         if summary_path:
             shutil.copy2(summary_path, adir / "step04_optimize_summary.json")
+
+        if history_src is not None:
+            history_dst = adir / "opt_out" / "metrics_history_per_frame.npz"
+            history_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(history_src, history_dst)
 
         if done_path.exists():
             shutil.copy2(done_path, adir / "done")
@@ -802,6 +902,11 @@ def ingest_ofat(
             "dimension_fingerprint": fingerprint,
             "created_at_utc": utc_now_iso(),
             "source_run_root": str(run_root),
+            "history_npz_present": bool(history_info["present"]),
+            "history_npz_path": history_info["path"],
+            "history_npz_source": history_info["source"],
+            "history_npz_size_bytes": history_info["size_bytes"],
+            "history_npz_sha256": history_info["sha256"],
         })
 
         index.setdefault("artifacts", {})[artifact_id] = {
@@ -824,6 +929,11 @@ def ingest_ofat(
                 "dimension_fingerprint": fingerprint,
                 "run_root": str(run_root),
                 "status": "ingested",
+                "history_npz_present": bool(history_info["present"]),
+                "history_npz_path": history_info["path"],
+                "history_npz_source": history_info["source"],
+                "history_npz_size_bytes": history_info["size_bytes"],
+                "history_npz_sha256": history_info["sha256"],
             }
         )
 
@@ -839,6 +949,9 @@ def ingest_ofat(
         "ingested": ingested,
         "skipped_existing": skipped_existing,
         "skipped_no_done": skipped_no_done,
+        "skipped_missing_history": skipped_missing_history,
+        "history_npz_present_count": history_npz_present_count,
+        "history_npz_missing_count": history_npz_missing_count,
         "records": records,
     }
 
@@ -1105,6 +1218,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input_root", required=True)
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--allow_no_done", action="store_true")
+    p.add_argument(
+        "--require_history_npz",
+        "--require-history-npz",
+        action="store_true",
+        help="Require Step04 metrics_history_per_frame.npz when ingesting ssdr_data4 results.",
+    )
     p.add_argument("--report", default=None)
 
     p = sub.add_parser("plan-ofat")
@@ -1143,6 +1262,7 @@ def main() -> None:
             input_root=Path(args.input_root).expanduser().resolve(strict=False),
             overwrite=bool(args.overwrite),
             allow_no_done=bool(args.allow_no_done),
+            require_history_npz=bool(args.require_history_npz),
         )
         if args.report:
             dump_json(args.report, report)

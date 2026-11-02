@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 
 def find_repo_root() -> Path:
     cur = Path(__file__).resolve(strict=False)
@@ -264,6 +266,76 @@ class TestResultPoolFlatV2(unittest.TestCase):
             self.assertEqual(manifest["case_count"], 1)
             self.assertEqual(manifest["cases"][0]["value"], 4)
             self.assertIn("--no_conda", manifest["cases"][0]["command"])
+
+
+    def test_ingest_ofat_copies_metrics_history_per_frame_npz(self) -> None:
+        rp = load_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_pool_history_ingest_") as td:
+            root = Path(td)
+            pool = root / "pool"
+            run_root = root / "ofat" / "M" / "sweep_alpha" / "alpha_0p5"
+            history_dir = run_root / "data4" / "opt_out"
+            history_dir.mkdir(parents=True)
+
+            dump_json(
+                run_root / "case_config.json",
+                {
+                    "model": "M",
+                    "param": "alpha",
+                    "value": 0.5,
+                    "case_id": "alpha_0p5",
+                    "effective_params": {
+                        "alpha": 0.5,
+                        "beta": 0.3,
+                        "gamma": 0.2,
+                        "s_max": 4,
+                        "tau": "adaptive",
+                        "omega_b": 1000.0,
+                    },
+                    "dataset": {
+                        "model": "M",
+                        "ssdr_work_dir": "/tmp/M/ssdr_work_dir",
+                    },
+                },
+            )
+            dump_json(run_root / "metrics_04.json", {"04_L2_Err": 1.0})
+            dump_json(
+                run_root / "data4" / "step04_optimize_summary.json",
+                {"config": make_step04_config(s_max=4)},
+            )
+            np.savez_compressed(
+                history_dir / "metrics_history_per_frame.npz",
+                l2_err=np.asarray([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], dtype=np.float64),
+                org_loss=np.asarray([[0.1, 0.2, 0.3], [0.2, 0.4, 0.6]], dtype=np.float64),
+            )
+            (run_root / "done").write_text("done\n", encoding="utf-8")
+
+            rp.init_pool(pool)
+            report = rp.ingest_ofat(pool=pool, input_root=root / "ofat")
+
+            self.assertEqual(report["ingested"], 1)
+            self.assertEqual(report["history_npz_present_count"], 1)
+            self.assertEqual(report["history_npz_missing_count"], 0)
+
+            adir = pool / "artifacts" / "a000001"
+            history_dst = adir / "opt_out" / "metrics_history_per_frame.npz"
+
+            self.assertTrue(history_dst.is_file())
+
+            manifest = json.loads((adir / "artifact_manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(manifest["history_npz_present"])
+            self.assertEqual(manifest["history_npz_path"], "opt_out/metrics_history_per_frame.npz")
+            self.assertGreater(int(manifest["history_npz_size_bytes"]), 0)
+            self.assertEqual(len(str(manifest["history_npz_sha256"])), 64)
+
+            source_info = json.loads((adir / "source_info.json").read_text(encoding="utf-8"))
+            self.assertTrue(source_info["history_npz"]["present"])
+            self.assertTrue(str(source_info["history_npz"]["source"]).endswith("metrics_history_per_frame.npz"))
+
+            record = report["records"][0]
+            self.assertTrue(record["history_npz_present"])
+            self.assertEqual(record["history_npz_path"], "opt_out/metrics_history_per_frame.npz")
 
     def test_stats_empty_pool(self) -> None:
         rp = load_module()

@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 
 def find_repo_root() -> Path:
     this_file = Path(__file__).resolve(strict=False)
@@ -126,6 +128,69 @@ class TestAggregateMetrics(unittest.TestCase):
 
             ttest_rows = read_csv_rows(out / "ttest_results.csv")
             self.assertTrue(any(r["metric"] == "04_L2_Err" for r in ttest_rows))
+
+
+    def test_aggregate_reads_history_npz_from_pool_artifact_opt_out(self) -> None:
+        mod = load_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_agg_pool_history_") as td:
+            root = Path(td)
+            artifacts = root / "artifacts"
+            out = root / "reports"
+            case_root = artifacts / "a000001"
+            (case_root / "opt_out").mkdir(parents=True)
+
+            dump_json(
+                case_root / "case_config.json",
+                {
+                    "model": "M",
+                    "param": "alpha",
+                    "value": 0.5,
+                    "case_id": "alpha_0p5",
+                    "stage": "ssdr_step04",
+                    "effective_params": {"alpha": 0.5, "beta": 0.3, "gamma": 0.2},
+                },
+            )
+            dump_json(case_root / "metrics_04.json", {"04_L2_Err": 4.0})
+            dump_json(
+                case_root / "step04_optimize_summary.json",
+                {
+                    "final_metrics": {"04_L2_Err": 4.0},
+                    "counts": {"frames": 3},
+                    "config": {"s_max": 4},
+                },
+            )
+            np.savez_compressed(
+                case_root / "opt_out" / "metrics_history_per_frame.npz",
+                l2_err=np.asarray([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], dtype=np.float64),
+            )
+
+            manifest = mod.aggregate(
+                input_root=artifacts,
+                output_dir=out,
+                mode="sweep",
+                metrics_requested=["04_L2_Err"],
+                group_by=["param", "value"],
+                ttest_kind="none",
+                baseline_query_text="",
+                pair_by=None,
+                ttest_group_by=None,
+            )
+
+            self.assertEqual(manifest["row_count"], 1)
+
+            rows = read_csv_rows(out / "aggregated_metrics.csv")
+            self.assertEqual(len(rows), 1)
+
+            row = rows[0]
+            self.assertIn("history_l2_err_final_mean", row)
+            self.assertIn("history_l2_err_final_std", row)
+            self.assertIn("history_l2_err_final_min", row)
+            self.assertIn("history_l2_err_final_max", row)
+
+            self.assertAlmostEqual(float(row["history_l2_err_final_mean"]), 4.0)
+            self.assertAlmostEqual(float(row["history_l2_err_final_min"]), 2.0)
+            self.assertAlmostEqual(float(row["history_l2_err_final_max"]), 6.0)
 
     def test_cv_aggregation(self) -> None:
         mod = load_module()
