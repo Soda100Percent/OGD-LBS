@@ -94,9 +94,21 @@ class TestGenerateReport(unittest.TestCase):
                         "04_Org_Loss": "0.01",
                         "04_Max_Roll": "10.0",
                         "04_Max_Swing": "20.0",
+                        "history_l2_err_final_mean": "1.0",
+                        "history_l2_err_final_min": "0.7",
+                        "history_l2_err_final_max": "1.4",
                         "history_l2_err_final_std": "0.11",
+                        "history_org_loss_final_mean": "0.01",
+                        "history_org_loss_final_min": "0.0",
+                        "history_org_loss_final_max": "0.03",
                         "history_org_loss_final_std": "0.001",
+                        "history_bone_roll_max_final_mean": "10.0",
+                        "history_bone_roll_max_final_min": "8.0",
+                        "history_bone_roll_max_final_max": "13.0",
                         "history_bone_roll_max_final_std": "1.5",
+                        "history_bone_swing_max_final_mean": "20.0",
+                        "history_bone_swing_max_final_min": "15.0",
+                        "history_bone_swing_max_final_max": "25.0",
                         "history_bone_swing_max_final_std": "2.5",
                     },
                     {
@@ -112,9 +124,21 @@ class TestGenerateReport(unittest.TestCase):
                         "04_Org_Loss": "0.02",
                         "04_Max_Roll": "11.0",
                         "04_Max_Swing": "21.0",
+                        "history_l2_err_final_mean": "1.2",
+                        "history_l2_err_final_min": "0.8",
+                        "history_l2_err_final_max": "1.5",
                         "history_l2_err_final_std": "0.12",
+                        "history_org_loss_final_mean": "0.02",
+                        "history_org_loss_final_min": "0.0",
+                        "history_org_loss_final_max": "0.04",
                         "history_org_loss_final_std": "0.002",
+                        "history_bone_roll_max_final_mean": "11.0",
+                        "history_bone_roll_max_final_min": "9.0",
+                        "history_bone_roll_max_final_max": "14.0",
                         "history_bone_roll_max_final_std": "1.6",
+                        "history_bone_swing_max_final_mean": "21.0",
+                        "history_bone_swing_max_final_min": "16.0",
+                        "history_bone_swing_max_final_max": "26.0",
                         "history_bone_swing_max_final_std": "2.6",
                     },
                 ],
@@ -155,9 +179,9 @@ class TestGenerateReport(unittest.TestCase):
             self.assertIn("exportChart", html)
 
             # R2a: sweep mean±std and model-grouped raw metric chart payloads.
-            self.assertIn("sweep-mean-std-container", html)
+            self.assertNotIn("sweep-mean-std-container", html)
             self.assertIn("model-grouped-raw-container", html)
-            self.assertIn("sweepMeanStd", html)
+            self.assertNotIn("Sweep Mean ± Std Charts", html)
             self.assertIn("modelGroupedRaw", html)
             self.assertIn("defaultSweepValues", html)
             self.assertIn("★ default", html)
@@ -171,6 +195,23 @@ class TestGenerateReport(unittest.TestCase):
             self.assertIn("history_bone_roll_max_final_std", html)
             self.assertIn("history_bone_swing_max_final_std", html)
             self.assertIn("per-frame std", html)
+
+            # R2g: chart whiskers show min-max fluctuation ranges;
+            # strict std remains available in the table and tooltip.
+            self.assertIn("Per-frame Fluctuation / Std Table", html)
+            self.assertIn("per-frame min-max range", html)
+            self.assertIn("frameMin", html)
+            self.assertIn("frameMax", html)
+            self.assertIn("frameStd", html)
+            self.assertIn("drawLow", html)
+            self.assertIn("drawHigh", html)
+            self.assertIn("hasFrameFluctuation", html)
+            self.assertIn("positiveMetric", html)
+            self.assertIn("yAxisMax", html)
+            self.assertIn("VD_frame_std", html)
+            self.assertIn("SO_frame_std", html)
+            self.assertIn("Roll_frame_std", html)
+            self.assertIn("Swing_frame_std", html)
 
     def test_generate_cv_report_with_ttest(self) -> None:
         mod = load_module()

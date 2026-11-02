@@ -467,127 +467,6 @@ function defaultBarStyle(isDefault, groupKey) {
     };
 }
 
-function renderSweepMeanStdCharts() {
-    const D = window.DASHBOARD_DATA || {};
-    const charts = (D.charts && D.charts.sweepMeanStd) || [];
-    const container = document.getElementById('sweep-mean-std-container');
-
-    if (!container) return;
-
-    if (!Array.isArray(charts) || charts.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-section';
-        empty.innerText = 'No sweep mean±std chart data found. Re-run aggregation with --group_by param value.';
-        container.appendChild(empty);
-        return;
-    }
-
-    charts.forEach((chartSpec) => {
-        if (!chartSpec.items || chartSpec.items.length === 0) return;
-
-        const domId = 'chart-sweep-mean-std-' + chartSpec.key;
-        const dom = createChartBox(domId, chartSpec.title, container);
-        const chart = echarts.init(dom, null, { renderer: 'svg' });
-        allChartInstances.push(chart);
-
-        const labels = chartSpec.items.map(i => `${i.param}=${i.value}`);
-
-        const barData = chartSpec.items.map((i) => {
-            return {
-                value: i.mean,
-                itemStyle: defaultBarStyle(Boolean(i.isDefault), i.value),
-                label: {
-                    show: Boolean(i.isDefault),
-                    position: 'top',
-                    formatter: '★ default',
-                    color: '#111827',
-                    fontWeight: 'bold',
-                    fontSize: 11
-                }
-            };
-        });
-
-        const errorData = chartSpec.items.map((i, idx) => {
-            return [idx, Number(i.low), Number(i.high), Number(i.std || 0), Number(i.n || 0)];
-        });
-
-        chart.setOption({
-            animation: false,
-            textStyle: { fontFamily: customFontFamily },
-            tooltip: {
-                trigger: 'axis',
-                axisPointer: { type: 'shadow' },
-                formatter: (params) => {
-                    const idx = params && params.length ? params[0].dataIndex : 0;
-                    const item = chartSpec.items[idx] || {};
-                    return `<b>${escapeHtml(item.param)}=${escapeHtml(item.value)}</b><br/>`
-                        + `${escapeHtml(chartSpec.metric)} mean: <b>${formatValue(item.mean)}</b><br/>`
-                        + `std: <b>${formatValue(item.std)}</b><br/>`
-                        + `n: <b>${escapeHtml(item.n)}</b>`
-                        + (item.isDefault ? `<br/><b>★ paper/default value</b>` : '');
-                }
-            },
-            grid: { top: 45, bottom: 95, left: 90, right: 35 },
-            xAxis: {
-                type: 'category',
-                data: labels,
-                axisLabel: { rotate: 25, fontSize: 11, interval: 0 }
-            },
-            yAxis: {
-                type: 'value',
-                scale: true,
-                name: chartSpec.yName || chartSpec.metric,
-                nameLocation: 'middle',
-                nameGap: 65
-            },
-            series: [
-                {
-                    name: 'mean',
-                    type: 'bar',
-                    barMaxWidth: 44,
-                    data: barData
-                },
-                {
-                    name: '± std',
-                    type: 'custom',
-                    data: errorData,
-                    z: 10,
-                    tooltip: { show: false },
-                    renderItem: (params, api) => {
-                        const xIndex = api.value(0);
-                        const low = api.value(1);
-                        const high = api.value(2);
-                        const lowPoint = api.coord([xIndex, low]);
-                        const highPoint = api.coord([xIndex, high]);
-                        const halfWidth = 9;
-
-                        return {
-                            type: 'group',
-                            children: [
-                                {
-                                    type: 'line',
-                                    shape: { x1: lowPoint[0], y1: lowPoint[1], x2: highPoint[0], y2: highPoint[1] },
-                                    style: { stroke: '#111827', lineWidth: 1.5 }
-                                },
-                                {
-                                    type: 'line',
-                                    shape: { x1: highPoint[0] - halfWidth, y1: highPoint[1], x2: highPoint[0] + halfWidth, y2: highPoint[1] },
-                                    style: { stroke: '#111827', lineWidth: 1.5 }
-                                },
-                                {
-                                    type: 'line',
-                                    shape: { x1: lowPoint[0] - halfWidth, y1: lowPoint[1], x2: lowPoint[0] + halfWidth, y2: lowPoint[1] },
-                                    style: { stroke: '#111827', lineWidth: 1.5 }
-                                }
-                            ]
-                        };
-                    }
-                }
-            ]
-        });
-    });
-}
-
 function renderModelGroupedRawCharts() {
     const D = window.DASHBOARD_DATA || {};
     const charts = (D.charts && D.charts.modelGroupedRaw) || [];
@@ -614,7 +493,7 @@ function renderModelGroupedRawCharts() {
         const models = chartSpec.models || Array.from(new Set(chartSpec.items.map(i => i.model)));
         const categories = [];
         const data = [];
-        const errorData = [];
+        const rangeData = [];
 
         models.forEach((model, modelIdx) => {
             const items = chartSpec.items.filter(i => i.model === model);
@@ -624,8 +503,9 @@ function renderModelGroupedRawCharts() {
                 categories.push(`${model}\n${item.value}`);
 
                 const metricValue = Number(item.metricValue);
-                const perFrameStd = finiteNumber(item.perFrameStd);
-                const hasPerFrameStd = Boolean(item.hasPerFrameStd) && perFrameStd !== null;
+                const hasFrameFluctuation = Boolean(item.hasFrameFluctuation)
+                    && finiteNumber(item.drawLow) !== null
+                    && finiteNumber(item.drawHigh) !== null;
 
                 data.push({
                     value: metricValue,
@@ -640,12 +520,14 @@ function renderModelGroupedRawCharts() {
                     rawItem: item
                 });
 
-                if (hasPerFrameStd) {
-                    errorData.push([
+                if (hasFrameFluctuation) {
+                    rangeData.push([
                         categoryIndex,
-                        metricValue - perFrameStd,
-                        metricValue + perFrameStd,
-                        perFrameStd,
+                        Number(item.drawLow),
+                        Number(item.drawHigh),
+                        Number(item.frameMin),
+                        Number(item.frameMax),
+                        Number(item.frameStd),
                         item.model,
                         item.value
                     ]);
@@ -670,19 +552,19 @@ function renderModelGroupedRawCharts() {
             }
         ];
 
-        if (errorData.length > 0) {
+        if (rangeData.length > 0) {
             series.push({
-                name: 'per-frame std',
+                name: 'per-frame min-max range',
                 type: 'custom',
-                data: errorData,
+                data: rangeData,
                 z: 10,
                 tooltip: { show: false },
                 renderItem: (params, api) => {
                     const xIndex = api.value(0);
-                    const low = api.value(1);
-                    const high = api.value(2);
-                    const lowPoint = api.coord([xIndex, low]);
-                    const highPoint = api.coord([xIndex, high]);
+                    const drawLow = api.value(1);
+                    const drawHigh = api.value(2);
+                    const lowPoint = api.coord([xIndex, drawLow]);
+                    const highPoint = api.coord([xIndex, drawHigh]);
                     const halfWidth = 7;
 
                     return {
@@ -724,6 +606,22 @@ function renderModelGroupedRawCharts() {
             });
         }
 
+        const yAxis = {
+            type: 'value',
+            scale: false,
+            name: chartSpec.yName || chartSpec.metric,
+            nameLocation: 'middle',
+            nameGap: 65
+        };
+
+        if (chartSpec.positiveMetric) {
+            yAxis.min = Number(chartSpec.yAxisMin ?? 0);
+        }
+
+        if (finiteNumber(chartSpec.yAxisMax) !== null) {
+            yAxis.max = Number(chartSpec.yAxisMax);
+        }
+
         chart.setOption({
             animation: false,
             textStyle: { fontFamily: customFontFamily },
@@ -733,24 +631,36 @@ function renderModelGroupedRawCharts() {
                     const item = (p.data && p.data.rawItem) || {};
                     if (item.gap) return '';
 
-                    const perFrameStd = finiteNumber(item.perFrameStd);
-                    const stdLine = perFrameStd === null
-                        ? '<br/>per-frame std: <i>not available</i>'
-                        : `<br/>per-frame std: <b>${formatValue(perFrameStd)}</b>`;
+                    const hasRange = Boolean(item.hasFrameFluctuation);
+                    const frameStd = finiteNumber(item.frameStd);
 
-                    const stdField = item.perFrameStdField
-                        ? `<br/><span style="color:#667085;">${escapeHtml(item.perFrameStdField)}</span>`
+                    const rangeLine = hasRange
+                        ? `<br/>per-frame range: <b>[${formatValue(item.frameMin)}, ${formatValue(item.frameMax)}]</b>`
+                        : '<br/>per-frame range: <i>not available</i>';
+
+                    const stdLine = frameStd === null
+                        ? '<br/>strict per-frame std: <i>not available</i>'
+                        : `<br/>strict per-frame std: <b>${formatValue(frameStd)}</b>`;
+
+                    const meanLine = finiteNumber(item.frameMean) === null
+                        ? ''
+                        : `<br/>per-frame mean: <b>${formatValue(item.frameMean)}</b>`;
+
+                    const clipLine = item.lowerClippedAtZero
+                        ? '<br/><span style="color:#b45309;">display lower bound clipped at 0</span>'
                         : '';
 
                     return `<b>${escapeHtml(item.model)}</b><br/>`
                         + `${escapeHtml(item.param)}=${escapeHtml(item.value)}`
                         + (item.isDefault ? ' <b>★ default</b>' : '')
                         + `<br/>${escapeHtml(chartSpec.metric)}: <b>${formatValue(item.metricValue)}</b>`
+                        + rangeLine
+                        + meanLine
                         + stdLine
-                        + stdField;
+                        + clipLine;
                 }
             },
-            grid: { top: 45, bottom: 130, left: 90, right: 35 },
+            grid: { top: 50, bottom: 130, left: 90, right: 35 },
             xAxis: {
                 type: 'category',
                 data: categories,
@@ -761,13 +671,7 @@ function renderModelGroupedRawCharts() {
                 },
                 axisTick: { alignWithLabel: true }
             },
-            yAxis: {
-                type: 'value',
-                scale: true,
-                name: chartSpec.yName || chartSpec.metric,
-                nameLocation: 'middle',
-                nameGap: 65
-            },
+            yAxis: yAxis,
             series: series
         });
     });
@@ -776,12 +680,11 @@ function renderModelGroupedRawCharts() {
 function renderAllCharts() {
     allChartInstances.splice(0, allChartInstances.length);
 
-    ['sweep-mean-std-container', 'model-grouped-raw-container', 'dynamic-charts-container'].forEach((id) => {
+    ['model-grouped-raw-container', 'dynamic-charts-container'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = '';
     });
 
-    renderSweepMeanStdCharts();
     renderModelGroupedRawCharts();
     renderBars();
     renderPareto();

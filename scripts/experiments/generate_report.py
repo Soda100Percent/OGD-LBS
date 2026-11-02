@@ -136,6 +136,49 @@ CONFIG_COLUMNS_BY_MODE = {
 }
 
 
+
+PER_FRAME_HISTORY_FIELDS_BY_METRIC = {
+    # Per-frame final fluctuation ranges and strict std values derived from
+    # opt_out/metrics_history_per_frame.npz by aggregate_metrics.py.
+    #
+    # Chart semantics:
+    #   bar      = case-level metric value, e.g. 04_L2_Err
+    #   whisker  = per-frame final min-max fluctuation range
+    #   tooltip/table = strict per-frame std
+    "04_L2_Err": {
+        "label": "VD",
+        "mean": "history_l2_err_final_mean",
+        "std": "history_l2_err_final_std",
+        "min": "history_l2_err_final_min",
+        "max": "history_l2_err_final_max",
+    },
+    "04_Org_Loss": {
+        "label": "SO",
+        "mean": "history_org_loss_final_mean",
+        "std": "history_org_loss_final_std",
+        "min": "history_org_loss_final_min",
+        "max": "history_org_loss_final_max",
+    },
+    "04_Max_Roll": {
+        "label": "Roll",
+        "mean": "history_bone_roll_max_final_mean",
+        "std": "history_bone_roll_max_final_std",
+        "min": "history_bone_roll_max_final_min",
+        "max": "history_bone_roll_max_final_max",
+    },
+    "04_Max_Swing": {
+        "label": "Swing",
+        "mean": "history_bone_swing_max_final_mean",
+        "std": "history_bone_swing_max_final_std",
+        "min": "history_bone_swing_max_final_min",
+        "max": "history_bone_swing_max_final_max",
+    },
+
+    # Current history npz does not contain per-frame Hausdorff values.
+    "04_Hausdorff_Mean": None,
+    "04_Hausdorff_Max": None,
+}
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate minimal standalone OGD-LBS experiment HTML report."
@@ -343,6 +386,64 @@ def build_metrics_table(rows: list[dict[str, Any]]) -> str:
         tbody += "</tr>"
 
     return f"<table class='metrics-table'><thead>{thead}</thead><tbody>{tbody}</tbody></table>"
+
+
+
+def build_frame_fluctuation_table(rows: list[dict[str, Any]]) -> str:
+    """
+    Table view for strict per-frame std and min-max fluctuation ranges.
+
+    This table intentionally separates strict std values from the chart visual
+    whiskers, which represent min-max fluctuation ranges.
+    """
+    if not rows:
+        return "<div class='empty-section'>No rows found.</div>"
+
+    metric_specs = [
+        ("VD", "04_L2_Err", PER_FRAME_HISTORY_FIELDS_BY_METRIC.get("04_L2_Err")),
+        ("SO", "04_Org_Loss", PER_FRAME_HISTORY_FIELDS_BY_METRIC.get("04_Org_Loss")),
+        ("Roll", "04_Max_Roll", PER_FRAME_HISTORY_FIELDS_BY_METRIC.get("04_Max_Roll")),
+        ("Swing", "04_Max_Swing", PER_FRAME_HISTORY_FIELDS_BY_METRIC.get("04_Max_Swing")),
+    ]
+
+    cols: list[tuple[str, str]] = [
+        ("model", "model"),
+        ("param", "param"),
+        ("value", "value"),
+    ]
+
+    for label, metric_key, hist in metric_specs:
+        if not isinstance(hist, dict):
+            continue
+        cols.extend([
+            (metric_key, label),
+            (str(hist.get("min")), f"{label}_frame_min"),
+            (str(hist.get("max")), f"{label}_frame_max"),
+            (str(hist.get("std")), f"{label}_frame_std"),
+        ])
+
+    thead = "<tr>" + "".join(
+        f"<th>{html_escape(title)}</th>"
+        for _key, title in cols
+    ) + "</tr>"
+
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            str(r.get("model", "")),
+            str(r.get("param", "")),
+            sweep_value_sort_key(r.get("value", "")),
+        )
+    )
+
+    tbody = ""
+    for row in sorted_rows:
+        tbody += "<tr>"
+        for key, _title in cols:
+            tbody += f"<td>{format_cell(row.get(key, ''))}</td>"
+        tbody += "</tr>"
+
+    return f"<table class='frame-fluctuation-table'><thead>{thead}</thead><tbody>{tbody}</tbody></table>"
 
 
 def build_plain_table(rows: list[dict[str, str]], *, max_cols: int = 24) -> str:
@@ -578,6 +679,19 @@ def prepare_model_grouped_raw_charts(
     rows: list[dict[str, Any]],
     default_sweep_values: dict[str, str],
 ) -> list[dict[str, Any]]:
+    """
+    Build raw metric chart data grouped visually by model.
+
+    Each bar is one model/value result.
+
+    For metrics with per-frame history:
+      - bar height is the case-level metric value;
+      - vertical whisker is the per-frame final min-max fluctuation range;
+      - strict per-frame std is included for tooltip/table display.
+
+    Hausdorff metrics currently have no per-frame history and therefore have
+    no whiskers.
+    """
     charts: list[dict[str, Any]] = []
 
     if not rows:
@@ -585,6 +699,10 @@ def prepare_model_grouped_raw_charts(
 
     for metric, title, direction in REPORT_METRIC_CHART_SPECS:
         items: list[dict[str, Any]] = []
+        chart_max = 0.0
+        positive_metric = True
+
+        history_spec = PER_FRAME_HISTORY_FIELDS_BY_METRIC.get(metric)
 
         for row in rows:
             x = finite_float(row.get(metric))
@@ -598,12 +716,35 @@ def prepare_model_grouped_raw_charts(
             if not model or not param:
                 continue
 
-            per_frame_std_field = PER_FRAME_STD_FIELD_BY_METRIC.get(metric)
-            per_frame_std = (
-                finite_float(row.get(per_frame_std_field))
-                if per_frame_std_field
-                else None
-            )
+            frame_mean = None
+            frame_std = None
+            frame_min = None
+            frame_max = None
+            has_frame_fluctuation = False
+
+            if isinstance(history_spec, dict):
+                frame_mean = finite_float(row.get(str(history_spec.get("mean"))))
+                frame_std = finite_float(row.get(str(history_spec.get("std"))))
+                frame_min = finite_float(row.get(str(history_spec.get("min"))))
+                frame_max = finite_float(row.get(str(history_spec.get("max"))))
+                has_frame_fluctuation = frame_min is not None and frame_max is not None
+
+            if has_frame_fluctuation:
+                assert frame_min is not None
+                assert frame_max is not None
+                raw_low = frame_min
+                raw_high = frame_max
+                draw_low = max(0.0, frame_min) if positive_metric else frame_min
+                draw_high = max(frame_max, x)
+                lower_clipped = draw_low != raw_low
+                chart_max = max(chart_max, x, draw_high)
+            else:
+                raw_low = None
+                raw_high = None
+                draw_low = None
+                draw_high = None
+                lower_clipped = False
+                chart_max = max(chart_max, x)
 
             items.append(
                 {
@@ -614,11 +755,24 @@ def prepare_model_grouped_raw_charts(
                     "direction": direction,
                     "isDefault": is_default_sweep_value(param, value, default_sweep_values),
                     "label": f"{model} | {param}={value}",
-                    "perFrameStdField": per_frame_std_field or "",
-                    "perFrameStd": per_frame_std,
-                    "hasPerFrameStd": per_frame_std is not None,
-                    "low": x - per_frame_std if per_frame_std is not None else None,
-                    "high": x + per_frame_std if per_frame_std is not None else None,
+
+                    "historyLabel": history_spec.get("label") if isinstance(history_spec, dict) else "",
+                    "frameMean": frame_mean,
+                    "frameStd": frame_std,
+                    "frameMin": frame_min,
+                    "frameMax": frame_max,
+                    "hasFrameFluctuation": bool(has_frame_fluctuation),
+                    "rawLow": raw_low,
+                    "rawHigh": raw_high,
+                    "drawLow": draw_low,
+                    "drawHigh": draw_high,
+                    "lowerClippedAtZero": bool(lower_clipped),
+
+                    # Backward-compatible R2f fields retained for tooltip/tests.
+                    "perFrameStdField": str(history_spec.get("std")) if isinstance(history_spec, dict) else "",
+                    "perFrameStd": frame_std,
+                    "hasPerFrameStd": frame_std is not None,
+                    "fluctuationLabel": "per-frame min-max range" if has_frame_fluctuation else "",
                 }
             )
 
@@ -631,6 +785,9 @@ def prepare_model_grouped_raw_charts(
         )
 
         if items:
+            padding = max(chart_max * 0.08, 1e-12)
+            y_axis_max = chart_max + padding
+
             charts.append(
                 {
                     "key": slugify(f"model_grouped_raw_{metric}"),
@@ -639,6 +796,11 @@ def prepare_model_grouped_raw_charts(
                     "yName": title,
                     "models": sorted({str(x.get("model", "")) for x in items}),
                     "items": items,
+                    "positiveMetric": positive_metric,
+                    "yAxisMin": 0.0 if positive_metric else None,
+                    "yAxisMax": y_axis_max,
+                    "fluctuationMode": "per-frame min-max range",
+                    "stdSemantics": "Strict per-frame std is shown in tooltip/table, not as ±std error bar.",
                 }
             )
 
@@ -684,6 +846,7 @@ def build_html(
     metrics_table = build_metrics_table(rows)
     summary_table = build_plain_table(summary_rows) if summary_rows else "<div class='empty-section'>No summary_by_group.csv found.</div>"
     ttest_table = build_plain_table(ttest_rows) if ttest_rows else "<div class='empty-section'>No t-test results found.</div>"
+    frame_fluctuation_table = build_frame_fluctuation_table(rows)
 
     report_data = {
         "meta": {
@@ -702,7 +865,6 @@ def build_html(
         "charts": {
             "bars": prepare_bar_charts(rows),
             "pareto": prepare_pareto(rows, mode),
-            "sweepMeanStd": prepare_sweep_mean_std_charts(summary_rows, default_sweep_values),
             "modelGroupedRaw": prepare_model_grouped_raw_charts(rows, default_sweep_values),
             "defaultSweepValues": default_sweep_values,
         },
@@ -761,18 +923,19 @@ window.DASHBOARD_DATA = {report_json};
     <h2>🧪 T-test Results</h2>
     <div class="table-container">{ttest_table}</div>
 
-    <h2>📊 Sweep Mean ± Std Charts</h2>
+    <h2>📋 Per-frame Fluctuation / Std Table</h2>
     <div class="info-note">
-        Bars show mean across models; error bars show ± one sample standard deviation.
-        The paper/default sweep value is highlighted.
+        Strict per-frame standard deviation values are listed here.
+        Chart whiskers show min-max fluctuation ranges, not ±std.
     </div>
-    <div id="sweep-mean-std-container"></div>
+    <div class="table-container">{frame_fluctuation_table}</div>
 
     <h2>🧩 Model-grouped Raw Metric Charts</h2>
     <div class="info-note">
         Bars are sorted by model and sweep value. Blank gaps separate models.
-        When available, error bars show per-frame final standard deviation within each case.
-        HD currently has no per-frame history std and is shown without error bars.
+        When available, vertical whiskers show the per-frame final min-max fluctuation range within each case.
+        Strict per-frame standard deviations are shown in the table and tooltip.
+        HD currently has no per-frame history and is shown without whiskers.
     </div>
     <div id="model-grouped-raw-container"></div>
 
