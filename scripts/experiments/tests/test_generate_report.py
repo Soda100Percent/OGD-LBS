@@ -142,6 +142,14 @@ class TestGenerateReport(unittest.TestCase):
             self.assertIn("chart-pareto", html)
             self.assertIn("exportChart", html)
 
+            # R2a: sweep mean±std and model-grouped raw metric chart payloads.
+            self.assertIn("sweep-mean-std-container", html)
+            self.assertIn("model-grouped-raw-container", html)
+            self.assertIn("sweepMeanStd", html)
+            self.assertIn("modelGroupedRaw", html)
+            self.assertIn("defaultSweepValues", html)
+            self.assertIn("★ default", html)
+
     def test_generate_cv_report_with_ttest(self) -> None:
         mod = load_module()
 

@@ -60,6 +60,25 @@ BAR_METRIC_PRIORITY = [
     "04_ARAP_Ratio",
 ]
 
+
+DEFAULT_SWEEP_VALUES = {
+    "alpha": "0.5",
+    "beta": "0.3",
+    "gamma": "0.2",
+    "s_max": "4",
+    "tau": "adaptive",
+    "omega_b": "1000.0",
+}
+
+REPORT_METRIC_CHART_SPECS = [
+    ("04_L2_Err", "VD / L2 Error ↓", "min"),
+    ("04_Org_Loss", "SO / Org Loss ↓", "min"),
+    ("04_Hausdorff_Mean", "HD Mean ↓", "min"),
+    ("04_Hausdorff_Max", "HD Max ↓", "min"),
+    ("04_Max_Roll", "Max Roll ↓", "min"),
+    ("04_Max_Swing", "Max Swing ↓", "min"),
+]
+
 CONFIG_COLUMNS_BY_MODE = {
     "sweep": [
         "model",
@@ -108,6 +127,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["sweep", "cv", "generic"], default=None)
     parser.add_argument("--output_html", type=str, default=None)
     parser.add_argument("--title", type=str, default="OGD-LBS Experiment Report")
+    parser.add_argument(
+        "--default_sweep_values",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated default sweep values for highlighting, e.g. "
+            "alpha=0.5,beta=0.3,gamma=0.2,s_max=4,tau=adaptive,omega_b=1000.0"
+        ),
+    )
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--port", type=int, default=8080)
     return parser.parse_args()
@@ -413,6 +441,181 @@ def prepare_pareto(rows: list[dict[str, Any]], mode: str) -> dict[str, Any]:
     }
 
 
+
+def parse_default_sweep_values(text: str | None) -> dict[str, str]:
+    out = dict(DEFAULT_SWEEP_VALUES)
+    text = str(text or "").strip()
+    if not text:
+        return out
+
+    for chunk in text.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"Invalid default sweep value item {item!r}; expected key=value.")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            out[key] = value
+
+    return out
+
+
+def sweep_value_sort_key(value: Any) -> tuple[int, float | str]:
+    text = str(value)
+    try:
+        return (0, float(text))
+    except Exception:
+        return (1, text)
+
+
+def sweep_values_equal(a: Any, b: Any) -> bool:
+    a_text = str(a)
+    b_text = str(b)
+    if a_text == b_text:
+        return True
+
+    try:
+        return abs(float(a_text) - float(b_text)) <= 1e-12
+    except Exception:
+        return False
+
+
+def is_default_sweep_value(param: Any, value: Any, default_sweep_values: dict[str, str]) -> bool:
+    p = str(param)
+    if p not in default_sweep_values:
+        return False
+    return sweep_values_equal(value, default_sweep_values[p])
+
+
+def prepare_sweep_mean_std_charts(
+    summary_rows: list[dict[str, str]],
+    default_sweep_values: dict[str, str],
+) -> list[dict[str, Any]]:
+    charts: list[dict[str, Any]] = []
+
+    if not summary_rows:
+        return charts
+
+    for metric, title, direction in REPORT_METRIC_CHART_SPECS:
+        mean_key = f"{metric}_mean"
+        std_key = f"{metric}_std"
+        n_key = f"{metric}_n"
+
+        items: list[dict[str, Any]] = []
+
+        for row in summary_rows:
+            if "param" not in row or "value" not in row:
+                continue
+
+            mean = finite_float(row.get(mean_key))
+            if mean is None:
+                continue
+
+            std = finite_float(row.get(std_key))
+            if std is None:
+                std = 0.0
+
+            n_val = finite_float(row.get(n_key))
+            if n_val is None:
+                n_val = finite_float(row.get("n_runs"))
+            n = int(n_val) if n_val is not None else 0
+
+            param = str(row.get("param", ""))
+            value = str(row.get("value", ""))
+
+            items.append(
+                {
+                    "param": param,
+                    "value": value,
+                    "mean": mean,
+                    "std": std,
+                    "n": n,
+                    "low": mean - std,
+                    "high": mean + std,
+                    "direction": direction,
+                    "isDefault": is_default_sweep_value(param, value, default_sweep_values),
+                    "label": f"{param}={value}",
+                }
+            )
+
+        items.sort(key=lambda x: (str(x.get("param", "")), sweep_value_sort_key(x.get("value", ""))))
+
+        if items:
+            charts.append(
+                {
+                    "key": slugify(f"sweep_mean_std_{metric}"),
+                    "metric": metric,
+                    "title": f"{title} — mean ± std across models",
+                    "yName": title,
+                    "items": items,
+                }
+            )
+
+    return charts
+
+
+def prepare_model_grouped_raw_charts(
+    rows: list[dict[str, Any]],
+    default_sweep_values: dict[str, str],
+) -> list[dict[str, Any]]:
+    charts: list[dict[str, Any]] = []
+
+    if not rows:
+        return charts
+
+    for metric, title, direction in REPORT_METRIC_CHART_SPECS:
+        items: list[dict[str, Any]] = []
+
+        for row in rows:
+            x = finite_float(row.get(metric))
+            if x is None:
+                continue
+
+            model = str(row.get("model", ""))
+            param = str(row.get("param", ""))
+            value = str(row.get("value", ""))
+
+            if not model or not param:
+                continue
+
+            items.append(
+                {
+                    "model": model,
+                    "param": param,
+                    "value": value,
+                    "metricValue": x,
+                    "direction": direction,
+                    "isDefault": is_default_sweep_value(param, value, default_sweep_values),
+                    "label": f"{model} | {param}={value}",
+                }
+            )
+
+        items.sort(
+            key=lambda x: (
+                str(x.get("model", "")),
+                str(x.get("param", "")),
+                sweep_value_sort_key(x.get("value", "")),
+            )
+        )
+
+        if items:
+            charts.append(
+                {
+                    "key": slugify(f"model_grouped_raw_{metric}"),
+                    "metric": metric,
+                    "title": f"{title} — raw values by model",
+                    "yName": title,
+                    "models": sorted({str(x.get("model", "")) for x in items}),
+                    "items": items,
+                }
+            )
+
+    return charts
+
+
 def json_dumps_strict(obj: Any) -> str:
     def sanitize(v: Any) -> Any:
         if isinstance(v, float):
@@ -440,8 +643,10 @@ def build_html(
     rows: list[dict[str, Any]],
     summary_rows: list[dict[str, str]],
     ttest_rows: list[dict[str, str]],
+    default_sweep_values: dict[str, str] | None = None,
 ) -> str:
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    default_sweep_values = default_sweep_values or dict(DEFAULT_SWEEP_VALUES)
 
     css = read_template_file("ogd_report_styles.css")
     js = read_template_file("ogd_report_dashboard.js")
@@ -468,6 +673,9 @@ def build_html(
         "charts": {
             "bars": prepare_bar_charts(rows),
             "pareto": prepare_pareto(rows, mode),
+            "sweepMeanStd": prepare_sweep_mean_std_charts(summary_rows, default_sweep_values),
+            "modelGroupedRaw": prepare_model_grouped_raw_charts(rows, default_sweep_values),
+            "defaultSweepValues": default_sweep_values,
         },
     }
 
@@ -524,6 +732,20 @@ window.DASHBOARD_DATA = {report_json};
     <h2>🧪 T-test Results</h2>
     <div class="table-container">{ttest_table}</div>
 
+    <h2>📊 Sweep Mean ± Std Charts</h2>
+    <div class="info-note">
+        Bars show mean across models; error bars show ± one sample standard deviation.
+        The paper/default sweep value is highlighted.
+    </div>
+    <div id="sweep-mean-std-container"></div>
+
+    <h2>🧩 Model-grouped Raw Metric Charts</h2>
+    <div class="info-note">
+        Bars are sorted by model and sweep value. Blank gaps separate models.
+        These raw per-model bars do not show standard deviation because each model/value pair has one run.
+    </div>
+    <div id="model-grouped-raw-container"></div>
+
     <h2>📈 Interactive Charts</h2>
     <div id="dynamic-charts-container"></div>
 
@@ -557,6 +779,7 @@ def generate_report(
     output_html: Path,
     mode: str | None,
     title: str,
+    default_sweep_values: dict[str, str] | None = None,
 ) -> Path:
     aggregate_dir = Path(aggregate_dir).expanduser().resolve(strict=False)
     output_html = Path(output_html).expanduser().resolve(strict=False)
@@ -577,6 +800,7 @@ def generate_report(
         rows=rows,
         summary_rows=summary_rows,
         ttest_rows=ttest_rows,
+        default_sweep_values=default_sweep_values,
     )
 
     output_html.parent.mkdir(parents=True, exist_ok=True)
@@ -631,6 +855,7 @@ def main() -> None:
         output_html=output_html,
         mode=args.mode,
         title=str(args.title),
+        default_sweep_values=parse_default_sweep_values(args.default_sweep_values),
     )
 
     print("=" * 96, flush=True)

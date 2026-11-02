@@ -451,11 +451,249 @@ function renderPareto() {
     }, true);
 }
 
+function defaultBarStyle(isDefault, groupKey) {
+    if (isDefault) {
+        return {
+            color: '#1C328A',
+            borderColor: '#111827',
+            borderWidth: 2,
+            opacity: 0.95
+        };
+    }
+
+    return {
+        color: getColor(groupKey || ''),
+        opacity: 0.82
+    };
+}
+
+function renderSweepMeanStdCharts() {
+    const D = window.DASHBOARD_DATA || {};
+    const charts = (D.charts && D.charts.sweepMeanStd) || [];
+    const container = document.getElementById('sweep-mean-std-container');
+
+    if (!container) return;
+
+    if (!Array.isArray(charts) || charts.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-section';
+        empty.innerText = 'No sweep mean±std chart data found. Re-run aggregation with --group_by param value.';
+        container.appendChild(empty);
+        return;
+    }
+
+    charts.forEach((chartSpec) => {
+        if (!chartSpec.items || chartSpec.items.length === 0) return;
+
+        const domId = 'chart-sweep-mean-std-' + chartSpec.key;
+        const dom = createChartBox(domId, chartSpec.title, container);
+        const chart = echarts.init(dom, null, { renderer: 'svg' });
+        allChartInstances.push(chart);
+
+        const labels = chartSpec.items.map(i => `${i.param}=${i.value}`);
+
+        const barData = chartSpec.items.map((i) => {
+            return {
+                value: i.mean,
+                itemStyle: defaultBarStyle(Boolean(i.isDefault), i.value),
+                label: {
+                    show: Boolean(i.isDefault),
+                    position: 'top',
+                    formatter: '★ default',
+                    color: '#111827',
+                    fontWeight: 'bold',
+                    fontSize: 11
+                }
+            };
+        });
+
+        const errorData = chartSpec.items.map((i, idx) => {
+            return [idx, Number(i.low), Number(i.high), Number(i.std || 0), Number(i.n || 0)];
+        });
+
+        chart.setOption({
+            animation: false,
+            textStyle: { fontFamily: customFontFamily },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: (params) => {
+                    const idx = params && params.length ? params[0].dataIndex : 0;
+                    const item = chartSpec.items[idx] || {};
+                    return `<b>${escapeHtml(item.param)}=${escapeHtml(item.value)}</b><br/>`
+                        + `${escapeHtml(chartSpec.metric)} mean: <b>${formatValue(item.mean)}</b><br/>`
+                        + `std: <b>${formatValue(item.std)}</b><br/>`
+                        + `n: <b>${escapeHtml(item.n)}</b>`
+                        + (item.isDefault ? `<br/><b>★ paper/default value</b>` : '');
+                }
+            },
+            grid: { top: 45, bottom: 95, left: 90, right: 35 },
+            xAxis: {
+                type: 'category',
+                data: labels,
+                axisLabel: { rotate: 25, fontSize: 11, interval: 0 }
+            },
+            yAxis: {
+                type: 'value',
+                scale: true,
+                name: chartSpec.yName || chartSpec.metric,
+                nameLocation: 'middle',
+                nameGap: 65
+            },
+            series: [
+                {
+                    name: 'mean',
+                    type: 'bar',
+                    barMaxWidth: 44,
+                    data: barData
+                },
+                {
+                    name: '± std',
+                    type: 'custom',
+                    data: errorData,
+                    z: 10,
+                    tooltip: { show: false },
+                    renderItem: (params, api) => {
+                        const xIndex = api.value(0);
+                        const low = api.value(1);
+                        const high = api.value(2);
+                        const lowPoint = api.coord([xIndex, low]);
+                        const highPoint = api.coord([xIndex, high]);
+                        const halfWidth = 9;
+
+                        return {
+                            type: 'group',
+                            children: [
+                                {
+                                    type: 'line',
+                                    shape: { x1: lowPoint[0], y1: lowPoint[1], x2: highPoint[0], y2: highPoint[1] },
+                                    style: { stroke: '#111827', lineWidth: 1.5 }
+                                },
+                                {
+                                    type: 'line',
+                                    shape: { x1: highPoint[0] - halfWidth, y1: highPoint[1], x2: highPoint[0] + halfWidth, y2: highPoint[1] },
+                                    style: { stroke: '#111827', lineWidth: 1.5 }
+                                },
+                                {
+                                    type: 'line',
+                                    shape: { x1: lowPoint[0] - halfWidth, y1: lowPoint[1], x2: lowPoint[0] + halfWidth, y2: lowPoint[1] },
+                                    style: { stroke: '#111827', lineWidth: 1.5 }
+                                }
+                            ]
+                        };
+                    }
+                }
+            ]
+        });
+    });
+}
+
+function renderModelGroupedRawCharts() {
+    const D = window.DASHBOARD_DATA || {};
+    const charts = (D.charts && D.charts.modelGroupedRaw) || [];
+    const container = document.getElementById('model-grouped-raw-container');
+
+    if (!container) return;
+
+    if (!Array.isArray(charts) || charts.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-section';
+        empty.innerText = 'No model-grouped raw metric chart data found.';
+        container.appendChild(empty);
+        return;
+    }
+
+    charts.forEach((chartSpec) => {
+        if (!chartSpec.items || chartSpec.items.length === 0) return;
+
+        const domId = 'chart-model-grouped-raw-' + chartSpec.key;
+        const dom = createChartBox(domId, chartSpec.title, container, 'model-grouped-wrapper');
+        const chart = echarts.init(dom, null, { renderer: 'svg' });
+        allChartInstances.push(chart);
+
+        const models = chartSpec.models || Array.from(new Set(chartSpec.items.map(i => i.model)));
+        const categories = [];
+        const data = [];
+
+        models.forEach((model, modelIdx) => {
+            const items = chartSpec.items.filter(i => i.model === model);
+
+            items.forEach((item) => {
+                categories.push(`${model}\n${item.value}`);
+                data.push({
+                    value: item.metricValue,
+                    itemStyle: defaultBarStyle(Boolean(item.isDefault), item.value),
+                    label: {
+                        show: Boolean(item.isDefault),
+                        position: 'top',
+                        formatter: '★',
+                        color: '#111827',
+                        fontWeight: 'bold'
+                    },
+                    rawItem: item
+                });
+            });
+
+            if (modelIdx < models.length - 1) {
+                categories.push('');
+                data.push({
+                    value: null,
+                    itemStyle: { color: 'rgba(0,0,0,0)' },
+                    rawItem: { gap: true }
+                });
+            }
+        });
+
+        chart.setOption({
+            animation: false,
+            textStyle: { fontFamily: customFontFamily },
+            tooltip: {
+                trigger: 'item',
+                formatter: (p) => {
+                    const item = (p.data && p.data.rawItem) || {};
+                    if (item.gap) return '';
+                    return `<b>${escapeHtml(item.model)}</b><br/>`
+                        + `${escapeHtml(item.param)}=${escapeHtml(item.value)}`
+                        + (item.isDefault ? ' <b>★ default</b>' : '')
+                        + `<br/>${escapeHtml(chartSpec.metric)}: <b>${formatValue(item.metricValue)}</b>`;
+                }
+            },
+            grid: { top: 45, bottom: 130, left: 90, right: 35 },
+            xAxis: {
+                type: 'category',
+                data: categories,
+                axisLabel: { rotate: 45, fontSize: 10, interval: 0 },
+                axisTick: { alignWithLabel: true }
+            },
+            yAxis: {
+                type: 'value',
+                scale: true,
+                name: chartSpec.yName || chartSpec.metric,
+                nameLocation: 'middle',
+                nameGap: 65
+            },
+            series: [
+                {
+                    type: 'bar',
+                    barMaxWidth: 26,
+                    data: data
+                }
+            ]
+        });
+    });
+}
+
+
 function renderAllCharts() {
     allChartInstances.splice(0, allChartInstances.length);
-    const container = document.getElementById('dynamic-charts-container');
-    if (container) container.innerHTML = '';
 
+    ['sweep-mean-std-container', 'model-grouped-raw-container', 'dynamic-charts-container'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '';
+    });
+
+    renderSweepMeanStdCharts();
+    renderModelGroupedRawCharts();
     renderBars();
     renderPareto();
 }
