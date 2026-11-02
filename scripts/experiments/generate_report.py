@@ -70,6 +70,22 @@ DEFAULT_SWEEP_VALUES = {
     "omega_b": "1000.0",
 }
 
+DEFAULT_MODEL_SCALE_VALUES = {
+    # Prefix rule: applies to all Vroid_* models.
+    "Vroid_": 1.0,
+
+    # Explicit model rules.
+    "Winter_Samurai": 10.0,
+    "Griffin_A2": 0.3,
+}
+
+DEFAULT_SCALED_METRICS = {
+    # Distance-like metrics affected by model scale.
+    "04_L2_Err",
+    "04_Hausdorff_Mean",
+    "04_Hausdorff_Max",
+}
+
 REPORT_METRIC_CHART_SPECS = [
     ("04_L2_Err", "VD / L2 Error ↓", "min"),
     ("04_Org_Loss", "SO / Org Loss ↓", "min"),
@@ -95,6 +111,10 @@ PER_FRAME_STD_FIELD_BY_METRIC = {
     "04_Hausdorff_Mean": None,
     "04_Hausdorff_Max": None,
 }
+
+DEFAULT_AXIS_MODE = "auto"
+DEFAULT_PSEUDO_LOG_RATIO_THRESHOLD = 50.0
+DEFAULT_AXIS_LINEAR_THRESHOLD_EPS = 1e-12
 
 CONFIG_COLUMNS_BY_MODE = {
     "sweep": [
@@ -195,6 +215,40 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated default sweep values for highlighting, e.g. "
             "alpha=0.5,beta=0.3,gamma=0.2,s_max=4,tau=adaptive,omega_b=1000.0"
         ),
+    )
+    parser.add_argument(
+        "--model_scale_values",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated model scale rules, e.g. "
+            "Vroid_=1.0,Winter_Samurai=10.0,Griffin_A2=0.3. "
+            "Keys ending with '_' are treated as prefix rules."
+        ),
+    )
+    parser.add_argument(
+        "--scaled_metrics",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated metrics to apply model scaling to. "
+            "Default: 04_L2_Err,04_Hausdorff_Mean,04_Hausdorff_Max"
+        ),
+    )
+    parser.add_argument(
+        "--axis_mode",
+        choices=["auto", "linear", "pseudo_log"],
+        default=DEFAULT_AXIS_MODE,
+        help=(
+            "Y-axis mode for model-grouped raw metric charts. "
+            "auto chooses pseudo_log when dynamic range is large."
+        ),
+    )
+    parser.add_argument(
+        "--pseudo_log_ratio_threshold",
+        type=float,
+        default=DEFAULT_PSEUDO_LOG_RATIO_THRESHOLD,
+        help="Use pseudo-log axis in auto mode when max/min positive ratio exceeds this threshold.",
     )
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--port", type=int, default=8080)
@@ -322,6 +376,56 @@ def varying_columns(rows: list[dict[str, Any]], columns: list[str]) -> set[str]:
     return out
 
 
+
+def build_visualization_config_table(
+    *,
+    model_scale_values: dict[str, float],
+    scaled_metrics: set[str],
+    axis_mode: str,
+    pseudo_log_ratio_threshold: float,
+) -> str:
+    rows: list[dict[str, Any]] = []
+
+    for key, value in sorted(model_scale_values.items(), key=lambda kv: str(kv[0])):
+        rows.append({
+            "config": "model_scale",
+            "name": key,
+            "value": value,
+            "note": "prefix rule" if str(key).endswith("_") else "exact model rule",
+        })
+
+    for metric in sorted(scaled_metrics):
+        rows.append({
+            "config": "scaled_metric",
+            "name": metric,
+            "value": "enabled",
+            "note": "model scale is applied",
+        })
+
+    rows.extend([
+        {
+            "config": "axis_mode",
+            "name": "axis_mode",
+            "value": axis_mode,
+            "note": "auto uses pseudo-log for large dynamic range",
+        },
+        {
+            "config": "pseudo_log",
+            "name": "ratio_threshold",
+            "value": pseudo_log_ratio_threshold,
+            "note": "pseudo-log if max/min positive ratio exceeds threshold",
+        },
+        {
+            "config": "pseudo_log",
+            "name": "formula",
+            "value": "display = log10(1 + value / c)",
+            "note": "axis labels and tooltips show original values",
+        },
+    ])
+
+    return build_plain_table([{k: str(v) for k, v in row.items()} for row in rows], max_cols=4)
+
+
 def build_config_table(rows: list[dict[str, Any]], mode: str) -> str:
     cols = ["display_id"] + present_columns(rows, CONFIG_COLUMNS_BY_MODE.get(mode, []))
 
@@ -389,15 +493,22 @@ def build_metrics_table(rows: list[dict[str, Any]]) -> str:
 
 
 
-def build_frame_fluctuation_table(rows: list[dict[str, Any]]) -> str:
+def build_frame_fluctuation_table(
+    rows: list[dict[str, Any]],
+    model_scale_values: dict[str, float] | None = None,
+    scaled_metrics: set[str] | None = None,
+) -> str:
     """
     Table view for strict per-frame std and min-max fluctuation ranges.
 
-    This table intentionally separates strict std values from the chart visual
-    whiskers, which represent min-max fluctuation ranges.
+    Raw values are preserved.  For scaled distance metrics, a scaled value is
+    also shown using the model-specific scale factor.
     """
     if not rows:
         return "<div class='empty-section'>No rows found.</div>"
+
+    model_scale_values = dict(model_scale_values or DEFAULT_MODEL_SCALE_VALUES)
+    scaled_metrics = set(scaled_metrics or DEFAULT_SCALED_METRICS)
 
     metric_specs = [
         ("VD", "04_L2_Err", PER_FRAME_HISTORY_FIELDS_BY_METRIC.get("04_L2_Err")),
@@ -410,17 +521,28 @@ def build_frame_fluctuation_table(rows: list[dict[str, Any]]) -> str:
         ("model", "model"),
         ("param", "param"),
         ("value", "value"),
+        ("__model_scale__", "model_scale"),
     ]
 
     for label, metric_key, hist in metric_specs:
         if not isinstance(hist, dict):
             continue
-        cols.extend([
-            (metric_key, label),
-            (str(hist.get("min")), f"{label}_frame_min"),
-            (str(hist.get("max")), f"{label}_frame_max"),
-            (str(hist.get("std")), f"{label}_frame_std"),
-        ])
+
+        if metric_key in scaled_metrics:
+            cols.extend([
+                (f"__{metric_key}_raw__", f"{label}_raw"),
+                (f"__{metric_key}_scaled__", f"{label}_scaled"),
+                (f"__{metric_key}_frame_min_scaled__", f"{label}_frame_min_scaled"),
+                (f"__{metric_key}_frame_max_scaled__", f"{label}_frame_max_scaled"),
+                (f"__{metric_key}_frame_std_scaled__", f"{label}_frame_std_scaled"),
+            ])
+        else:
+            cols.extend([
+                (metric_key, label),
+                (str(hist.get("min")), f"{label}_frame_min"),
+                (str(hist.get("max")), f"{label}_frame_max"),
+                (str(hist.get("std")), f"{label}_frame_std"),
+            ])
 
     thead = "<tr>" + "".join(
         f"<th>{html_escape(title)}</th>"
@@ -436,11 +558,50 @@ def build_frame_fluctuation_table(rows: list[dict[str, Any]]) -> str:
         )
     )
 
+    def derived_cell(row: dict[str, Any], key: str) -> Any:
+        if key == "__model_scale__":
+            scale, _rule = model_scale_for(row.get("model", ""), model_scale_values)
+            return scale
+
+        if key.startswith("__") and key.endswith("__"):
+            inner = key.strip("_")
+
+            for suffix, hist_key_name in [
+                ("_frame_min_scaled", "min"),
+                ("_frame_max_scaled", "max"),
+                ("_frame_std_scaled", "std"),
+            ]:
+                if inner.endswith(suffix):
+                    metric_key = inner[: -len(suffix)]
+                    hist = PER_FRAME_HISTORY_FIELDS_BY_METRIC.get(metric_key)
+                    if not isinstance(hist, dict):
+                        return ""
+                    raw = finite_float(row.get(str(hist.get(hist_key_name))))
+                    if raw is None:
+                        return ""
+                    scale, _rule = model_scale_for(row.get("model", ""), model_scale_values)
+                    return raw * scale
+
+            if inner.endswith("_raw"):
+                metric_key = inner[: -len("_raw")]
+                raw = finite_float(row.get(metric_key))
+                return "" if raw is None else raw
+
+            if inner.endswith("_scaled"):
+                metric_key = inner[: -len("_scaled")]
+                raw = finite_float(row.get(metric_key))
+                if raw is None:
+                    return ""
+                scale, _rule = model_scale_for(row.get("model", ""), model_scale_values)
+                return raw * scale
+
+        return row.get(key, "")
+
     tbody = ""
     for row in sorted_rows:
         tbody += "<tr>"
         for key, _title in cols:
-            tbody += f"<td>{format_cell(row.get(key, ''))}</td>"
+            tbody += f"<td>{format_cell(derived_cell(row, key))}</td>"
         tbody += "</tr>"
 
     return f"<table class='frame-fluctuation-table'><thead>{thead}</thead><tbody>{tbody}</tbody></table>"
@@ -608,6 +769,162 @@ def is_default_sweep_value(param: Any, value: Any, default_sweep_values: dict[st
     return sweep_values_equal(value, default_sweep_values[p])
 
 
+
+def parse_model_scale_values(text: str | None) -> dict[str, float]:
+    out = dict(DEFAULT_MODEL_SCALE_VALUES)
+    text = str(text or "").strip()
+    if not text:
+        return out
+
+    for chunk in text.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"Invalid model scale item {item!r}; expected key=value.")
+
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        out[key] = float(value)
+
+    return out
+
+
+def parse_scaled_metrics(text: str | None) -> set[str]:
+    text = str(text or "").strip()
+    if not text:
+        return set(DEFAULT_SCALED_METRICS)
+
+    return {chunk.strip() for chunk in text.split(",") if chunk.strip()}
+
+
+def model_scale_for(model: Any, model_scale_values: dict[str, float]) -> tuple[float, str]:
+    """
+    Return (scale, matched_rule).
+
+    Exact model-name matches have priority.  Prefix rules are supported for
+    keys ending with '_', e.g. Vroid_ matches Vroid_18/Vroid_19/Vroid_20.
+    """
+    model_text = str(model or "")
+
+    if model_text in model_scale_values:
+        return float(model_scale_values[model_text]), model_text
+
+    # Prefix rules. Sort by length descending so more specific prefixes win.
+    prefix_items = [
+        (k, v)
+        for k, v in model_scale_values.items()
+        if str(k).endswith("_")
+    ]
+    for prefix, value in sorted(prefix_items, key=lambda kv: len(str(kv[0])), reverse=True):
+        if model_text.startswith(str(prefix)):
+            return float(value), str(prefix)
+
+    return 1.0, "<default>"
+
+
+def scale_numeric(value: float | None, scale: float) -> float | None:
+    if value is None:
+        return None
+    return float(value) * float(scale)
+
+
+def parse_axis_mode(value: str | None) -> str:
+    mode = str(value or DEFAULT_AXIS_MODE).strip().lower()
+    if mode not in {"auto", "linear", "pseudo_log"}:
+        raise ValueError(f"Unsupported axis_mode={value!r}; expected auto, linear, or pseudo_log.")
+    return mode
+
+
+def percentile(values: list[float], q: float) -> float:
+    vals = sorted(float(v) for v in values if isinstance(v, (int, float)) and math.isfinite(float(v)))
+    if not vals:
+        return 0.0
+
+    if len(vals) == 1:
+        return vals[0]
+
+    q = max(0.0, min(100.0, float(q)))
+    pos = (len(vals) - 1) * q / 100.0
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return vals[lo]
+
+    frac = pos - lo
+    return vals[lo] * (1.0 - frac) + vals[hi] * frac
+
+
+def choose_axis_config(
+    values: list[float | None],
+    *,
+    requested_axis_mode: str,
+    pseudo_log_ratio_threshold: float,
+) -> dict[str, Any]:
+    finite = [
+        float(v)
+        for v in values
+        if v is not None and math.isfinite(float(v)) and float(v) >= 0.0
+    ]
+    positives = [v for v in finite if v > 0.0]
+
+    if not finite:
+        return {
+            "axisMode": "linear",
+            "axisTransform": "identity",
+            "axisLinearThreshold": None,
+            "axisOriginalMin": 0.0,
+            "axisOriginalMinPositive": None,
+            "axisOriginalMax": 1.0,
+            "axisDynamicRatio": None,
+            "axisNote": "",
+            "axisClipped": False,
+        }
+
+    axis_original_max = max(finite)
+    axis_original_min_positive = min(positives) if positives else None
+    axis_dynamic_ratio = (
+        axis_original_max / axis_original_min_positive
+        if axis_original_min_positive and axis_original_min_positive > 0.0
+        else None
+    )
+
+    mode = parse_axis_mode(requested_axis_mode)
+    if mode == "auto":
+        if axis_dynamic_ratio is not None and axis_dynamic_ratio >= float(pseudo_log_ratio_threshold):
+            mode = "pseudo_log"
+        else:
+            mode = "linear"
+
+    c = None
+    transform = "identity"
+    note = ""
+
+    if mode == "pseudo_log":
+        c = max(percentile(positives, 10.0), DEFAULT_AXIS_LINEAR_THRESHOLD_EPS) if positives else DEFAULT_AXIS_LINEAR_THRESHOLD_EPS
+        transform = "log10(1 + value / c)"
+        note = (
+            f"Y-axis uses pseudo-log scale: display = log10(1 + value / c), c = {c:.6g}. "
+            "Axis labels and tooltips show original values."
+        )
+
+    return {
+        "axisMode": mode,
+        "axisTransform": transform,
+        "axisLinearThreshold": c,
+        "axisOriginalMin": 0.0,
+        "axisOriginalMinPositive": axis_original_min_positive,
+        "axisOriginalMax": axis_original_max,
+        "axisDynamicRatio": axis_dynamic_ratio,
+        "axisNote": note,
+        "axisClipped": False,
+    }
+
+
 def prepare_sweep_mean_std_charts(
     summary_rows: list[dict[str, str]],
     default_sweep_values: dict[str, str],
@@ -644,6 +961,12 @@ def prepare_sweep_mean_std_charts(
             param = str(row.get("param", ""))
             value = str(row.get("value", ""))
 
+            axis_values.append(displayed_value)
+            if draw_low is not None:
+                axis_values.append(draw_low)
+            if draw_high is not None:
+                axis_values.append(draw_high)
+
             items.append(
                 {
                     "param": param,
@@ -678,35 +1001,42 @@ def prepare_sweep_mean_std_charts(
 def prepare_model_grouped_raw_charts(
     rows: list[dict[str, Any]],
     default_sweep_values: dict[str, str],
+    model_scale_values: dict[str, float] | None = None,
+    scaled_metrics: set[str] | None = None,
+    axis_mode: str = DEFAULT_AXIS_MODE,
+    pseudo_log_ratio_threshold: float = DEFAULT_PSEUDO_LOG_RATIO_THRESHOLD,
 ) -> list[dict[str, Any]]:
     """
     Build raw metric chart data grouped visually by model.
 
-    Each bar is one model/value result.
-
-    For metrics with per-frame history:
-      - bar height is the case-level metric value;
-      - vertical whisker is the per-frame final min-max fluctuation range;
-      - strict per-frame std is included for tooltip/table display.
-
-    Hausdorff metrics currently have no per-frame history and therefore have
-    no whiskers.
+    For scaled metrics:
+      - rawMetricValue stores the unmodified experiment value;
+      - metricValue stores the displayed value = rawMetricValue * modelScale;
+      - per-frame fluctuation min/max/std are scaled consistently;
+      - chart annotation lists only non-1.0 model scale rules used by that chart.
     """
     charts: list[dict[str, Any]] = []
 
     if not rows:
         return charts
 
+    model_scale_values = dict(model_scale_values or DEFAULT_MODEL_SCALE_VALUES)
+    scaled_metrics = set(scaled_metrics or DEFAULT_SCALED_METRICS)
+
     for metric, title, direction in REPORT_METRIC_CHART_SPECS:
         items: list[dict[str, Any]] = []
         chart_max = 0.0
         positive_metric = True
+        axis_values: list[float | None] = []
 
-        history_spec = PER_FRAME_HISTORY_FIELDS_BY_METRIC.get(metric)
+        history_spec = PER_FRAME_HISTORY_FIELDS_BY_METRIC.get(metric) if "PER_FRAME_HISTORY_FIELDS_BY_METRIC" in globals() else None
+        metric_is_scaled = metric in scaled_metrics
+
+        used_nonunit_scales: dict[str, dict[str, Any]] = {}
 
         for row in rows:
-            x = finite_float(row.get(metric))
-            if x is None:
+            raw_value = finite_float(row.get(metric))
+            if raw_value is None:
                 continue
 
             model = str(row.get("model", ""))
@@ -716,6 +1046,22 @@ def prepare_model_grouped_raw_charts(
             if not model or not param:
                 continue
 
+            model_scale, scale_rule = model_scale_for(model, model_scale_values)
+            applied_scale = model_scale if metric_is_scaled else 1.0
+            displayed_value = raw_value * applied_scale
+            metric_scaled = metric_is_scaled and abs(applied_scale - 1.0) > 1e-12
+
+            if metric_scaled:
+                used_nonunit_scales[model] = {
+                    "model": model,
+                    "scale": applied_scale,
+                    "rule": scale_rule,
+                }
+
+            raw_frame_mean = None
+            raw_frame_std = None
+            raw_frame_min = None
+            raw_frame_max = None
             frame_mean = None
             frame_std = None
             frame_min = None
@@ -723,10 +1069,16 @@ def prepare_model_grouped_raw_charts(
             has_frame_fluctuation = False
 
             if isinstance(history_spec, dict):
-                frame_mean = finite_float(row.get(str(history_spec.get("mean"))))
-                frame_std = finite_float(row.get(str(history_spec.get("std"))))
-                frame_min = finite_float(row.get(str(history_spec.get("min"))))
-                frame_max = finite_float(row.get(str(history_spec.get("max"))))
+                raw_frame_mean = finite_float(row.get(str(history_spec.get("mean"))))
+                raw_frame_std = finite_float(row.get(str(history_spec.get("std"))))
+                raw_frame_min = finite_float(row.get(str(history_spec.get("min"))))
+                raw_frame_max = finite_float(row.get(str(history_spec.get("max"))))
+
+                frame_mean = scale_numeric(raw_frame_mean, applied_scale)
+                frame_std = scale_numeric(raw_frame_std, applied_scale)
+                frame_min = scale_numeric(raw_frame_min, applied_scale)
+                frame_max = scale_numeric(raw_frame_max, applied_scale)
+
                 has_frame_fluctuation = frame_min is not None and frame_max is not None
 
             if has_frame_fluctuation:
@@ -735,28 +1087,40 @@ def prepare_model_grouped_raw_charts(
                 raw_low = frame_min
                 raw_high = frame_max
                 draw_low = max(0.0, frame_min) if positive_metric else frame_min
-                draw_high = max(frame_max, x)
+                draw_high = max(frame_max, displayed_value)
                 lower_clipped = draw_low != raw_low
-                chart_max = max(chart_max, x, draw_high)
+                chart_max = max(chart_max, displayed_value, draw_high)
             else:
                 raw_low = None
                 raw_high = None
                 draw_low = None
                 draw_high = None
                 lower_clipped = False
-                chart_max = max(chart_max, x)
+                chart_max = max(chart_max, displayed_value)
 
             items.append(
                 {
                     "model": model,
                     "param": param,
                     "value": value,
-                    "metricValue": x,
                     "direction": direction,
                     "isDefault": is_default_sweep_value(param, value, default_sweep_values),
                     "label": f"{model} | {param}={value}",
 
+                    "modelScale": applied_scale,
+                    "scaleRule": scale_rule,
+                    "metricScaled": bool(metric_scaled),
+                    "rawMetricValue": raw_value,
+                    "metricValue": displayed_value,
+                    "scaleNote": "displayed values = raw values × modelScale" if metric_is_scaled else "",
+
                     "historyLabel": history_spec.get("label") if isinstance(history_spec, dict) else "",
+
+                    "rawFrameMean": raw_frame_mean,
+                    "rawFrameStd": raw_frame_std,
+                    "rawFrameMin": raw_frame_min,
+                    "rawFrameMax": raw_frame_max,
+
                     "frameMean": frame_mean,
                     "frameStd": frame_std,
                     "frameMin": frame_min,
@@ -768,7 +1132,6 @@ def prepare_model_grouped_raw_charts(
                     "drawHigh": draw_high,
                     "lowerClippedAtZero": bool(lower_clipped),
 
-                    # Backward-compatible R2f fields retained for tooltip/tests.
                     "perFrameStdField": str(history_spec.get("std")) if isinstance(history_spec, dict) else "",
                     "perFrameStd": frame_std,
                     "hasPerFrameStd": frame_std is not None,
@@ -785,22 +1148,49 @@ def prepare_model_grouped_raw_charts(
         )
 
         if items:
-            padding = max(chart_max * 0.08, 1e-12)
-            y_axis_max = chart_max + padding
+            # Recompute axis values from finalized items to avoid stale/missed
+            # collection when chart item construction changes.
+            chart_axis_values: list[float | None] = []
+            for _item in items:
+                for _key in ["metricValue", "drawLow", "drawHigh", "frameMin", "frameMax"]:
+                    chart_axis_values.append(finite_float(_item.get(_key)))
+
+            axis_config = choose_axis_config(
+                chart_axis_values,
+                requested_axis_mode=axis_mode,
+                pseudo_log_ratio_threshold=float(pseudo_log_ratio_threshold),
+            )
+
+            scale_annotation = ""
+            if metric_is_scaled and used_nonunit_scales:
+                pieces = []
+                for model_name, info in sorted(used_nonunit_scales.items(), key=lambda kv: kv[0]):
+                    pieces.append(f"{model_name} × {info['scale']:g}")
+                scale_annotation = "Model scale applied for this chart: " + ", ".join(pieces) + ". Vroid_* remains ×1.0 and is not listed."
+
+            display_title = f"{title} — raw values by model"
+            display_y_name = title
+            if metric_is_scaled:
+                display_title = f"{title} — model-scaled values by model"
+                display_y_name = f"{title} (model-scaled)"
 
             charts.append(
                 {
                     "key": slugify(f"model_grouped_raw_{metric}"),
                     "metric": metric,
-                    "title": f"{title} — raw values by model",
-                    "yName": title,
+                    "title": display_title,
+                    "yName": display_y_name,
                     "models": sorted({str(x.get("model", "")) for x in items}),
                     "items": items,
                     "positiveMetric": positive_metric,
                     "yAxisMin": 0.0 if positive_metric else None,
-                    "yAxisMax": y_axis_max,
+                    "yAxisMax": axis_config.get("axisOriginalMax"),
                     "fluctuationMode": "per-frame min-max range",
                     "stdSemantics": "Strict per-frame std is shown in tooltip/table, not as ±std error bar.",
+                    "metricScaled": bool(metric_is_scaled),
+                    "scaleAnnotation": scale_annotation,
+                    "scaleAnnotationVisible": bool(scale_annotation),
+                    **axis_config,
                 }
             )
 
@@ -835,9 +1225,17 @@ def build_html(
     summary_rows: list[dict[str, str]],
     ttest_rows: list[dict[str, str]],
     default_sweep_values: dict[str, str] | None = None,
+    model_scale_values: dict[str, float] | None = None,
+    scaled_metrics: set[str] | None = None,
+    axis_mode: str = DEFAULT_AXIS_MODE,
+    pseudo_log_ratio_threshold: float = DEFAULT_PSEUDO_LOG_RATIO_THRESHOLD,
 ) -> str:
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     default_sweep_values = default_sweep_values or dict(DEFAULT_SWEEP_VALUES)
+    model_scale_values = model_scale_values or dict(DEFAULT_MODEL_SCALE_VALUES)
+    scaled_metrics = scaled_metrics or set(DEFAULT_SCALED_METRICS)
+    axis_mode = parse_axis_mode(axis_mode)
+    pseudo_log_ratio_threshold = float(pseudo_log_ratio_threshold)
 
     css = read_template_file("ogd_report_styles.css")
     js = read_template_file("ogd_report_dashboard.js")
@@ -846,7 +1244,17 @@ def build_html(
     metrics_table = build_metrics_table(rows)
     summary_table = build_plain_table(summary_rows) if summary_rows else "<div class='empty-section'>No summary_by_group.csv found.</div>"
     ttest_table = build_plain_table(ttest_rows) if ttest_rows else "<div class='empty-section'>No t-test results found.</div>"
-    frame_fluctuation_table = build_frame_fluctuation_table(rows)
+    frame_fluctuation_table = build_frame_fluctuation_table(
+        rows,
+        model_scale_values=model_scale_values,
+        scaled_metrics=scaled_metrics,
+    )
+    visualization_config_table = build_visualization_config_table(
+        model_scale_values=model_scale_values,
+        scaled_metrics=scaled_metrics,
+        axis_mode=axis_mode,
+        pseudo_log_ratio_threshold=pseudo_log_ratio_threshold,
+    )
 
     report_data = {
         "meta": {
@@ -865,8 +1273,20 @@ def build_html(
         "charts": {
             "bars": prepare_bar_charts(rows),
             "pareto": prepare_pareto(rows, mode),
-            "modelGroupedRaw": prepare_model_grouped_raw_charts(rows, default_sweep_values),
+            "modelGroupedRaw": prepare_model_grouped_raw_charts(
+                rows,
+                default_sweep_values,
+                model_scale_values=model_scale_values,
+                scaled_metrics=scaled_metrics,
+                axis_mode=axis_mode,
+                pseudo_log_ratio_threshold=pseudo_log_ratio_threshold,
+            ),
             "defaultSweepValues": default_sweep_values,
+            "modelScaleValues": model_scale_values,
+            "scaledMetrics": sorted(scaled_metrics),
+            "axisMode": axis_mode,
+            "pseudoLogRatioThreshold": pseudo_log_ratio_threshold,
+            "axisFormula": "display = log10(1 + value / c)",
         },
     }
 
@@ -913,6 +1333,12 @@ window.DASHBOARD_DATA = {report_json};
     <h2>⚙️ Experiment Configurations</h2>
     <div class="info-note">Parameters with varying values across experiments are highlighted in yellow.</div>
     <div class="table-container">{config_table}</div>
+
+    <h2>📐 Report Visualization Configuration</h2>
+    <div class="info-note">
+        This section records model scale rules, scaled metrics, and nonlinear axis configuration used by the report.
+    </div>
+    <div class="table-container visualization-config-table">{visualization_config_table}</div>
 
     <h2>🏆 Highlighted Metrics Table</h2>
     <div class="table-container">{metrics_table}</div>
@@ -973,6 +1399,10 @@ def generate_report(
     mode: str | None,
     title: str,
     default_sweep_values: dict[str, str] | None = None,
+    model_scale_values: dict[str, float] | None = None,
+    scaled_metrics: set[str] | None = None,
+    axis_mode: str = DEFAULT_AXIS_MODE,
+    pseudo_log_ratio_threshold: float = DEFAULT_PSEUDO_LOG_RATIO_THRESHOLD,
 ) -> Path:
     aggregate_dir = Path(aggregate_dir).expanduser().resolve(strict=False)
     output_html = Path(output_html).expanduser().resolve(strict=False)
@@ -994,6 +1424,10 @@ def generate_report(
         summary_rows=summary_rows,
         ttest_rows=ttest_rows,
         default_sweep_values=default_sweep_values,
+        model_scale_values=model_scale_values,
+        scaled_metrics=scaled_metrics,
+        axis_mode=axis_mode,
+        pseudo_log_ratio_threshold=pseudo_log_ratio_threshold,
     )
 
     output_html.parent.mkdir(parents=True, exist_ok=True)
@@ -1049,6 +1483,10 @@ def main() -> None:
         mode=args.mode,
         title=str(args.title),
         default_sweep_values=parse_default_sweep_values(args.default_sweep_values),
+        model_scale_values=parse_model_scale_values(args.model_scale_values),
+        scaled_metrics=parse_scaled_metrics(args.scaled_metrics),
+        axis_mode=parse_axis_mode(args.axis_mode),
+        pseudo_log_ratio_threshold=float(args.pseudo_log_ratio_threshold),
     )
 
     print("=" * 96, flush=True)

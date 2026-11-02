@@ -311,3 +311,27 @@ tr:hover {
     color: #111827;
     font-weight: 600;
 }
+
+.chart-scale-note {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-left: 4px solid #1C328A;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 0.9em;
+    border-radius: 4px;
+}
+
+.chart-axis-note {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-left: 4px solid #8b5cf6;
+    background: #f5f3ff;
+    color: #4c1d95;
+    font-size: 0.9em;
+    border-radius: 4px;
+}
+
+.visualization-config-table table {
+    white-space: normal;
+}

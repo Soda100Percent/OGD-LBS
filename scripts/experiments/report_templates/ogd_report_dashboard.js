@@ -67,6 +67,41 @@ function formatValue(v) {
     return Number(n.toPrecision(6)).toString();
 }
 
+
+function transformY(value, chartSpec) {
+    const n = finiteNumber(value);
+    if (n === null) return null;
+
+    if (chartSpec && chartSpec.axisMode === 'pseudo_log') {
+        const c = finiteNumber(chartSpec.axisLinearThreshold) || 1e-12;
+        return Math.log10(1 + Math.max(0, n) / c);
+    }
+
+    return n;
+}
+
+function inverseTransformY(value, chartSpec) {
+    const n = finiteNumber(value);
+    if (n === null) return null;
+
+    if (chartSpec && chartSpec.axisMode === 'pseudo_log') {
+        const c = finiteNumber(chartSpec.axisLinearThreshold) || 1e-12;
+        return c * (Math.pow(10, n) - 1);
+    }
+
+    return n;
+}
+
+function chartYMax(chartSpec) {
+    const rawMax = finiteNumber(chartSpec && chartSpec.axisOriginalMax);
+    if (rawMax === null) return null;
+
+    const transformed = transformY(rawMax, chartSpec);
+    if (transformed === null) return null;
+
+    return transformed * 1.08;
+}
+
 function getColor(key) {
     const rows = (window.DASHBOARD_DATA && window.DASHBOARD_DATA.rows) || [];
     const keys = Array.from(new Set(rows.map(r => r.groupKey || r.param || r.split || r.model || r.display_id)));
@@ -275,6 +310,43 @@ function createChartBox(domId, title, parentNode, extraClass) {
 
     parentNode.appendChild(box);
     return document.getElementById(domId);
+}
+
+
+function appendChartScaleAnnotation(chartDom, chartSpec) {
+    if (!chartDom || !chartSpec || !chartSpec.scaleAnnotationVisible || !chartSpec.scaleAnnotation) {
+        return;
+    }
+
+    const box = chartDom.closest('.img-box');
+    if (!box) return;
+
+    const note = document.createElement('div');
+    note.className = 'chart-scale-note';
+    note.innerText = chartSpec.scaleAnnotation;
+    box.appendChild(note);
+}
+
+
+function appendChartNotes(chartDom, chartSpec) {
+    if (!chartDom || !chartSpec) return;
+
+    const box = chartDom.closest('.img-box');
+    if (!box) return;
+
+    if (chartSpec.scaleAnnotationVisible && chartSpec.scaleAnnotation) {
+        const note = document.createElement('div');
+        note.className = 'chart-scale-note';
+        note.innerText = chartSpec.scaleAnnotation;
+        box.appendChild(note);
+    }
+
+    if (chartSpec.axisMode === 'pseudo_log' && chartSpec.axisNote) {
+        const note = document.createElement('div');
+        note.className = 'chart-axis-note';
+        note.innerText = chartSpec.axisNote;
+        box.appendChild(note);
+    }
 }
 
 function renderBars() {
@@ -489,6 +561,7 @@ function renderModelGroupedRawCharts() {
         const dom = createChartBox(domId, chartSpec.title, container, 'model-grouped-wrapper');
         const chart = echarts.init(dom, null, { renderer: 'svg' });
         allChartInstances.push(chart);
+        appendChartNotes(dom, chartSpec);
 
         const models = chartSpec.models || Array.from(new Set(chartSpec.items.map(i => i.model)));
         const categories = [];
@@ -502,13 +575,14 @@ function renderModelGroupedRawCharts() {
                 const categoryIndex = categories.length;
                 categories.push(`${model}\n${item.value}`);
 
-                const metricValue = Number(item.metricValue);
+                const metricValue = finiteNumber(item.metricValue);
+                const transformedMetric = transformY(metricValue, chartSpec);
                 const hasFrameFluctuation = Boolean(item.hasFrameFluctuation)
                     && finiteNumber(item.drawLow) !== null
                     && finiteNumber(item.drawHigh) !== null;
 
                 data.push({
-                    value: metricValue,
+                    value: transformedMetric,
                     itemStyle: defaultBarStyle(Boolean(item.isDefault), item.value),
                     label: {
                         show: Boolean(item.isDefault),
@@ -521,16 +595,21 @@ function renderModelGroupedRawCharts() {
                 });
 
                 if (hasFrameFluctuation) {
-                    rangeData.push([
-                        categoryIndex,
-                        Number(item.drawLow),
-                        Number(item.drawHigh),
-                        Number(item.frameMin),
-                        Number(item.frameMax),
-                        Number(item.frameStd),
-                        item.model,
-                        item.value
-                    ]);
+                    const lowY = transformY(item.drawLow, chartSpec);
+                    const highY = transformY(item.drawHigh, chartSpec);
+
+                    if (lowY !== null && highY !== null) {
+                        rangeData.push([
+                            categoryIndex,
+                            lowY,
+                            highY,
+                            Number(item.frameMin),
+                            Number(item.frameMax),
+                            Number(item.frameStd),
+                            item.model,
+                            item.value
+                        ]);
+                    }
                 }
             });
 
@@ -611,15 +690,19 @@ function renderModelGroupedRawCharts() {
             scale: false,
             name: chartSpec.yName || chartSpec.metric,
             nameLocation: 'middle',
-            nameGap: 65
+            nameGap: 65,
+            axisLabel: {
+                formatter: (v) => formatValue(inverseTransformY(v, chartSpec))
+            }
         };
 
         if (chartSpec.positiveMetric) {
-            yAxis.min = Number(chartSpec.yAxisMin ?? 0);
+            yAxis.min = 0;
         }
 
-        if (finiteNumber(chartSpec.yAxisMax) !== null) {
-            yAxis.max = Number(chartSpec.yAxisMax);
+        const ymax = chartYMax(chartSpec);
+        if (ymax !== null) {
+            yAxis.max = ymax;
         }
 
         chart.setOption({
@@ -634,6 +717,17 @@ function renderModelGroupedRawCharts() {
                     const hasRange = Boolean(item.hasFrameFluctuation);
                     const frameStd = finiteNumber(item.frameStd);
 
+                    const rawMetric = finiteNumber(item.rawMetricValue);
+                    const displayedMetric = finiteNumber(item.metricValue);
+                    const modelScale = finiteNumber(item.modelScale);
+
+                    const metricLine = item.metricScaled
+                        ? `<br/>${escapeHtml(chartSpec.metric)} displayed: <b>${formatValue(displayedMetric)}</b>`
+                            + `<br/>raw metric: <b>${formatValue(rawMetric)}</b>`
+                            + `<br/>model scale: <b>${formatValue(modelScale)}</b>`
+                            + `<br/><span style="color:#667085;">displayed = raw × modelScale</span>`
+                        : `<br/>${escapeHtml(chartSpec.metric)}: <b>${formatValue(item.metricValue)}</b>`;
+
                     const rangeLine = hasRange
                         ? `<br/>per-frame range: <b>[${formatValue(item.frameMin)}, ${formatValue(item.frameMax)}]</b>`
                         : '<br/>per-frame range: <i>not available</i>';
@@ -646,18 +740,18 @@ function renderModelGroupedRawCharts() {
                         ? ''
                         : `<br/>per-frame mean: <b>${formatValue(item.frameMean)}</b>`;
 
-                    const clipLine = item.lowerClippedAtZero
-                        ? '<br/><span style="color:#b45309;">display lower bound clipped at 0</span>'
+                    const axisLine = chartSpec.axisMode === 'pseudo_log'
+                        ? `<br/><span style="color:#4c1d95;">axis: pseudo-log, c=${formatValue(chartSpec.axisLinearThreshold)}</span>`
                         : '';
 
                     return `<b>${escapeHtml(item.model)}</b><br/>`
                         + `${escapeHtml(item.param)}=${escapeHtml(item.value)}`
                         + (item.isDefault ? ' <b>★ default</b>' : '')
-                        + `<br/>${escapeHtml(chartSpec.metric)}: <b>${formatValue(item.metricValue)}</b>`
+                        + metricLine
                         + rangeLine
                         + meanLine
                         + stdLine
-                        + clipLine;
+                        + axisLine;
                 }
             },
             grid: { top: 50, bottom: 130, left: 90, right: 35 },

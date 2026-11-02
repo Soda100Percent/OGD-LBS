@@ -104,7 +104,7 @@ class TestGenerateReport(unittest.TestCase):
                         "history_org_loss_final_std": "0.001",
                         "history_bone_roll_max_final_mean": "10.0",
                         "history_bone_roll_max_final_min": "8.0",
-                        "history_bone_roll_max_final_max": "13.0",
+                        "history_bone_roll_max_final_max": "1000000000000.0",
                         "history_bone_roll_max_final_std": "1.5",
                         "history_bone_swing_max_final_mean": "20.0",
                         "history_bone_swing_max_final_min": "15.0",
@@ -212,6 +212,38 @@ class TestGenerateReport(unittest.TestCase):
             self.assertIn("SO_frame_std", html)
             self.assertIn("Roll_frame_std", html)
             self.assertIn("Swing_frame_std", html)
+            # R2h: model-wise metric scaling metadata and chart annotations.
+            self.assertIn("modelScaleValues", html)
+            self.assertIn("scaledMetrics", html)
+            self.assertIn("modelScale", html)
+            self.assertIn("rawMetricValue", html)
+            self.assertIn("metricScaled", html)
+            self.assertIn("scaleAnnotation", html)
+            self.assertIn("scaleAnnotationVisible", html)
+            self.assertIn("chart-scale-note", html)
+            self.assertIn("displayed = raw × modelScale", html)
+            # R2i: pseudo-log nonlinear axis metadata and notes.
+            self.assertIn("axisMode", html)
+            self.assertIn("pseudo_log", html)
+            self.assertIn("axisLinearThreshold", html)
+            self.assertIn("axisTransform", html)
+            self.assertIn("axisOriginalMax", html)
+            self.assertIn("axisDynamicRatio", html)
+            self.assertIn("pseudoLogRatioThreshold", html)
+            self.assertIn("axisFormula", html)
+            self.assertIn("chart-axis-note", html)
+            self.assertIn("Y-axis uses pseudo-log scale", html)
+
+            import json as _json
+            import re as _re
+            m = _re.search(r"window\.DASHBOARD_DATA = (.*?);\n", html, flags=_re.S)
+            self.assertIsNotNone(m)
+            data = _json.loads(m.group(1))
+            charts = data["charts"]["modelGroupedRaw"]
+            roll_chart = next(c for c in charts if c["metric"] == "04_Max_Roll")
+            self.assertEqual(roll_chart["axisMode"], "pseudo_log")
+            self.assertGreater(float(roll_chart["axisOriginalMax"]), 1e10)
+            self.assertFalse(bool(roll_chart.get("axisClipped", False)))
 
     def test_generate_cv_report_with_ttest(self) -> None:
         mod = load_module()
