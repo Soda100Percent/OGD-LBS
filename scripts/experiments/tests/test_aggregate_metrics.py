@@ -192,6 +192,67 @@ class TestAggregateMetrics(unittest.TestCase):
             self.assertAlmostEqual(float(row["history_l2_err_final_min"]), 2.0)
             self.assertAlmostEqual(float(row["history_l2_err_final_max"]), 6.0)
 
+
+    def test_sweep_where_filter_param(self) -> None:
+        mod = load_module()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_agg_where_") as td:
+            root = Path(td)
+            out = root / "reports"
+
+            for param, value, err in [
+                ("alpha", 0.5, 1.0),
+                ("beta", 0.3, 2.0),
+            ]:
+                case_root = root / f"artifact_{param}"
+                (case_root / "data4").mkdir(parents=True)
+
+                dump_json(
+                    case_root / "case_config.json",
+                    {
+                        "model": "M",
+                        "param": param,
+                        "value": value,
+                        "case_id": f"{param}_{value}",
+                        "stage": "ssdr_step04",
+                        "effective_params": {
+                            "alpha": 0.5,
+                            "beta": 0.3,
+                            "gamma": 0.2,
+                        },
+                    },
+                )
+                dump_json(case_root / "metrics_04.json", {"04_L2_Err": err})
+                dump_json(
+                    case_root / "data4" / "step04_optimize_summary.json",
+                    {
+                        "final_metrics": {"04_L2_Err": err},
+                        "counts": {"frames": 3},
+                        "config": {"s_max": 4},
+                    },
+                )
+
+            manifest = mod.aggregate(
+                input_root=root,
+                output_dir=out,
+                mode="sweep",
+                metrics_requested=["04_L2_Err"],
+                group_by=["param", "value"],
+                ttest_kind="none",
+                baseline_query_text="",
+                pair_by=None,
+                ttest_group_by=None,
+                where_text="param=alpha",
+            )
+
+            self.assertEqual(manifest["row_count"], 1)
+            self.assertEqual(manifest["where"], {"param": "alpha"})
+
+            rows = read_csv_rows(out / "aggregated_metrics.csv")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["param"], "alpha")
+            self.assertEqual(rows[0]["04_L2_Err"], "1.0")
+
     def test_cv_aggregation(self) -> None:
         mod = load_module()
 

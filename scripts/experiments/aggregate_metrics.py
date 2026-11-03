@@ -121,6 +121,15 @@ def parse_args() -> argparse.Namespace:
         help='Comma-separated equality query, e.g. "param=s_max,value=4" or "split=train".',
     )
     parser.add_argument(
+        "--where",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated row filter query applied after discovery, e.g. "
+            "\"param=alpha\" or \"param=beta,value=0.3\"."
+        ),
+    )
+    parser.add_argument(
         "--pair_by",
         nargs="*",
         default=None,
@@ -808,12 +817,18 @@ def aggregate(
     baseline_query_text: str,
     pair_by: list[str] | None,
     ttest_group_by: list[str] | None,
+    where_text: str = "",
 ) -> dict[str, Any]:
     input_root = Path(input_root).expanduser().resolve(strict=False)
     output_dir = Path(output_dir).expanduser().resolve(strict=False)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows = discover_rows(input_root, mode)
+
+    where_query = parse_query(where_text)
+    if where_query:
+        rows = [row for row in rows if row_matches_query(row, where_query)]
+
     metrics = choose_metric_names(rows, metrics_requested)
 
     group_fields = list(group_by) if group_by is not None else default_group_by(mode)
@@ -865,6 +880,7 @@ def aggregate(
         "output_dir": str(output_dir),
         "mode": mode,
         "row_count": int(len(rows)),
+        "where": where_query,
         "summary_group_by": group_fields,
         "metrics": metrics,
         "outputs": {
@@ -912,6 +928,7 @@ def main() -> None:
         baseline_query_text=str(args.baseline_query),
         pair_by=args.pair_by,
         ttest_group_by=args.ttest_group_by,
+        where_text=str(args.where),
     )
 
     print("=" * 96, flush=True)
