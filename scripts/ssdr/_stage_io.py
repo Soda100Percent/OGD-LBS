@@ -21,7 +21,10 @@ except ModuleNotFoundError:  # pragma: no cover - package import fallback
 
 ensure_repo_paths_in_syspath(__file__)
 
+import datetime
 import json
+import math
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -136,6 +139,125 @@ def write_stage_summary(path: str | Path, summary: dict[str, Any]) -> Path:
         json.dump(json_safe(summary), f, indent=4, ensure_ascii=False)
 
     return out
+
+
+
+_PROGRESS_SEQUENCE = 0
+
+
+def _progress_utc_now_iso() -> str:
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _validate_progress_count(value: int | float, *, field: str) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a non-negative finite number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{field} must be a non-negative finite number")
+    return int(value) if isinstance(value, int) else float(value)
+
+
+def report_stage_progress(
+    *,
+    stage: str | None = None,
+    phase: str,
+    completed_units: int | float,
+    total_units: int | float | None,
+    unit: str,
+    message: str = "",
+    extra: dict[str, Any] | None = None,
+) -> Path | None:
+    """Write an optional pd-rew stage progress snapshot.
+
+    This helper is intentionally inert unless PD_REW_STAGE_PROGRESS_FILE is set.
+    It lets OGD-LBS remain usable as a standalone CLI while allowing pd-rew to
+    observe long-running stages through a bind-mounted JSON progress file.
+
+    The helper writes by same-directory temporary file followed by os.replace(),
+    so readers should never observe a partially-written JSON object.
+    """
+    raw_output = os.environ.get("PD_REW_STAGE_PROGRESS_FILE")
+    if not raw_output:
+        return None
+
+    if not isinstance(phase, str) or not phase:
+        raise ValueError("phase must be a non-empty string")
+    if not isinstance(unit, str) or not unit:
+        raise ValueError("unit must be a non-empty string")
+
+    completed = _validate_progress_count(completed_units, field="completed_units")
+
+    if total_units is None:
+        total: int | float | None = None
+    else:
+        total = _validate_progress_count(total_units, field="total_units")
+        if completed > total:
+            raise ValueError("completed_units must not exceed total_units")
+
+    if extra is not None and not isinstance(extra, dict):
+        raise ValueError("extra must be a dict or None")
+
+    global _PROGRESS_SEQUENCE
+    _PROGRESS_SEQUENCE += 1
+
+    stage_name = str(stage or os.environ.get("PD_REW_STAGE_NAME") or "unknown")
+
+    obj: dict[str, Any] = {
+        "schema": "pd_rew_stage_progress_v1",
+        "run_id": os.environ.get("PD_REW_RUN_ID"),
+        "worker_id": os.environ.get("PD_REW_WORKER_ID"),
+        "case_id": os.environ.get("PD_REW_CASE_ID"),
+        "attempt_id": os.environ.get("PD_REW_ATTEMPT_ID"),
+        "stage": stage_name,
+        "phase": str(phase),
+        "sequence": int(_PROGRESS_SEQUENCE),
+        "completed_units": completed,
+        "total_units": total,
+        "unit": str(unit),
+        "message": str(message),
+        "updated_at_utc": _progress_utc_now_iso(),
+    }
+
+    if extra:
+        obj["extra"] = json_safe(extra)
+
+    out = Path(raw_output).expanduser().resolve(strict=False)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.{_PROGRESS_SEQUENCE}.tmp")
+    data = (
+        json.dumps(json_safe(obj), indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        + "\n"
+    )
+
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with tmp.open("w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(tmp, out)
+
+        try:
+            dir_fd = os.open(str(out.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except Exception:
+            pass
+
+        return out
+
+    except Exception as exc:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        warn(f"Failed to write pd-rew stage progress file {out}: {exc}")
+        return None
+
 
 
 def require_dict(

@@ -45,9 +45,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import fallback
 ensure_repo_paths_in_syspath(__file__)
 
 try:
-    from _stage_io import prepare_output_dir, write_stage_summary
+    from _stage_io import prepare_output_dir, write_stage_summary, report_stage_progress
 except ModuleNotFoundError:  # pragma: no cover - package import fallback
-    from ._stage_io import prepare_output_dir, write_stage_summary
+    from ._stage_io import prepare_output_dir, write_stage_summary, report_stage_progress
 
 
 
@@ -106,6 +106,27 @@ def output_path_for_source_file(
     raise ValueError(f"Unsupported source file for Step 00: {src_path}")
 
 
+
+def report_step00_progress(
+    *,
+    phase: str,
+    completed_units: int | float,
+    total_units: int | float | None,
+    message: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    report_stage_progress(
+        stage="stage00",
+        phase=phase,
+        completed_units=completed_units,
+        total_units=total_units,
+        unit="file",
+        message=message,
+        extra=extra,
+    )
+
+
+
 def process_single_source_file(
     src_path: Path,
     input_tree: Path,
@@ -156,11 +177,32 @@ def convert_or_copy_tree_to_data0(
     allow_no_files: bool,
     write_summary_file: bool,
 ) -> dict[str, Any]:
+    report_step00_progress(
+        phase="scanning",
+        completed_units=0,
+        total_units=None,
+        message=f"Scanning source files under: {input_tree}",
+    )
+
     with Timer("time_00_file_scanning"):
         source_files = discover_source_files(input_tree)
 
+    report_step00_progress(
+        phase="scanned",
+        completed_units=0,
+        total_units=len(source_files),
+        message=f"Discovered {len(source_files)} source files.",
+    )
+
     if not source_files:
         msg = f"No .json or .pkl files found under input tree: {input_tree}"
+
+        report_step00_progress(
+            phase="no_files",
+            completed_units=0,
+            total_units=0,
+            message=msg,
+        )
 
         if allow_no_files:
             warn(msg)
@@ -182,6 +224,13 @@ def convert_or_copy_tree_to_data0(
             }
             if write_summary_file:
                 write_stage_summary(output_tree / "step00_convert_summary.json", summary)
+            report_step00_progress(
+                phase="completed",
+                completed_units=0,
+                total_units=0,
+                message="No files found; allow_no_files=True.",
+                extra={"allow_no_files": True},
+            )
             return summary
 
         fail(msg)
@@ -190,6 +239,13 @@ def convert_or_copy_tree_to_data0(
         output_tree,
         overwrite_output=overwrite_output,
         allow_merge=allow_merge,
+    )
+
+    report_step00_progress(
+        phase="convert_or_copy",
+        completed_units=0,
+        total_units=len(source_files),
+        message=f"Processing {len(source_files)} source files.",
     )
 
     log(f"Found {len(source_files)} source files under: {input_tree}")
@@ -203,6 +259,16 @@ def convert_or_copy_tree_to_data0(
                 result = process_single_source_file(src_path, input_tree, output_tree)
                 processed.append(result)
                 log(f"Processed ({result['operation']}): {result['relative_path']}")
+                report_step00_progress(
+                    phase="convert_or_copy",
+                    completed_units=len(processed),
+                    total_units=len(source_files),
+                    message=f"Processed ({result['operation']}): {result['relative_path']}",
+                    extra={
+                        "operation": result["operation"],
+                        "relative_path": result["relative_path"],
+                    },
+                )
         else:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
@@ -214,6 +280,16 @@ def convert_or_copy_tree_to_data0(
                     result = future.result()
                     processed.append(result)
                     log(f"Processed ({result['operation']}): {result['relative_path']}")
+                    report_step00_progress(
+                        phase="convert_or_copy",
+                        completed_units=len(processed),
+                        total_units=len(source_files),
+                        message=f"Processed ({result['operation']}): {result['relative_path']}",
+                        extra={
+                            "operation": result["operation"],
+                            "relative_path": result["relative_path"],
+                        },
+                    )
 
     processed = sorted(processed, key=lambda item: item["relative_path"])
 
@@ -241,10 +317,30 @@ def convert_or_copy_tree_to_data0(
         "files": processed,
     }
 
+    report_step00_progress(
+        phase="finalizing",
+        completed_units=len(processed),
+        total_units=len(source_files),
+        message="Writing Step 00 summary and metrics.",
+    )
+
     if write_summary_file:
         summary_path = output_tree / "step00_convert_summary.json"
         write_stage_summary(summary_path, summary)
         log(f"Step 00 summary written: {summary_path}")
+
+    report_step00_progress(
+        phase="completed",
+        completed_units=len(processed),
+        total_units=len(source_files),
+        message="SSDR Step 00 complete.",
+        extra={
+            "source_file_count": int(len(source_files)),
+            "processed_count": int(len(processed)),
+            "converted_json_count": int(converted_json_count),
+            "copied_pkl_count": int(copied_pkl_count),
+        },
+    )
 
     record_metric("00_source_file_count", int(len(source_files)))
     record_metric("00_processed_count", int(len(processed)))
