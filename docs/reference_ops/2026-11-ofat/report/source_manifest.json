@@ -1,0 +1,14 @@
+{
+  "do_not_execute_directly": true,
+  "records": [
+    {
+      "relative_path": "docs/reference_ops/2026-11-ofat/report/generate_pdrew_ofat_reports.py",
+      "repository": "OGD-LBS",
+      "sha256": "dec7339ffc2031e9cf81caccc895dc7f4c79bd8563568f89f092b7e60601612e",
+      "size_bytes": 39370,
+      "source_path": "/workspace/pd_rew_exp_data/report_operations/ofat-report-preflight-20261109T025717Z-gPaquG/generate_pdrew_ofat_reports.py",
+      "syntax_status": "VALID"
+    }
+  ],
+  "schema": "ogd_lbs_reference_source_manifest_v1"
+}
