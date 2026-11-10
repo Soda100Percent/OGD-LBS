@@ -111,11 +111,13 @@ def normalize_string_list(value: Any, *, field_name: str) -> list[str]:
     return out
 
 
-def load_sdf_merge_config(config_path: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
-    obj = load_json(config_path)
-
+def parse_sdf_merge_config_obj(
+    obj: dict[str, Any],
+    *,
+    source_label: str = "inline_cli",
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
     if not isinstance(obj, dict) or not obj:
-        raise RuntimeError(f"Prep 02a config must be a non-empty JSON object: {config_path}")
+        raise RuntimeError(f"Prep 02a config must be a non-empty JSON object: {source_label}")
 
     unmerged_meshes = normalize_string_list(
         obj.get("unmerged_meshes", []),
@@ -195,6 +197,11 @@ def load_sdf_merge_config(config_path: Path) -> tuple[dict[str, dict[str, Any]],
         rules[target_name] = normalized_cfg
 
     return rules, unmerged_meshes
+
+
+def load_sdf_merge_config(config_path: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    obj = load_json(config_path)
+    return parse_sdf_merge_config_obj(obj, source_label=str(config_path))
 
 
 def object_is_descendant_of(obj: bpy.types.Object, ancestor: bpy.types.Object) -> bool:
@@ -522,6 +529,18 @@ def main() -> None:
 
     override_args = parser.add_argument_group("config override arguments")
     override_args.add_argument(
+        "--merge_groups",
+        type=str,
+        default=None,
+        help="Inline JSON object mapping VDB target names to source_meshes list or group config.",
+    )
+    override_args.add_argument(
+        "--unmerged_meshes",
+        type=str,
+        default=None,
+        help="Inline JSON array of unmerged mesh names (used with --merge_groups).",
+    )
+    override_args.add_argument(
         "--voxel_size",
         type=float,
         default=None,
@@ -570,7 +589,32 @@ def main() -> None:
         role="Prep 02a input blend",
     )
 
-    if args.config is not None and str(args.config).strip():
+    import json as _json
+
+    inline_cfg_obj: dict[str, Any] | None = None
+    if args.merge_groups is not None and str(args.merge_groups).strip():
+        try:
+            mg_val = _json.loads(args.merge_groups)
+        except Exception as exc:
+            raise RuntimeError(f"Invalid JSON in --merge_groups: {exc}") from exc
+        if not isinstance(mg_val, dict) or not mg_val:
+            raise RuntimeError("--merge_groups must be a non-empty JSON object")
+        um_val: list[Any] = []
+        if args.unmerged_meshes is not None and str(args.unmerged_meshes).strip():
+            try:
+                um_val = _json.loads(args.unmerged_meshes)
+            except Exception as exc:
+                raise RuntimeError(f"Invalid JSON in --unmerged_meshes: {exc}") from exc
+            if not isinstance(um_val, list):
+                raise RuntimeError("--unmerged_meshes must be a JSON list")
+        inline_cfg_obj = {
+            "schema": PREP02_CONFIG_SCHEMA,
+            "merge_groups": mg_val,
+            "unmerged_meshes": um_val,
+        }
+        config_path = None
+        config_source = "INLINE_CLI_ARGS"
+    elif args.config is not None and str(args.config).strip():
         config_path = Path(args.config).expanduser().resolve(strict=False)
         config_source = "EXPLICIT_OVERRIDE"
     else:
@@ -579,7 +623,7 @@ def main() -> None:
 
     out_dir = (resolution.output_tree / "sdf_exports").resolve(strict=False)
 
-    if not config_path.is_file():
+    if inline_cfg_obj is None and (config_path is None or not config_path.is_file()):
         raise FileNotFoundError(
             f"Missing Prep 02a config: {config_path} (source={config_source})"
         )
@@ -588,7 +632,7 @@ def main() -> None:
 
     print("\n📋 Prep 02a resolved files:", flush=True)
     print(f"   input_blend : {input_path}", flush=True)
-    print(f"   config      : {config_path} ({config_source})", flush=True)
+    print(f"   config      : {config_path if config_path else '<inline_cli_args>'} ({config_source})", flush=True)
     print(f"   out_dir     : {out_dir}", flush=True)
 
     open_blend_file(input_path, role="Prep 02a input blend")
@@ -600,8 +644,15 @@ def main() -> None:
     print(f"\n🛑 Applying target_frame={int(args.target_frame)}...", flush=True)
     align_scene_pose_frame(int(args.target_frame), set_all_armatures=True)
 
-    print(f"\n📋 Loading SDF config: {config_path}", flush=True)
-    merge_rules, declared_unmerged_meshes = load_sdf_merge_config(config_path)
+    if inline_cfg_obj is not None:
+        print("\n📋 Loading SDF config from inline CLI arguments (--merge_groups)", flush=True)
+        merge_rules, declared_unmerged_meshes = parse_sdf_merge_config_obj(
+            inline_cfg_obj, source_label="--merge_groups"
+        )
+    else:
+        assert config_path is not None
+        print(f"\n📋 Loading SDF config: {config_path}", flush=True)
+        merge_rules, declared_unmerged_meshes = load_sdf_merge_config(config_path)
 
     print("\n🔎 Validating Prep 02 config mesh coverage and post-fusion name plan...", flush=True)
     coverage_info = validate_mesh_coverage(
@@ -661,7 +712,7 @@ def main() -> None:
 
     manifest: dict[str, Any] = {
         "source_blend": str(input_path.resolve()),
-        "config": str(config_path.resolve()),
+        "config": str(config_path.resolve()) if config_path is not None else "INLINE_CLI_ARGS",
         "bpy_version": bpy.app.version_string,
         "target_frame": int(args.target_frame),
         "config_schema": PREP02_CONFIG_SCHEMA,

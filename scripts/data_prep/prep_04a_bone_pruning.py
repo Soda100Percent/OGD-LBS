@@ -173,16 +173,14 @@ def variant_armature_name_from_variant_name(variant_name: str) -> str:
     return f"Armature_Bone_Reduced_{name}"
 
 
-def load_extra_bone_reduce_config(path: Path) -> list[dict[str, Any]]:
-    obj = load_json(path)
+def parse_extra_bone_reduce_obj(obj: dict[str, Any], *, source_label: str = "inline_cli") -> list[dict[str, Any]]:
+    if not isinstance(obj, dict) or not obj:
+        raise RuntimeError(f"Extra bone-reduction config must be a non-empty JSON object: {source_label}")
 
-    if not isinstance(obj, dict):
-        raise RuntimeError(f"Extra bone-reduction config must be a JSON object: {path}")
-
-    variants = obj.get("variants")
+    variants = obj.get("variants") if "variants" in obj else obj
     if not isinstance(variants, dict) or not variants:
         raise RuntimeError(
-            f"Extra bone-reduction config must contain non-empty object field 'variants': {path}"
+            f"Extra bone-reduction config must contain non-empty variants mapping: {source_label}"
         )
 
     normalized: list[dict[str, Any]] = []
@@ -242,6 +240,11 @@ def load_extra_bone_reduce_config(path: Path) -> list[dict[str, Any]]:
     return normalized
 
 
+def load_extra_bone_reduce_config(path: Path) -> list[dict[str, Any]]:
+    obj = load_json(path)
+    return parse_extra_bone_reduce_obj(obj, source_label=str(path))
+
+
 def update_config_variant_manifest(
     *,
     manifest_path: Path,
@@ -293,26 +296,40 @@ def update_config_variant_manifest(
 
 def create_configured_bone_reduced_variants(
     *,
-    config_path: Path,
+    config_path: Path | None = None,
+    inline_variants_json: str | None = None,
     manual_versions_dir: Path,
     cleaned_full_blend_path: Path,
     cleaned_full_armature_name: str,
     original_armature_name: str,
     overwrite: bool,
 ) -> list[dict[str, Any]]:
-    config_path = Path(config_path).expanduser().resolve(strict=False)
+    import json as _json
 
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Extra bone-reduction config not found: {config_path}")
+    if inline_variants_json is not None and str(inline_variants_json).strip():
+        try:
+            raw_obj = _json.loads(inline_variants_json)
+        except Exception as exc:
+            raise RuntimeError(f"Invalid JSON in --bone_reduce_variants: {exc}") from exc
+        variants = parse_extra_bone_reduce_obj(raw_obj, source_label="--bone_reduce_variants")
+        config_record_path = Path("/INLINE_CLI_BONE_REDUCE_VARIANTS")
+        config_display = "<inline --bone_reduce_variants>"
+    else:
+        if config_path is None:
+            raise ValueError("Either config_path or inline_variants_json is required")
+        config_record_path = Path(config_path).expanduser().resolve(strict=False)
+        if not config_record_path.is_file():
+            raise FileNotFoundError(f"Extra bone-reduction config not found: {config_record_path}")
+        variants = load_extra_bone_reduce_config(config_record_path)
+        config_display = str(config_record_path)
 
-    variants = load_extra_bone_reduce_config(config_path)
     manual_versions_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = manual_versions_dir / MANUAL_VERSIONS_MANIFEST_NAME
     summaries: list[dict[str, Any]] = []
 
     print("\n🧬 Creating configured bone-reduced variants...", flush=True)
-    print(f"   Config: {config_path}", flush=True)
+    print(f"   Config: {config_display}", flush=True)
 
     for variant in variants:
         variant_name = str(variant["variant_name"])
@@ -419,7 +436,7 @@ def create_configured_bone_reduced_variants(
             cleaned_full_blend_path=cleaned_full_blend_path,
             cleaned_full_armature_name=cleaned_full_armature_name,
             original_armature_name=original_armature_name,
-            extra_bone_reduce_config_path=config_path,
+            extra_bone_reduce_config_path=config_record_path,
             final_bone_count=final_bone_count,
             description=description,
         )
@@ -622,6 +639,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--bone_reduce_variants",
+        type=str,
+        default=None,
+        help=(
+            "Optional inline JSON object mapping variant names to delete_bones lists "
+            "(raw parameter alternative to --extra_bone_reduce_config)."
+        ),
+    )
+    parser.add_argument(
         "--overwrite_config_variants",
         action="store_true",
         help="Overwrite .blend files generated from --extra_bone_reduce_config.",
@@ -719,9 +745,12 @@ def main() -> None:
 
     configured_variant_summaries: list[dict[str, Any]] = []
 
-    if args.extra_bone_reduce_config is not None and str(args.extra_bone_reduce_config).strip():
+    has_inline_variants = args.bone_reduce_variants is not None and str(args.bone_reduce_variants).strip()
+    has_file_variants = args.extra_bone_reduce_config is not None and str(args.extra_bone_reduce_config).strip()
+    if has_inline_variants or has_file_variants:
         configured_variant_summaries = create_configured_bone_reduced_variants(
-            config_path=Path(str(args.extra_bone_reduce_config)),
+            config_path=Path(str(args.extra_bone_reduce_config)) if has_file_variants else None,
+            inline_variants_json=str(args.bone_reduce_variants) if has_inline_variants else None,
             manual_versions_dir=manual_versions_dir,
             cleaned_full_blend_path=output_path,
             cleaned_full_armature_name=str(args.cleaned_full_armature_name),

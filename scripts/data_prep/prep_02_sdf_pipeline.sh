@@ -37,6 +37,8 @@ BPY4_ENV="lao-lbs"
 INPUT_DIR=""
 OUTPUT_DIR=""
 CONFIG=""
+MERGE_GROUPS=""
+UNMERGED_MESHES=""
 
 TARGET_FRAME=""
 VOXEL_SIZE=""
@@ -149,6 +151,16 @@ while [[ $# -gt 0 ]]; do
         --config)
             require_value "$1" "${2:-}"
             CONFIG="$2"
+            shift 2
+            ;;
+        --merge_groups)
+            require_value "$1" "${2:-}"
+            MERGE_GROUPS="$2"
+            shift 2
+            ;;
+        --unmerged_meshes)
+            require_value "$1" "${2:-}"
+            UNMERGED_MESHES="$2"
             shift 2
             ;;
         --bpy5_env)
@@ -340,7 +352,7 @@ if [[ ! -f "${RES_INPUT_BLEND}" ]]; then
     exit 1
 fi
 
-if [[ ! -f "${RES_CONFIG}" ]]; then
+if [[ -z "${MERGE_GROUPS}" && ! -f "${RES_CONFIG}" ]]; then
     echo "ERROR: resolved config does not exist: ${RES_CONFIG} (${RES_CONFIG_SOURCE})" >&2
     exit 1
 fi
@@ -373,8 +385,15 @@ PREP02A_CMD=(
     python scripts/data_prep/prep_02a_sdf_fuse_5x.py
     --input_dir "${RES_INPUT_TREE}"
     --output_dir "${RES_OUTPUT_TREE}"
-    --config "${RES_CONFIG}"
 )
+if [[ -n "${MERGE_GROUPS}" ]]; then
+    PREP02A_CMD+=(--merge_groups "${MERGE_GROUPS}")
+    if [[ -n "${UNMERGED_MESHES}" ]]; then
+        PREP02A_CMD+=(--unmerged_meshes "${UNMERGED_MESHES}")
+    fi
+else
+    PREP02A_CMD+=(--config "${RES_CONFIG}")
+fi
 
 if [[ -n "${TARGET_FRAME}" ]]; then
     PREP02A_CMD+=(--target_frame "${TARGET_FRAME}")
