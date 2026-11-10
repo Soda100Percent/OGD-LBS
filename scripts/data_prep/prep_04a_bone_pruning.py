@@ -53,6 +53,7 @@ Important terminology:
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -768,6 +769,20 @@ def main() -> None:
         cleaned_full_name=str(args.cleaned_full_armature_name),
         template_armature_name=str(args.manual_template_armature_name),
     )
+
+    upstream_manifest_candidates = [
+        (resolution.input_tree / "sdf_exports" / "manifest.json").resolve(strict=False),
+        (resolution.work_dir / "data_prep_02" / "sdf_exports" / "manifest.json").resolve(strict=False),
+    ]
+    upstream_manifest = next((p for p in upstream_manifest_candidates if p.is_file()), None)
+    if upstream_manifest is not None:
+        output_manifest_path = (
+            resolution.output_tree / "sdf_exports" / "manifest.json"
+        ).resolve(strict=False)
+        if output_manifest_path != upstream_manifest:
+            output_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(upstream_manifest, output_manifest_path)
+            print(f"   forwarded manifest: {output_manifest_path}", flush=True)
 
     print("\n🎉 Prep 04a cleaned-full preparation done.", flush=True)
 

@@ -356,9 +356,17 @@ def main() -> None:
         role="Prep 05 input cleaned-full blend",
     )
 
-    manifest_path = (
+    stage_manifest_path = (
+        resolution.input_tree / "sdf_exports" / "manifest.json"
+    ).resolve(strict=False)
+    legacy_manifest_path = (
         resolution.work_dir / "data_prep_02" / "sdf_exports" / "manifest.json"
     ).resolve(strict=False)
+    manifest_path = (
+        stage_manifest_path
+        if stage_manifest_path.is_file()
+        else legacy_manifest_path
+    )
     require_file(manifest_path, role="Prep 05 manifest")
 
     manual_dir = (resolution.input_tree / "bone_reduced_versions").resolve(strict=False)

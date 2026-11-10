@@ -46,6 +46,7 @@ When --drive_mode SURFACE or LBS:
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 
@@ -298,6 +299,14 @@ def main() -> None:
 
         print(f"\n🎉 Prep 03 done. {drive_mode} drive-mode output saved.", flush=True)
         print(f"   output: {output_single_path}", flush=True)
+
+    output_manifest_path = (
+        resolution.output_tree / "sdf_exports" / "manifest.json"
+    ).resolve(strict=False)
+    if output_manifest_path != manifest_path.resolve(strict=False):
+        output_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, output_manifest_path)
+        print(f"   forwarded manifest: {output_manifest_path}", flush=True)
 
 
 if __name__ == "__main__":
