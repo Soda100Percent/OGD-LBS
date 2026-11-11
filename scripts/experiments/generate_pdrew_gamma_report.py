@@ -11,8 +11,13 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import signal
+import socket
+import subprocess
 import sys
+import time
 from typing import Any
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 OGD_ROOT = HERE.parents[1]
@@ -160,6 +165,136 @@ def case_from_expanded_row(
             "sweep_values": row.get("sweep_values") or {},
             "stage04_data_dir": stage04_data_dir,
         },
+    }
+
+
+def get_lan_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.241.1.1", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def stop_existing_server_on_port(port: int) -> list[int]:
+    """Find and terminate any process listening on TCP `port` via /proc/net/tcp{,6}."""
+    port_hex = f"{int(port):04X}"
+    target_inodes: set[str] = set()
+    for net_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+        p = Path(net_file)
+        if not p.is_file():
+            continue
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 10:
+                continue
+            local_addr, state, inode = parts[1], parts[3], parts[9]
+            if state == "0A" and local_addr.upper().endswith(f":{port_hex}"):
+                target_inodes.add(inode)
+
+    killed_pids: list[int] = []
+    if not target_inodes:
+        return killed_pids
+
+    my_pid = os.getpid()
+    for proc_dir in Path("/proc").glob("[0-9]*"):
+        try:
+            pid = int(proc_dir.name)
+        except ValueError:
+            continue
+        if pid == my_pid:
+            continue
+        fd_dir = proc_dir / "fd"
+        try:
+            for fd in fd_dir.iterdir():
+                try:
+                    link = os.readlink(fd)
+                except OSError:
+                    continue
+                for ino in target_inodes:
+                    if f"socket:[{ino}]" in link:
+                        killed_pids.append(pid)
+                        break
+        except OSError:
+            continue
+
+    killed_pids = sorted(set(killed_pids))
+    for pid in killed_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        alive = [pid for pid in killed_pids if Path(f"/proc/{pid}").exists()]
+        if not alive:
+            break
+        time.sleep(0.1)
+
+    for pid in killed_pids:
+        if Path(f"/proc/{pid}").exists():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    return killed_pids
+
+
+def start_daemon_http_server(report_dir: Path, html_filename: str, port: int = 8080) -> dict[str, Any]:
+    killed = stop_existing_server_on_port(port)
+    if killed:
+        print(f"[server] Replaced existing process(es) on port {port}: {killed}", flush=True)
+
+    log_file = report_dir / "http_server.log"
+    pid_file = report_dir / "http_server.pid"
+
+    with log_file.open("a", encoding="utf-8") as lf:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "http.server",
+                str(port),
+                "--bind",
+                "0.0.0.0",
+                "--directory",
+                str(report_dir),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            start_new_session=True,
+        )
+
+    pid_file.write_text(f"{proc.pid}\n", encoding="utf-8")
+
+    url_local = f"http://127.0.0.1:{port}/{html_filename}"
+    last_err = None
+    for _ in range(30):
+        try:
+            with urllib.request.urlopen(url_local, timeout=2.0) as resp:
+                if resp.status == 200:
+                    break
+        except Exception as exc:
+            last_err = exc
+            time.sleep(0.15)
+    else:
+        raise RuntimeError(f"HTTP server on port {port} failed healthcheck: {last_err}")
+
+    lan_ip = get_lan_ip()
+    return {
+        "pid": proc.pid,
+        "port": port,
+        "replaced_pids": killed,
+        "lan_ip": lan_ip,
+        "report_url": f"http://{lan_ip}:{port}/{html_filename}",
+        "index_url": f"http://{lan_ip}:{port}/index.html",
+        "log_file": str(log_file),
     }
 
 
@@ -332,6 +467,7 @@ def generate_param_report(
         "param_family": param_family,
         "row_count": len(source_records),
         "output_dir": str(output_dir),
+        "html_filename": html_filename,
         "report_html": str(report_html),
         "index_html": dl_receipt["index_html"],
         "zip_path": dl_receipt["zip_path"],
@@ -356,6 +492,9 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--title", default=None)
     parser.add_argument("--require-history", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--serve", action="store_true", help="Serve report in foreground on --port (replaces existing listener).")
+    parser.add_argument("--serve-daemon", action="store_true", help="Serve report in background on --port (replaces existing listener).")
+    parser.add_argument("--port", type=int, default=8080, help="HTTP server port (default: 8080).")
     args = parser.parse_args()
 
     res = generate_param_report(
@@ -370,13 +509,27 @@ def main() -> None:
         title=args.title,
         require_history=bool(args.require_history),
     )
-    print("=" * 88)
-    print(f"PD-REW-V2 REPORT GENERATED ({res['param_family'].upper()})")
-    print("ROWS        :", res["row_count"])
-    print("REPORT HTML :", res["report_html"])
-    print("INDEX HTML  :", res["index_html"])
-    print("DOWNLOAD ZIP:", res["zip_path"])
-    print("=" * 88)
+    print("=" * 88, flush=True)
+    print(f"PD-REW-V2 REPORT GENERATED ({res['param_family'].upper()})", flush=True)
+    print("ROWS        :", res["row_count"], flush=True)
+    print("REPORT HTML :", res["report_html"], flush=True)
+    print("INDEX HTML  :", res["index_html"], flush=True)
+    print("DOWNLOAD ZIP:", res["zip_path"], flush=True)
+    print("=" * 88, flush=True)
+
+    if args.serve_daemon:
+        srv = start_daemon_http_server(
+            Path(res["output_dir"]),
+            res["html_filename"],
+            port=int(args.port),
+        )
+        print(f"🌐 LAN Server Active (PID={srv['pid']}, Port={srv['port']})", flush=True)
+        print(f"👉 Interactive Report : {srv['report_url']}", flush=True)
+        print(f"👉 Download Center    : {srv['index_url']}", flush=True)
+    elif args.serve:
+        stop_existing_server_on_port(int(args.port))
+        import generate_report
+        generate_report.serve_dir(Path(res["output_dir"]), Path(res["report_html"]), int(args.port))
 
 
 if __name__ == "__main__":
