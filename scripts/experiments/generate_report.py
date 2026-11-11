@@ -68,6 +68,8 @@ DEFAULT_SWEEP_VALUES = {
     "s_max": "4",
     "tau": "adaptive",
     "omega_b": "1000.0",
+    "Griffin_A2:delta": "15.0",
+    "Winter_Samurai:delta": "1.5",
 }
 
 DEFAULT_MODEL_SCALE_VALUES = {
@@ -129,6 +131,7 @@ CONFIG_COLUMNS_BY_MODE = {
         "eff_s_max",
         "eff_tau",
         "eff_omega_b",
+        "eff_delta",
         "summary_config_s_max",
         "summary_config_mask_mode",
         "summary_config_mask_threshold",
@@ -762,8 +765,18 @@ def sweep_values_equal(a: Any, b: Any) -> bool:
         return False
 
 
-def is_default_sweep_value(param: Any, value: Any, default_sweep_values: dict[str, str]) -> bool:
+def is_default_sweep_value(
+    param: Any,
+    value: Any,
+    default_sweep_values: dict[str, str],
+    *,
+    model: Any = None,
+) -> bool:
     p = str(param)
+    if model is not None:
+        m_key = f"{model}:{p}"
+        if m_key in default_sweep_values:
+            return sweep_values_equal(value, default_sweep_values[m_key])
     if p not in default_sweep_values:
         return False
     return sweep_values_equal(value, default_sweep_values[p])
@@ -977,7 +990,7 @@ def prepare_sweep_mean_std_charts(
                     "low": mean - std,
                     "high": mean + std,
                     "direction": direction,
-                    "isDefault": is_default_sweep_value(param, value, default_sweep_values),
+                    "isDefault": is_default_sweep_value(param, value, default_sweep_values, model=model),
                     "label": f"{param}={value}",
                 }
             )
@@ -1104,7 +1117,7 @@ def prepare_model_grouped_raw_charts(
                     "param": param,
                     "value": value,
                     "direction": direction,
-                    "isDefault": is_default_sweep_value(param, value, default_sweep_values),
+                    "isDefault": is_default_sweep_value(param, value, default_sweep_values, model=model),
                     "label": f"{model} | {param}={value}",
 
                     "modelScale": applied_scale,
