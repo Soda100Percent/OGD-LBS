@@ -5,35 +5,12 @@ from __future__ import annotations
 """
 SSDR Step 04: Optimize skinning weights and bone transforms.
 
-Default pipeline semantics:
-    --input_dir <work_dir>
-        reads : <work_dir>/data3
-        writes: <work_dir>/data4
-
-    --input_dir <work_dir>/data3
-        reads : <work_dir>/data3
-        writes: <work_dir>/data4
-
-Explicit automation mode:
-    --input_dir <custom_input_tree> --output_dir <custom_output_tree>
-        reads : <custom_input_tree>
-        writes: <custom_output_tree>
-
-Input layout:
-    data3/
-    ├── skeleton_hierarchy_data.pkl
-    ├── animation_data.pkl
-    └── <mesh>.pkl
-
-Output layout:
-    data4/
-    ├── opt_out/
-    │   ├── skeleton_hierarchy_data.pkl
-    │   ├── animation_data.pkl
-    │   ├── <mesh>.pkl
-    │   └── metrics_history_per_frame.npz
-    ├── opt_out_iter_<n>/              # optional --save_intermediate
-    └── step04_optimize_summary.json
+Supports both:
+1. Full-frame optimization (--kfold 0, default)
+2. Inline K-fold CV train + held-out test evaluation (--kfold K --fold_index F)
+   where train frames optimize weights + bone transforms, and held-out test
+   frames evaluate unseen-motion generalization by freezing the trained weights
+   and fitting only per-frame bone transforms.
 """
 
 import os
@@ -47,6 +24,7 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 try:
@@ -83,8 +61,6 @@ except ModuleNotFoundError:  # pragma: no cover - package import fallback
 
 import numpy as np
 
-
-
 from ogd_lbs.utils.common import (  # noqa: E402
     log,
     warn,
@@ -113,7 +89,10 @@ from ogd_lbs.fitbox.validation import (  # noqa: E402
     validate_skeleton_and_animation,
     validate_fitbox_mesh,
 )
-
+from ogd_lbs.ssdr.frame_sampling import (  # noqa: E402
+    apply_frame_sample_plan_to_animation,
+    apply_frame_sample_plan_to_mesh,
+)
 from ogd_lbs.ssdr.schedulers import get_legacy_schedule  # noqa: E402
 from ogd_lbs.ssdr.weight_mask import build_weight_mask  # noqa: E402
 from ogd_lbs.ssdr.utils import validate_combined_arrays  # noqa: E402
@@ -121,7 +100,7 @@ from ogd_lbs.ssdr.optimize_weight import opt_vbw_parallel  # noqa: E402
 from ogd_lbs.ssdr.optimize_bone_trans import opt_bt_parallel  # noqa: E402
 from ogd_lbs.ssdr.reconstruction_err import (  # noqa: E402
     recon_err,
-    recon_err_hausdorff,
+    recon_err_hausdorff_per_frame,
     recon_err_per_frame,
 )
 from ogd_lbs.ssdr.skeleton_organization import calc_bone_lens, calc_org_loss  # noqa: E402
@@ -276,6 +255,638 @@ def resolve_iteration_schedule(
     return bool(to_opt_weight), int(weight_calc_mode), float(jnt_factor), "legacy_schedule"
 
 
+def make_inline_kfold_split(
+    frame_count: int,
+    *,
+    kfold: int,
+    fold_index: int,
+    special_train_fraction: float,
+) -> SimpleNamespace:
+    frame_count = int(frame_count)
+    kfold = int(kfold)
+    fold_index = int(fold_index)
+    frac = float(special_train_fraction)
+
+    if frame_count <= 0:
+        fail(f"frame_count must be positive, got {frame_count}")
+    if kfold <= 1:
+        fail(f"kfold must be > 1 when enabled, got {kfold}")
+    if fold_index < 0 or fold_index >= kfold:
+        fail(f"fold_index must be in [0, {kfold}), got {fold_index}")
+    if frac < 0.0 or frac >= 1.0:
+        fail(f"special_train_fraction must be in [0, 1), got {frac}")
+
+    special_end = max(0, min(int(round(frame_count * frac)), frame_count))
+    special_ranges = [[0, special_end]] if special_end > 0 else []
+    special = np.arange(0, special_end, dtype=np.int64)
+    pool = np.arange(special_end, frame_count, dtype=np.int64)
+
+    if pool.size < kfold:
+        fail(
+            f"Pool frame count must be >= kfold after removing special frames; "
+            f"pool={pool.size}, kfold={kfold}"
+        )
+
+    chunks = np.array_split(pool, kfold)
+    test = np.asarray(chunks[fold_index], dtype=np.int64)
+    test_set = set(int(x) for x in test.tolist())
+    all_indices = np.arange(frame_count, dtype=np.int64)
+    train = np.asarray([int(x) for x in all_indices.tolist() if int(x) not in test_set], dtype=np.int64)
+
+    stats = {
+        "schema": "ogd_lbs_cv_frame_split_v1",
+        "fold_index": int(fold_index),
+        "kfold": int(kfold),
+        "frame_count": int(frame_count),
+        "special_train_fraction": float(frac),
+        "special_train_ranges": special_ranges,
+        "special_count": int(special.shape[0]),
+        "pool_count": int(pool.shape[0]),
+        "train_count": int(train.shape[0]),
+        "test_count": int(test.shape[0]),
+        "special_indices": [int(x) for x in special.tolist()],
+        "pool_indices": [int(x) for x in pool.tolist()],
+        "train_indices": [int(x) for x in train.tolist()],
+        "test_indices": [int(x) for x in test.tolist()],
+        "range_semantics": "left_closed_right_open",
+    }
+    return SimpleNamespace(
+        fold_index=int(fold_index),
+        frame_count=int(frame_count),
+        kfold=int(kfold),
+        special_indices=special,
+        pool_indices=pool,
+        train_indices=train,
+        test_indices=test,
+        stats=stats,
+    )
+
+
+def _make_frame_selection_plan(total_frames: int, selected_indices: np.ndarray, label: str) -> SimpleNamespace:
+    selected_indices = np.asarray(selected_indices, dtype=np.int64)
+    removal_mask = np.ones(int(total_frames), dtype=bool)
+    removal_mask[selected_indices] = False
+    return SimpleNamespace(
+        original_frame_count=int(total_frames),
+        max_frames=int(total_frames),
+        target_frames=int(selected_indices.shape[0]),
+        selected_indices=selected_indices,
+        removal_mask=removal_mask,
+        reduced=bool(selected_indices.shape[0] != int(total_frames)),
+        stats={
+            "schema": "ogd_lbs_cv_selected_frame_plan_v1",
+            "label": label,
+            "original_frame_count": int(total_frames),
+            "selected_count": int(selected_indices.shape[0]),
+            "removed_count": int(np.count_nonzero(removal_mask)),
+            "selected_indices": [int(x) for x in selected_indices.tolist()],
+        },
+    )
+
+
+def _run_optimization_pass(
+    *,
+    pass_label: str,
+    frame_indices: np.ndarray,
+    total_input_frames: int,
+    v_cb: np.ndarray,
+    ba_v_cb_slice: np.ndarray,
+    bt_init_slice: np.ndarray,
+    vbw_init: np.ndarray,
+    rbt: np.ndarray,
+    inv_rbt: np.ndarray,
+    par_idxs: np.ndarray,
+    orig_bone_lens: np.ndarray,
+    bone_jnts: list[Any],
+    fixed_bones: set[int],
+    bone_names: list[str],
+    name_list: list[str],
+    v_idxs_list: list[np.ndarray],
+    skdmeshes: list[dict[str, Any]],
+    anim_obj: dict[str, Any],
+    skelhier_obj: dict[str, Any],
+    vbw_mask_list: list[np.ndarray],
+    laplacian_solvers: list[Any],
+    health_pre_list: list[Any],
+    bone_health_pre: Any,
+    name_col_width: int,
+    baked_schedule: list[dict[str, Any]] | None,
+    print_every_n: int,
+    max_iter: int,
+    org_type: int,
+    opt_weight: bool,
+    input_poses: bool,
+    s_max: int,
+    mask_mode: str,
+    mask_threshold: float,
+    freeze_weights: bool,
+    weight_solver: str,
+    use_weight_smoothness: bool,
+    weight_soft_lock: float,
+    lambda_reg: float,
+    bt_covariance_mode: str,
+    trans_affine: float,
+    trans_affine_norm: float,
+    roll_affinity: float,
+    roll_affinity_norm: float,
+    eval_mesh_health: bool,
+    health_level: int,
+    health_every: int,
+    eval_bone_health: bool,
+    bone_health_every: int,
+    max_workers: int | None,
+    enable_profiling: bool,
+    validate_output: bool,
+    weak_validate: bool,
+    save_intermediate: bool,
+    output_tree: Path,
+    final_outdir_name: str,
+    write_meshes: bool,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any], dict[str, str], Path, Path, Path]:
+    n_p = int(ba_v_cb_slice.shape[0])
+    n_b = int(rbt.shape[0])
+    bt = np.asarray(bt_init_slice, dtype=np.float64).copy()
+    vbw_cb = np.asarray(vbw_init, dtype=np.float64).copy()
+
+    if not bool(input_poses):
+        for p_id in range(n_p):
+            bt[p_id] = rbt
+
+    sparseness = int(s_max)
+    if sparseness <= 0:
+        fail(f"s_max must be positive, got {s_max}")
+
+    frame_plan = _make_frame_selection_plan(total_input_frames, frame_indices, pass_label)
+    sliced_meshes = [
+        apply_frame_sample_plan_to_mesh(m, frame_plan, copy_obj=True)
+        if int(frame_indices.shape[0]) != int(total_input_frames)
+        or not np.array_equal(frame_indices, np.arange(total_input_frames, dtype=np.int64))
+        else dict(m)
+        for m in skdmeshes
+    ]
+    sliced_anim_base = (
+        apply_frame_sample_plan_to_animation(anim_obj, frame_plan, copy_obj=True)
+        if int(frame_indices.shape[0]) != int(total_input_frames)
+        or not np.array_equal(frame_indices, np.arange(total_input_frames, dtype=np.int64))
+        else dict(anim_obj)
+    )
+
+    org_loss_array = np.zeros((max_iter, n_p), dtype=np.float64)
+    loss_buffer: dict[str, list[float]] = {"err": [], "org_loss": [], "jnt_factor": []}
+    bone_health_buffer: dict[str, list[Any]] = {
+        "roll_max": [],
+        "swing_max": [],
+        "roll_150": [],
+        "worst_roll_bone": [],
+        "worst_swing_bone": [],
+    }
+    mesh_health_buffer: dict[str, dict[str, list[float]]] = {
+        name: {"arap": [], "edge": [], "flip": []}
+        for name in name_list
+    }
+
+    history_metrics: dict[str, np.ndarray] = {
+        "org_loss": np.zeros((max_iter, n_p), dtype=np.float64),
+        "l2_err": np.zeros((max_iter, n_p), dtype=np.float64),
+        "frame_indices": np.asarray(frame_indices, dtype=np.int64)[np.newaxis, :],
+    }
+
+    if eval_bone_health:
+        history_metrics["bone_roll_max"] = np.zeros((max_iter, n_p), dtype=np.float64)
+        history_metrics["bone_swing_max"] = np.zeros((max_iter, n_p), dtype=np.float64)
+
+    if eval_mesh_health:
+        for name in name_list:
+            history_metrics[f"mesh_{name}_arap"] = np.zeros((max_iter, n_p), dtype=np.float64)
+            history_metrics[f"mesh_{name}_edge"] = np.zeros((max_iter, n_p), dtype=np.float64)
+
+    def flush_buffers(prefix: str) -> None:
+        if not loss_buffer["err"]:
+            return
+
+        avg_err = float(np.mean(loss_buffer["err"]))
+        avg_org = float(np.mean(loss_buffer["org_loss"]))
+        avg_jnt = float(np.mean(loss_buffer["jnt_factor"]))
+
+        log(
+            f"[{pass_label}] {prefix} JntFactor: {avg_jnt:.4f} | "
+            f"Err: {avg_err:.6f} | OrgLoss: {avg_org:.6f}"
+        )
+
+        if bone_health_buffer["roll_max"]:
+            roll_max = float(np.max(bone_health_buffer["roll_max"]))
+            swing_max = float(np.max(bone_health_buffer["swing_max"]))
+            roll_150 = float(np.mean(bone_health_buffer["roll_150"]))
+
+            idx_roll = int(np.argmax(bone_health_buffer["roll_max"]))
+            idx_swing = int(np.argmax(bone_health_buffer["swing_max"]))
+            worst_roll = bone_health_buffer["worst_roll_bone"][idx_roll]
+            worst_swing = bone_health_buffer["worst_swing_bone"][idx_swing]
+
+            s_roll = "[!ROLL_FLIP]" if roll_max > 150.0 else ""
+            s_swing = "[!SWING_FOLD]" if swing_max > 150.0 else ""
+            has_warn = (roll_max > 150.0) or (swing_max > 150.0)
+
+            log(
+                f"  -> [Bone Health] {s_roll:<12} {s_swing:<13} "
+                f"Roll Max: {roll_max:.1f} deg | Over 150: {roll_150:.2%} | "
+                f"Swing Max: {swing_max:.1f} deg"
+            )
+            if has_warn:
+                log(f"     Worst Roll: {worst_roll} | Worst Swing: {worst_swing}")
+
+        has_mesh_data = any(len(mesh_health_buffer[name]["arap"]) > 0 for name in name_list)
+        if has_mesh_data:
+            header_pad = max(1, name_col_width - 13)
+            log(
+                f"  -> [Mesh Health]{' ' * header_pad}"
+                "FLIP     ARAP     EDGE       ARAP Ratio   Edge p99 Excess   Normal Flip"
+            )
+
+            for name in name_list:
+                mb = mesh_health_buffer[name]
+                if not mb["arap"]:
+                    continue
+
+                arap_max = float(np.max(mb["arap"]))
+                edge_max = float(np.max(mb["edge"]))
+                flip_max = float(np.max(mb["flip"]))
+
+                s_flip = "[!FLIP]" if flip_max > 0.0 else ""
+                s_arap = "[!ARAP]" if arap_max > 1.5 else ""
+                s_edge = "[!EDGE]" if edge_max > 0.1 else ""
+
+                log(
+                    f"     {name:<{name_col_width}} "
+                    f"{s_flip:<8} {s_arap:<8} {s_edge:<8} "
+                    f"{arap_max:10.3f}   {edge_max:15.4f}   {flip_max:11.2%}"
+                )
+
+        for key in loss_buffer:
+            loss_buffer[key].clear()
+        for key in bone_health_buffer:
+            bone_health_buffer[key].clear()
+        for name in name_list:
+            for key in mesh_health_buffer[name]:
+                mesh_health_buffer[name][key].clear()
+
+    initial_err = recon_err(v_cb, ba_v_cb_slice, bt, inv_rbt, vbw_cb)
+    loss_buffer["err"].append(float(initial_err))
+    loss_buffer["org_loss"].append(0.0)
+    loss_buffer["jnt_factor"].append(0.0)
+
+    if eval_bone_health and bone_health_pre is not None:
+        bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names)
+        if bh_res.get("status") != "no_valid_bones":
+            bone_health_buffer["roll_max"].append(float(bh_res.get("roll_abs_deg_max", 0.0)))
+            bone_health_buffer["swing_max"].append(float(bh_res.get("swing_delta_max", 0.0)))
+            bone_health_buffer["roll_150"].append(float(bh_res.get("roll_over_150_ratio", 0.0)))
+            bone_health_buffer["worst_roll_bone"].append(str(bh_res.get("worst_bone_by_roll", "")))
+            bone_health_buffer["worst_swing_bone"].append(str(bh_res.get("worst_bone_by_swing", "")))
+
+    if eval_mesh_health:
+        for i, name in enumerate(name_list):
+            v_indices = v_idxs_list[i]
+            p_recon = get_reconstructed_sequence(
+                v_cb[v_indices, :],
+                bt,
+                inv_rbt,
+                vbw_cb[v_indices, :],
+            )
+            health_res = health_pre_list[i].evaluate(
+                recon_seq=p_recon,
+                gt_seq=ba_v_cb_slice[:, v_indices, :],
+                level=int(health_level),
+            )
+            rel = health_res.get("relative", {})
+            mesh_health_buffer[name]["arap"].append(float(rel.get("arap_global_mean_ratio", 0.0)))
+            mesh_health_buffer[name]["edge"].append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
+            mesh_health_buffer[name]["flip"].append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
+
+    flush_buffers("[Initial]")
+
+    interval_start = 0
+
+    for it in range(max_iter):
+        to_opt_weight, weight_calc_mode, jnt_factor, schedule_source = resolve_iteration_schedule(
+            it=it,
+            max_iter=max_iter,
+            org_type=org_type,
+            opt_weight=opt_weight,
+            baked_schedule=baked_schedule,
+        )
+
+        if bool(freeze_weights):
+            to_opt_weight = False
+            schedule_source = f"{schedule_source}+freeze_weights"
+
+        log(
+            f"[{pass_label}][Iter {it:02d}] schedule={schedule_source}, "
+            f"to_opt_weight={to_opt_weight}, weight_calc_mode={weight_calc_mode}, "
+            f"jnt_factor={jnt_factor:.6g}"
+        )
+
+        with Timer(f"time_04_{pass_label}_iter_{it}_bt"):
+            bt = opt_bt_parallel(
+                v=v_cb,
+                p=ba_v_cb_slice,
+                bt=bt,
+                inv_rbt=inv_rbt,
+                vbw=vbw_cb,
+                bj=bone_jnts,
+                bj_l=float(jnt_factor),
+                fixed_bones=fixed_bones,
+                max_workers=max_workers,
+                enable_profiling=bool(enable_profiling),
+                trans_affine=float(trans_affine),
+                trans_affine_norm=float(trans_affine_norm),
+                bt_covariance_mode=str(bt_covariance_mode),
+                rbt=rbt,
+                par_idxs=par_idxs,
+                roll_affinity=float(roll_affinity),
+                roll_affinity_norm=float(roll_affinity_norm),
+            )
+
+        for p_id in range(n_p):
+            org_loss_array[it, p_id] = calc_org_loss(
+                orig_bone_lens,
+                calc_bone_lens(bt[p_id], par_idxs),
+            )
+
+        org_loss_avg = float(np.mean(org_loss_array[it, :]))
+
+        if to_opt_weight:
+            with Timer(f"time_04_{pass_label}_iter_{it}_weight"):
+                for i, name in enumerate(name_list):
+                    v_indices = v_idxs_list[i]
+
+                    v_slice = v_cb[v_indices, :]
+                    ba_v_slice = ba_v_cb_slice[:, v_indices, :]
+                    mask_slice = vbw_mask_list[i]
+                    prev_vbw_slice = vbw_cb[v_indices, :]
+
+                    target_w = None
+                    local_lambda_reg = 0.0
+
+                    if use_weight_smoothness or float(weight_soft_lock) > 0.0:
+                        local_lambda_reg = float(lambda_reg)
+
+                        if use_weight_smoothness:
+                            solver = laplacian_solvers[i]
+                            if solver is None:
+                                fail(f"Internal error: missing Laplacian solver for mesh {name}")
+                            ws = solver.solve(prev_vbw_slice)
+                        else:
+                            ws = prev_vbw_slice
+
+                        target_w = (
+                            (1.0 - float(weight_soft_lock)) * ws
+                            + float(weight_soft_lock) * prev_vbw_slice
+                        )
+
+                    vbw_cb[v_indices, :] = opt_vbw_parallel(
+                        v=v_slice,
+                        p=ba_v_slice,
+                        bt=bt,
+                        inv_rbt=inv_rbt,
+                        s=sparseness,
+                        vbw_mask=mask_slice,
+                        mode=int(weight_calc_mode),
+                        prev_vbw=prev_vbw_slice,
+                        max_workers=max_workers,
+                        weight_solver=str(weight_solver),
+                        target_w_full=target_w,
+                        lambda_reg=float(local_lambda_reg),
+                        enable_profiling=bool(enable_profiling),
+                    )
+
+        err = recon_err(v_cb, ba_v_cb_slice, bt, inv_rbt, vbw_cb)
+        loss_buffer["err"].append(float(err))
+        loss_buffer["org_loss"].append(float(org_loss_avg))
+        loss_buffer["jnt_factor"].append(float(jnt_factor))
+
+        history_metrics["org_loss"][it, :] = org_loss_array[it, :]
+        history_metrics["l2_err"][it, :] = recon_err_per_frame(
+            v_cb,
+            ba_v_cb_slice,
+            bt,
+            inv_rbt,
+            vbw_cb,
+        )
+
+        if (
+            eval_bone_health
+            and bone_health_pre is not None
+            and (it % int(bone_health_every) == 0 or it == max_iter - 1)
+        ):
+            bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names, return_maps=True)
+            if bh_res.get("status") != "no_valid_bones":
+                bone_health_buffer["roll_max"].append(float(bh_res.get("roll_abs_deg_max", 0.0)))
+                bone_health_buffer["swing_max"].append(float(bh_res.get("swing_delta_max", 0.0)))
+                bone_health_buffer["roll_150"].append(float(bh_res.get("roll_over_150_ratio", 0.0)))
+                bone_health_buffer["worst_roll_bone"].append(str(bh_res.get("worst_bone_by_roll", "")))
+                bone_health_buffer["worst_swing_bone"].append(str(bh_res.get("worst_bone_by_swing", "")))
+
+                history_metrics["bone_roll_max"][it, :] = bh_res["roll_max_per_frame"]
+                history_metrics["bone_swing_max"][it, :] = bh_res["swing_max_per_frame"]
+
+        if eval_mesh_health and (it % int(health_every) == 0 or it == max_iter - 1):
+            for i, name in enumerate(name_list):
+                v_indices = v_idxs_list[i]
+                p_recon = get_reconstructed_sequence(
+                    v_cb[v_indices, :],
+                    bt,
+                    inv_rbt,
+                    vbw_cb[v_indices, :],
+                )
+                health_res = health_pre_list[i].evaluate(
+                    recon_seq=p_recon,
+                    gt_seq=ba_v_cb_slice[:, v_indices, :],
+                    level=int(health_level),
+                    return_maps=True,
+                )
+
+                rel = health_res.get("relative", {})
+                mesh_health_buffer[name]["arap"].append(float(rel.get("arap_global_mean_ratio", 0.0)))
+                mesh_health_buffer[name]["edge"].append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
+                mesh_health_buffer[name]["flip"].append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
+
+                if "arap_spokes" in health_res.get("recon", {}):
+                    history_metrics[f"mesh_{name}_arap"][it, :] = (
+                        health_res["recon"]["arap_spokes"]["global_energy_seq"]
+                    )
+                if "edge" in health_res.get("recon", {}):
+                    history_metrics[f"mesh_{name}_edge"][it, :] = (
+                        health_res["recon"]["edge"]["log_abs_seq"].mean(axis=1)
+                    )
+
+        if (it + 1) % int(print_every_n) == 0 or it == max_iter - 1:
+            if interval_start == it:
+                prefix = f"[Iter {it:02d}]"
+            else:
+                prefix = f"[Iter {interval_start:02d}-{it:02d}]"
+
+            flush_buffers(prefix)
+            interval_start = it + 1
+
+        if save_intermediate and write_meshes:
+            iter_outdir = output_tree / f"opt_out_iter_{it}"
+            iter_outdir.mkdir(parents=True, exist_ok=True)
+
+            for i, mesh_obj in enumerate(sliced_meshes):
+                v_indices = v_idxs_list[i]
+                name = name_list[i]
+                mesh_obj_copy = dict(mesh_obj)
+                mesh_obj_copy[KEY_VERTEX_BONE_WEIGHTS] = vbw_cb[v_indices, :]
+                mesh_obj_copy[KEY_VERTEX_BONE_WEIGHTS_MASK] = vbw_mask_list[i]
+
+                if validate_output:
+                    validate_fitbox_mesh(
+                        mesh_obj_copy,
+                        n_poses=n_p,
+                        n_bones=n_b,
+                        name=f"{name}/intermediate_iter_{it}",
+                        weak_validate=bool(weak_validate),
+                    )
+
+                dump_pkl(iter_outdir / f"{name}.pkl", mesh_obj_copy)
+
+            anim_obj_copy = dict(sliced_anim_base)
+            anim_obj_copy[KEY_ANIMATION_POSES] = bt
+            dump_pkl(iter_outdir / f"{ANIMATION_STEM}.pkl", anim_obj_copy)
+            dump_pkl(iter_outdir / f"{SKELETON_STEM}.pkl", skelhier_obj)
+
+    with Timer(f"time_04_{pass_label}_final_metrics"):
+        l2_err = recon_err(v_cb, ba_v_cb_slice, bt, inv_rbt, vbw_cb)
+        h_per_frame = recon_err_hausdorff_per_frame(v_cb, ba_v_cb_slice, bt, inv_rbt, vbw_cb)
+        h_mean = float(np.mean(h_per_frame)) if h_per_frame.size else 0.0
+        h_max = float(np.max(h_per_frame)) if h_per_frame.size else 0.0
+        history_metrics["hausdorff"] = h_per_frame[np.newaxis, :]
+        org_loss_final = float(np.mean(org_loss_array[-1, :])) if max_iter > 0 else 0.0
+
+        final_metrics: dict[str, Any] = {
+            "04_L2_Err": float(l2_err),
+            "04_Hausdorff_Mean": float(h_mean),
+            "04_Hausdorff_Max": float(h_max),
+            "04_Org_Loss": float(org_loss_final),
+        }
+
+        if vbw_mask_list:
+            mask_nnz = np.count_nonzero(np.concatenate(vbw_mask_list, axis=0) > 0, axis=1)
+        else:
+            mask_nnz = np.zeros((0,), dtype=np.int64)
+
+        weight_nnz = np.count_nonzero(vbw_cb > 1e-8, axis=1)
+
+        final_metrics.update(
+            {
+                "04_S_Max": int(sparseness),
+                "04_Mask_Mode": str(mask_mode),
+                "04_Mask_Threshold": float(mask_threshold),
+                "04_Freeze_Weights": bool(freeze_weights),
+                "04_Mask_NNZ_Mean": float(np.mean(mask_nnz)) if mask_nnz.size else 0.0,
+                "04_Mask_NNZ_Max": int(np.max(mask_nnz)) if mask_nnz.size else 0,
+                "04_Mask_NNZ_P95": float(np.percentile(mask_nnz, 95)) if mask_nnz.size else 0.0,
+                "04_Final_Weight_NNZ_Mean": float(np.mean(weight_nnz)) if weight_nnz.size else 0.0,
+                "04_Final_Weight_NNZ_Max": int(np.max(weight_nnz)) if weight_nnz.size else 0,
+                "04_Final_Weight_NNZ_P95": float(np.percentile(weight_nnz, 95)) if weight_nnz.size else 0.0,
+            }
+        )
+
+        if eval_bone_health and bone_health_pre is not None:
+            bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names)
+            final_metrics["04_Max_Roll"] = float(bh_res.get("roll_abs_deg_max", 0.0))
+            final_metrics["04_Max_Swing"] = float(bh_res.get("swing_delta_max", 0.0))
+
+        if eval_mesh_health:
+            arap_ratios = []
+            edge_excesses = []
+            normal_flips = []
+            arap_ratio_per_frame_list = []
+
+            for i, name in enumerate(name_list):
+                v_indices = v_idxs_list[i]
+                p_recon = get_reconstructed_sequence(
+                    v_cb[v_indices, :],
+                    bt,
+                    inv_rbt,
+                    vbw_cb[v_indices, :],
+                )
+                health_res = health_pre_list[i].evaluate(
+                    recon_seq=p_recon,
+                    gt_seq=ba_v_cb_slice[:, v_indices, :],
+                    level=int(health_level),
+                    return_maps=True,
+                )
+                rel = health_res.get("relative", {})
+                arap_ratios.append(float(rel.get("arap_global_mean_ratio", 0.0)))
+                edge_excesses.append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
+                normal_flips.append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
+
+                recon_arap_seq = health_res.get("recon", {}).get("arap_spokes", {}).get("global_energy_seq")
+                gt_arap_seq = health_res.get("gt", {}).get("arap_spokes", {}).get("global_energy_seq")
+                if recon_arap_seq is not None and gt_arap_seq is not None:
+                    arap_ratio_per_frame_list.append(
+                        (np.asarray(recon_arap_seq, dtype=np.float64) + 1e-10)
+                        / (np.asarray(gt_arap_seq, dtype=np.float64) + 1e-10)
+                    )
+
+            final_metrics["04_ARAP_Ratio"] = float(np.mean(arap_ratios)) if arap_ratios else 0.0
+            final_metrics["04_Edge_Excess"] = float(np.mean(edge_excesses)) if edge_excesses else 0.0
+            final_metrics["04_Normal_Flip"] = float(np.mean(normal_flips)) if normal_flips else 0.0
+            if arap_ratio_per_frame_list:
+                history_metrics["arap_ratio"] = np.mean(np.stack(arap_ratio_per_frame_list, axis=0), axis=0)[
+                    np.newaxis, :
+                ]
+
+    with Timer(f"time_04_{pass_label}_data_output"):
+        final_outdir = output_tree / final_outdir_name
+        final_outdir.mkdir(parents=True, exist_ok=True)
+
+        output_mesh_paths: dict[str, str] = {}
+
+        if write_meshes:
+            for i, mesh_obj in enumerate(sliced_meshes):
+                v_indices = v_idxs_list[i]
+                name = name_list[i]
+
+                mesh_obj_out = dict(mesh_obj)
+                mesh_obj_out[KEY_VERTEX_BONE_WEIGHTS] = vbw_cb[v_indices, :]
+                mesh_obj_out[KEY_VERTEX_BONE_WEIGHTS_MASK] = vbw_mask_list[i]
+
+                if validate_output:
+                    validate_fitbox_mesh(
+                        mesh_obj_out,
+                        n_poses=n_p,
+                        n_bones=n_b,
+                        name=f"{name}/{pass_label}_output",
+                        weak_validate=bool(weak_validate),
+                    )
+
+                out_mesh_path = final_outdir / f"{name}.pkl"
+                dump_pkl(out_mesh_path, mesh_obj_out)
+                output_mesh_paths[name] = str(out_mesh_path)
+
+        anim_obj_out = dict(sliced_anim_base)
+        anim_obj_out[KEY_ANIMATION_POSES] = bt
+
+        if validate_output:
+            validate_skeleton_and_animation(anim_obj_out, skelhier_obj)
+
+        out_anim_path = final_outdir / f"{ANIMATION_STEM}.pkl"
+        out_skel_path = final_outdir / f"{SKELETON_STEM}.pkl"
+        out_history_path = final_outdir / "metrics_history_per_frame.npz"
+
+        dump_pkl(out_anim_path, anim_obj_out)
+        dump_pkl(out_skel_path, skelhier_obj)
+        np.savez_compressed(out_history_path, **history_metrics)
+
+        log(f"[{pass_label}] Optimized data saved to: {final_outdir}")
+        log(f"[{pass_label}] Detailed history metrics saved to: {out_history_path}")
+
+    return vbw_cb, bt, final_metrics, output_mesh_paths, final_outdir, out_anim_path, out_history_path
+
+
 def optimize_weight_and_bone_trans_tree(
     *,
     input_tree: Path,
@@ -315,7 +926,21 @@ def optimize_weight_and_bone_trans_tree(
     overwrite_output: bool,
     allow_merge: bool,
     write_summary_file: bool,
+    kfold: int = 0,
+    fold_index: int = -1,
+    special_train_fraction: float = 0.0,
 ) -> dict[str, Any]:
+    kfold = int(kfold)
+    fold_index = int(fold_index)
+    special_train_fraction = float(special_train_fraction)
+
+    if kfold < 0 or kfold == 1:
+        fail(f"kfold must be 0 (disabled) or >= 2, got {kfold}")
+    if kfold > 1 and (fold_index < 0 or fold_index >= kfold):
+        fail(f"fold_index must be in [0, {kfold}) when kfold={kfold}, got {fold_index}")
+    if special_train_fraction < 0.0 or special_train_fraction >= 1.0:
+        fail(f"special_train_fraction must be in [0, 1), got {special_train_fraction}")
+
     prepare_output_dir(
         output_tree,
         overwrite_output=overwrite_output,
@@ -346,12 +971,12 @@ def optimize_weight_and_bone_trans_tree(
             fail(f"animation_data missing required key: {KEY_ANIMATION_POSES}")
 
         rbt = np.asarray(anim_obj[KEY_REST_POSE], dtype=np.float64)
-        bt = np.asarray(anim_obj[KEY_ANIMATION_POSES], dtype=np.float64).copy()
+        bt_full = np.asarray(anim_obj[KEY_ANIMATION_POSES], dtype=np.float64).copy()
 
         if rbt.shape != (n_b, 4, 4):
             fail(f"rest_pose shape mismatch: expected ({n_b}, 4, 4), got {rbt.shape}")
-        if bt.shape != (n_p, n_b, 4, 4):
-            fail(f"animation_poses shape mismatch: expected ({n_p}, {n_b}, 4, 4), got {bt.shape}")
+        if bt_full.shape != (n_p, n_b, 4, 4):
+            fail(f"animation_poses shape mismatch: expected ({n_p}, {n_b}, 4, 4), got {bt_full.shape}")
 
         bone_names = [str(x) for x in skelhier_obj.get(KEY_BONE_NAMES, anim_obj.get(KEY_BONE_NAMES, []))]
         if len(bone_names) != n_b:
@@ -360,10 +985,6 @@ def optimize_weight_and_bone_trans_tree(
         fixed_bones = normalize_fixed_bones(anim_obj.get(KEY_FIXED_BONES, []), bone_names)
         par_idxs = normalize_parent_indices(skelhier_obj["parent_indices"], bone_count=n_b)
         inv_rbt = np.linalg.inv(rbt)
-
-        if not bool(input_poses):
-            for p_id in range(n_p):
-                bt[p_id] = rbt
 
         orig_bone_lens = calc_bone_lens(rbt, par_idxs)
         bone_orig_poses = np.array(
@@ -400,7 +1021,7 @@ def optimize_weight_and_bone_trans_tree(
 
         v_cb = np.zeros((0, 3), dtype=np.float64)
         ba_v_cb = np.zeros((n_p, 0, 3), dtype=np.float64)
-        vbw_cb = np.zeros((0, n_b), dtype=np.float64)
+        vbw_cb_init = np.zeros((0, n_b), dtype=np.float64)
 
         vbw_mask_list: list[np.ndarray] = []
         laplacian_solvers: list[Any] = []
@@ -461,500 +1082,181 @@ def optimize_weight_and_bone_trans_tree(
 
             v_cb = np.concatenate((v_cb, rest_v), axis=0)
             ba_v_cb = np.concatenate((ba_v_cb, ba_v), axis=1)
-            vbw_cb = np.concatenate((vbw_cb, vbw), axis=0)
+            vbw_cb_init = np.concatenate((vbw_cb_init, vbw), axis=0)
 
             vbw_mask_list.append(vbw_mask)
             name_list.append(name)
             skdmeshes.append(mesh_obj)
             mesh_paths_by_name[name] = str(path)
 
-        validate_combined_arrays(v_cb, ba_v_cb, vbw_cb, bt, rbt)
+        validate_combined_arrays(v_cb, ba_v_cb, vbw_cb_init, bt_full, rbt)
 
         max_name_len = max((len(n) for n in name_list), default=0)
         name_col_width = max(max_name_len, 15)
 
+    split_info: SimpleNamespace | None = None
+    if kfold > 1:
+        split_info = make_inline_kfold_split(
+            n_p,
+            kfold=kfold,
+            fold_index=fold_index,
+            special_train_fraction=special_train_fraction,
+        )
+        train_indices = split_info.train_indices
+        test_indices = split_info.test_indices
+    else:
+        train_indices = np.arange(n_p, dtype=np.int64)
+        test_indices = None
+
     log("Selected Step 04 optimization inputs:")
-    log(f"  input_tree       : {input_tree}")
-    log(f"  output_tree      : {output_tree}")
-    log(f"  animation        : {anim_path}")
-    log(f"  skeleton         : {skelhier_path}")
-    log(f"  mesh_candidates  : {len(mesh_paths)}")
-    log(f"  mesh_names       : {name_list}")
-    log(f"  n_poses          : {n_p}")
-    log(f"  n_bones          : {n_b}")
-    log(f"  total_vertices   : {v_cb.shape[0]}")
-    log(f"  iter             : {max_iter}")
-    log(f"  org_type         : {org_type}")
-    log(f"  opt_weight       : {opt_weight}")
-    log(f"  input_poses      : {input_poses}")
-    log(f"  use_weight_mask  : {use_weight_mask}")
-    log(f"  s_max            : {s_max}")
-    log(f"  mask_mode        : {mask_mode}")
-    log(f"  mask_threshold   : {mask_threshold}")
-    log(f"  freeze_weights   : {freeze_weights}")
-    log(f"  weight_solver    : {weight_solver}")
-    log(f"  max_workers      : {max_workers}")
-    log(f"  fixed_bones      : {sorted(fixed_bones)}")
-    log(f"  eval_mesh_health : {eval_mesh_health}")
-    log(f"  eval_bone_health : {eval_bone_health}")
-
-    with Timer("time_04_optimization_loop"):
-        org_loss_array = np.zeros((max_iter, n_p), dtype=np.float64)
-        sparseness = int(s_max)
-        if sparseness <= 0:
-            fail(f"s_max must be positive, got {s_max}")
-
-        loss_buffer: dict[str, list[float]] = {
-            "err": [],
-            "org_loss": [],
-            "jnt_factor": [],
-        }
-        bone_health_buffer: dict[str, list[Any]] = {
-            "roll_max": [],
-            "swing_max": [],
-            "roll_150": [],
-            "worst_roll_bone": [],
-            "worst_swing_bone": [],
-        }
-        mesh_health_buffer: dict[str, dict[str, list[float]]] = {
-            name: {
-                "arap": [],
-                "edge": [],
-                "flip": [],
-            }
-            for name in name_list
-        }
-
-        history_metrics: dict[str, np.ndarray] = {
-            "org_loss": np.zeros((max_iter, n_p), dtype=np.float64),
-            "l2_err": np.zeros((max_iter, n_p), dtype=np.float64),
-        }
-
-        if eval_bone_health:
-            history_metrics["bone_roll_max"] = np.zeros((max_iter, n_p), dtype=np.float64)
-            history_metrics["bone_swing_max"] = np.zeros((max_iter, n_p), dtype=np.float64)
-
-        if eval_mesh_health:
-            for name in name_list:
-                history_metrics[f"mesh_{name}_arap"] = np.zeros((max_iter, n_p), dtype=np.float64)
-                history_metrics[f"mesh_{name}_edge"] = np.zeros((max_iter, n_p), dtype=np.float64)
-
-        def flush_buffers(prefix: str) -> None:
-            if not loss_buffer["err"]:
-                return
-
-            avg_err = float(np.mean(loss_buffer["err"]))
-            avg_org = float(np.mean(loss_buffer["org_loss"]))
-            avg_jnt = float(np.mean(loss_buffer["jnt_factor"]))
-
-            log(
-                f"{prefix} JntFactor: {avg_jnt:.4f} | "
-                f"Err: {avg_err:.6f} | OrgLoss: {avg_org:.6f}"
-            )
-
-            if bone_health_buffer["roll_max"]:
-                roll_max = float(np.max(bone_health_buffer["roll_max"]))
-                swing_max = float(np.max(bone_health_buffer["swing_max"]))
-                roll_150 = float(np.mean(bone_health_buffer["roll_150"]))
-
-                idx_roll = int(np.argmax(bone_health_buffer["roll_max"]))
-                idx_swing = int(np.argmax(bone_health_buffer["swing_max"]))
-                worst_roll = bone_health_buffer["worst_roll_bone"][idx_roll]
-                worst_swing = bone_health_buffer["worst_swing_bone"][idx_swing]
-
-                s_roll = "[!ROLL_FLIP]" if roll_max > 150.0 else ""
-                s_swing = "[!SWING_FOLD]" if swing_max > 150.0 else ""
-                has_warn = (roll_max > 150.0) or (swing_max > 150.0)
-
-                log(
-                    f"  -> [Bone Health] {s_roll:<12} {s_swing:<13} "
-                    f"Roll Max: {roll_max:.1f} deg | Over 150: {roll_150:.2%} | "
-                    f"Swing Max: {swing_max:.1f} deg"
-                )
-                if has_warn:
-                    log(f"     Worst Roll: {worst_roll} | Worst Swing: {worst_swing}")
-
-            has_mesh_data = any(len(mesh_health_buffer[name]["arap"]) > 0 for name in name_list)
-            if has_mesh_data:
-                header_pad = max(1, name_col_width - 13)
-                log(
-                    f"  -> [Mesh Health]{' ' * header_pad}"
-                    "FLIP     ARAP     EDGE       ARAP Ratio   Edge p99 Excess   Normal Flip"
-                )
-
-                for name in name_list:
-                    mb = mesh_health_buffer[name]
-                    if not mb["arap"]:
-                        continue
-
-                    arap_max = float(np.max(mb["arap"]))
-                    edge_max = float(np.max(mb["edge"]))
-                    flip_max = float(np.max(mb["flip"]))
-
-                    s_flip = "[!FLIP]" if flip_max > 0.0 else ""
-                    s_arap = "[!ARAP]" if arap_max > 1.5 else ""
-                    s_edge = "[!EDGE]" if edge_max > 0.1 else ""
-
-                    log(
-                        f"     {name:<{name_col_width}} "
-                        f"{s_flip:<8} {s_arap:<8} {s_edge:<8} "
-                        f"{arap_max:10.3f}   {edge_max:15.4f}   {flip_max:11.2%}"
-                    )
-
-            for key in loss_buffer:
-                loss_buffer[key].clear()
-            for key in bone_health_buffer:
-                bone_health_buffer[key].clear()
-            for name in name_list:
-                for key in mesh_health_buffer[name]:
-                    mesh_health_buffer[name][key].clear()
-
-        initial_err = recon_err(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
-        loss_buffer["err"].append(float(initial_err))
-        loss_buffer["org_loss"].append(0.0)
-        loss_buffer["jnt_factor"].append(0.0)
-
-        if eval_bone_health and bone_health_pre is not None:
-            bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names)
-            if bh_res.get("status") != "no_valid_bones":
-                bone_health_buffer["roll_max"].append(float(bh_res.get("roll_abs_deg_max", 0.0)))
-                bone_health_buffer["swing_max"].append(float(bh_res.get("swing_delta_max", 0.0)))
-                bone_health_buffer["roll_150"].append(float(bh_res.get("roll_over_150_ratio", 0.0)))
-                bone_health_buffer["worst_roll_bone"].append(str(bh_res.get("worst_bone_by_roll", "")))
-                bone_health_buffer["worst_swing_bone"].append(str(bh_res.get("worst_bone_by_swing", "")))
-
-        if eval_mesh_health:
-            for i, name in enumerate(name_list):
-                v_indices = v_idxs_list[i]
-                p_recon = get_reconstructed_sequence(
-                    v_cb[v_indices, :],
-                    bt,
-                    inv_rbt,
-                    vbw_cb[v_indices, :],
-                )
-                health_res = health_pre_list[i].evaluate(
-                    recon_seq=p_recon,
-                    gt_seq=ba_v_cb[:, v_indices, :],
-                    level=int(health_level),
-                )
-                rel = health_res.get("relative", {})
-                mesh_health_buffer[name]["arap"].append(float(rel.get("arap_global_mean_ratio", 0.0)))
-                mesh_health_buffer[name]["edge"].append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
-                mesh_health_buffer[name]["flip"].append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
-
-        flush_buffers("[Initial]")
-
-        interval_start = 0
-
-        for it in range(max_iter):
-            to_opt_weight, weight_calc_mode, jnt_factor, schedule_source = resolve_iteration_schedule(
-                it=it,
-                max_iter=max_iter,
-                org_type=org_type,
-                opt_weight=opt_weight,
-                baked_schedule=baked_schedule,
-            )
-
-            if bool(freeze_weights):
-                to_opt_weight = False
-                schedule_source = f"{schedule_source}+freeze_weights"
-
-            log(
-                f"[Iter {it:02d}] schedule={schedule_source}, "
-                f"to_opt_weight={to_opt_weight}, weight_calc_mode={weight_calc_mode}, "
-                f"jnt_factor={jnt_factor:.6g}"
-            )
-
-            with Timer(f"time_04_iter_{it}_bt"):
-                bt = opt_bt_parallel(
-                    v=v_cb,
-                    p=ba_v_cb,
-                    bt=bt,
-                    inv_rbt=inv_rbt,
-                    vbw=vbw_cb,
-                    bj=bone_jnts,
-                    bj_l=float(jnt_factor),
-                    fixed_bones=fixed_bones,
-                    max_workers=max_workers,
-                    enable_profiling=bool(enable_profiling),
-                    trans_affine=float(trans_affine),
-                    trans_affine_norm=float(trans_affine_norm),
-                    bt_covariance_mode=str(bt_covariance_mode),
-                    rbt=rbt,
-                    par_idxs=par_idxs,
-                    roll_affinity=float(roll_affinity),
-                    roll_affinity_norm=float(roll_affinity_norm),
-                )
-
-            for p_id in range(n_p):
-                org_loss_array[it, p_id] = calc_org_loss(
-                    orig_bone_lens,
-                    calc_bone_lens(bt[p_id], par_idxs),
-                )
-
-            org_loss_avg = float(np.mean(org_loss_array[it, :]))
-
-            if to_opt_weight:
-                with Timer(f"time_04_iter_{it}_weight"):
-                    for i, name in enumerate(name_list):
-                        v_indices = v_idxs_list[i]
-
-                        v_slice = v_cb[v_indices, :]
-                        ba_v_slice = ba_v_cb[:, v_indices, :]
-                        mask_slice = vbw_mask_list[i]
-                        prev_vbw_slice = vbw_cb[v_indices, :]
-
-                        target_w = None
-                        local_lambda_reg = 0.0
-
-                        if use_weight_smoothness or float(weight_soft_lock) > 0.0:
-                            local_lambda_reg = float(lambda_reg)
-
-                            if use_weight_smoothness:
-                                solver = laplacian_solvers[i]
-                                if solver is None:
-                                    fail(f"Internal error: missing Laplacian solver for mesh {name}")
-                                ws = solver.solve(prev_vbw_slice)
-                            else:
-                                ws = prev_vbw_slice
-
-                            target_w = (
-                                (1.0 - float(weight_soft_lock)) * ws
-                                + float(weight_soft_lock) * prev_vbw_slice
-                            )
-
-                        vbw_cb[v_indices, :] = opt_vbw_parallel(
-                            v=v_slice,
-                            p=ba_v_slice,
-                            bt=bt,
-                            inv_rbt=inv_rbt,
-                            s=sparseness,
-                            vbw_mask=mask_slice,
-                            mode=int(weight_calc_mode),
-                            prev_vbw=prev_vbw_slice,
-                            max_workers=max_workers,
-                            weight_solver=str(weight_solver),
-                            target_w_full=target_w,
-                            lambda_reg=float(local_lambda_reg),
-                            enable_profiling=bool(enable_profiling),
-                        )
-
-            err = recon_err(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
-            loss_buffer["err"].append(float(err))
-            loss_buffer["org_loss"].append(float(org_loss_avg))
-            loss_buffer["jnt_factor"].append(float(jnt_factor))
-
-            history_metrics["org_loss"][it, :] = org_loss_array[it, :]
-            history_metrics["l2_err"][it, :] = recon_err_per_frame(
-                v_cb,
-                ba_v_cb,
-                bt,
-                inv_rbt,
-                vbw_cb,
-            )
-
-            if (
-                eval_bone_health
-                and bone_health_pre is not None
-                and (it % int(bone_health_every) == 0 or it == max_iter - 1)
-            ):
-                bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names, return_maps=True)
-                if bh_res.get("status") != "no_valid_bones":
-                    bone_health_buffer["roll_max"].append(float(bh_res.get("roll_abs_deg_max", 0.0)))
-                    bone_health_buffer["swing_max"].append(float(bh_res.get("swing_delta_max", 0.0)))
-                    bone_health_buffer["roll_150"].append(float(bh_res.get("roll_over_150_ratio", 0.0)))
-                    bone_health_buffer["worst_roll_bone"].append(str(bh_res.get("worst_bone_by_roll", "")))
-                    bone_health_buffer["worst_swing_bone"].append(str(bh_res.get("worst_bone_by_swing", "")))
-
-                    history_metrics["bone_roll_max"][it, :] = bh_res["roll_max_per_frame"]
-                    history_metrics["bone_swing_max"][it, :] = bh_res["swing_max_per_frame"]
-
-            if eval_mesh_health and (it % int(health_every) == 0 or it == max_iter - 1):
-                for i, name in enumerate(name_list):
-                    v_indices = v_idxs_list[i]
-                    p_recon = get_reconstructed_sequence(
-                        v_cb[v_indices, :],
-                        bt,
-                        inv_rbt,
-                        vbw_cb[v_indices, :],
-                    )
-                    health_res = health_pre_list[i].evaluate(
-                        recon_seq=p_recon,
-                        gt_seq=ba_v_cb[:, v_indices, :],
-                        level=int(health_level),
-                        return_maps=True,
-                    )
-
-                    rel = health_res.get("relative", {})
-                    mesh_health_buffer[name]["arap"].append(float(rel.get("arap_global_mean_ratio", 0.0)))
-                    mesh_health_buffer[name]["edge"].append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
-                    mesh_health_buffer[name]["flip"].append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
-
-                    if "arap_spokes" in health_res.get("recon", {}):
-                        history_metrics[f"mesh_{name}_arap"][it, :] = (
-                            health_res["recon"]["arap_spokes"]["global_energy_seq"]
-                        )
-                    if "edge" in health_res.get("recon", {}):
-                        history_metrics[f"mesh_{name}_edge"][it, :] = (
-                            health_res["recon"]["edge"]["log_abs_seq"].mean(axis=1)
-                        )
-
-            if (it + 1) % int(print_every_n) == 0 or it == max_iter - 1:
-                if interval_start == it:
-                    prefix = f"[Iter {it:02d}]"
-                else:
-                    prefix = f"[Iter {interval_start:02d}-{it:02d}]"
-
-                flush_buffers(prefix)
-                interval_start = it + 1
-
-            if save_intermediate:
-                iter_outdir = output_tree / f"opt_out_iter_{it}"
-                iter_outdir.mkdir(parents=True, exist_ok=True)
-
-                for i, mesh_obj in enumerate(skdmeshes):
-                    v_indices = v_idxs_list[i]
-                    name = name_list[i]
-                    mesh_obj_copy = dict(mesh_obj)
-                    mesh_obj_copy[KEY_VERTEX_BONE_WEIGHTS] = vbw_cb[v_indices, :]
-                    mesh_obj_copy[KEY_VERTEX_BONE_WEIGHTS_MASK] = vbw_mask_list[i]
-
-                    if validate_output:
-                        validate_fitbox_mesh(
-                            mesh_obj_copy,
-                            n_poses=n_p,
-                            n_bones=n_b,
-                            name=f"{name}/intermediate_iter_{it}",
-                            weak_validate=bool(weak_validate),
-                        )
-
-                    dump_pkl(iter_outdir / f"{name}.pkl", mesh_obj_copy)
-
-                anim_obj_copy = dict(anim_obj)
-                anim_obj_copy[KEY_ANIMATION_POSES] = bt
-                dump_pkl(iter_outdir / f"{ANIMATION_STEM}.pkl", anim_obj_copy)
-                dump_pkl(iter_outdir / f"{SKELETON_STEM}.pkl", skelhier_obj)
-
-    with Timer("time_04_final_metrics"):
-        l2_err = recon_err(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
-        h_mean, h_max = recon_err_hausdorff(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
-        org_loss_final = float(np.mean(org_loss_array[-1, :])) if max_iter > 0 else 0.0
-
-        final_metrics: dict[str, Any] = {
-            "04_L2_Err": float(l2_err),
-            "04_Hausdorff_Mean": float(h_mean),
-            "04_Hausdorff_Max": float(h_max),
-            "04_Org_Loss": float(org_loss_final),
-        }
-
-        if vbw_mask_list:
-            mask_nnz = np.count_nonzero(np.concatenate(vbw_mask_list, axis=0) > 0, axis=1)
-        else:
-            mask_nnz = np.zeros((0,), dtype=np.int64)
-
-        weight_nnz = np.count_nonzero(vbw_cb > 1e-8, axis=1)
-
-        final_metrics.update(
-            {
-                "04_S_Max": int(sparseness),
-                "04_Mask_Mode": str(mask_mode),
-                "04_Mask_Threshold": float(mask_threshold),
-                "04_Freeze_Weights": bool(freeze_weights),
-                "04_Mask_NNZ_Mean": float(np.mean(mask_nnz)) if mask_nnz.size else 0.0,
-                "04_Mask_NNZ_Max": int(np.max(mask_nnz)) if mask_nnz.size else 0,
-                "04_Mask_NNZ_P95": float(np.percentile(mask_nnz, 95)) if mask_nnz.size else 0.0,
-                "04_Final_Weight_NNZ_Mean": float(np.mean(weight_nnz)) if weight_nnz.size else 0.0,
-                "04_Final_Weight_NNZ_Max": int(np.max(weight_nnz)) if weight_nnz.size else 0,
-                "04_Final_Weight_NNZ_P95": float(np.percentile(weight_nnz, 95)) if weight_nnz.size else 0.0,
-            }
+    log(f"  input_tree             : {input_tree}")
+    log(f"  output_tree            : {output_tree}")
+    log(f"  animation              : {anim_path}")
+    log(f"  skeleton               : {skelhier_path}")
+    log(f"  mesh_candidates        : {len(mesh_paths)}")
+    log(f"  mesh_names             : {name_list}")
+    log(f"  n_poses_input          : {n_p}")
+    log(f"  n_bones                : {n_b}")
+    log(f"  total_vertices         : {v_cb.shape[0]}")
+    log(f"  iter                   : {max_iter}")
+    log(f"  org_type               : {org_type}")
+    log(f"  opt_weight             : {opt_weight}")
+    log(f"  input_poses            : {input_poses}")
+    log(f"  use_weight_mask        : {use_weight_mask}")
+    log(f"  s_max                  : {s_max}")
+    log(f"  mask_mode              : {mask_mode}")
+    log(f"  mask_threshold         : {mask_threshold}")
+    log(f"  freeze_weights         : {freeze_weights}")
+    log(f"  weight_solver          : {weight_solver}")
+    log(f"  max_workers            : {max_workers}")
+    log(f"  fixed_bones            : {sorted(fixed_bones)}")
+    log(f"  eval_mesh_health       : {eval_mesh_health}")
+    log(f"  eval_bone_health       : {eval_bone_health}")
+    log(f"  kfold                  : {kfold}")
+    log(f"  fold_index             : {fold_index}")
+    log(f"  special_train_fraction : {special_train_fraction}")
+    if split_info is not None:
+        log(
+            f"  cv_split               : train={split_info.stats['train_count']} "
+            f"test={split_info.stats['test_count']} special={split_info.stats['special_count']}"
         )
 
-        if eval_bone_health and bone_health_pre is not None:
-            bh_res = bone_health_pre.evaluate(bt, bone_names=bone_names)
-            final_metrics["04_Max_Roll"] = float(bh_res.get("roll_abs_deg_max", 0.0))
-            final_metrics["04_Max_Swing"] = float(bh_res.get("swing_delta_max", 0.0))
+    base_config = {
+        "baked_schedule": baked_schedule_path,
+        "print_every_n": int(print_every_n),
+        "iter": int(max_iter),
+        "org_type": int(org_type),
+        "opt_weight": bool(opt_weight),
+        "input_poses": bool(input_poses),
+        "use_weight_mask": bool(use_weight_mask),
+        "s_max": int(s_max),
+        "mask_mode": str(mask_mode),
+        "mask_threshold": float(mask_threshold),
+        "freeze_weights": bool(freeze_weights),
+        "weight_solver": str(weight_solver),
+        "use_weight_smoothness": bool(use_weight_smoothness),
+        "weights_smooth_step": float(weights_smooth_step),
+        "weight_soft_lock": float(weight_soft_lock),
+        "lambda_reg": float(lambda_reg),
+        "bt_covariance_mode": str(bt_covariance_mode),
+        "trans_affine": float(trans_affine),
+        "trans_affine_norm": float(trans_affine_norm),
+        "roll_affinity": float(roll_affinity),
+        "roll_affinity_norm": float(roll_affinity_norm),
+        "eval_mesh_health": bool(eval_mesh_health),
+        "health_level": int(health_level),
+        "health_every": int(health_every),
+        "health_weight_scheme": str(health_weight_scheme),
+        "eval_bone_health": bool(eval_bone_health),
+        "bone_health_every": int(bone_health_every),
+        "max_workers": max_workers,
+        "validate_output": bool(validate_output),
+        "weak_validate": bool(weak_validate),
+        "save_intermediate": bool(save_intermediate),
+        "kfold": int(kfold),
+        "fold_index": int(fold_index),
+        "special_train_fraction": float(special_train_fraction),
+    }
 
-        if eval_mesh_health:
-            arap_ratios = []
-            edge_excesses = []
-            normal_flips = []
+    with Timer("time_04_optimization_loop"):
+        (
+            vbw_trained,
+            _bt_train_out,
+            train_final_metrics,
+            output_mesh_paths,
+            final_outdir,
+            out_anim_path,
+            out_history_path,
+        ) = _run_optimization_pass(
+            pass_label="train" if split_info is not None else "full",
+            frame_indices=train_indices,
+            total_input_frames=n_p,
+            v_cb=v_cb,
+            ba_v_cb_slice=ba_v_cb[train_indices, :, :],
+            bt_init_slice=bt_full[train_indices, :, :, :],
+            vbw_init=vbw_cb_init,
+            rbt=rbt,
+            inv_rbt=inv_rbt,
+            par_idxs=par_idxs,
+            orig_bone_lens=orig_bone_lens,
+            bone_jnts=bone_jnts,
+            fixed_bones=fixed_bones,
+            bone_names=bone_names,
+            name_list=name_list,
+            v_idxs_list=v_idxs_list,
+            skdmeshes=skdmeshes,
+            anim_obj=anim_obj,
+            skelhier_obj=skelhier_obj,
+            vbw_mask_list=vbw_mask_list,
+            laplacian_solvers=laplacian_solvers,
+            health_pre_list=health_pre_list,
+            bone_health_pre=bone_health_pre,
+            name_col_width=name_col_width,
+            baked_schedule=baked_schedule,
+            print_every_n=print_every_n,
+            max_iter=max_iter,
+            org_type=org_type,
+            opt_weight=opt_weight,
+            input_poses=input_poses,
+            s_max=s_max,
+            mask_mode=mask_mode,
+            mask_threshold=mask_threshold,
+            freeze_weights=freeze_weights,
+            weight_solver=weight_solver,
+            use_weight_smoothness=use_weight_smoothness,
+            weight_soft_lock=weight_soft_lock,
+            lambda_reg=lambda_reg,
+            bt_covariance_mode=bt_covariance_mode,
+            trans_affine=trans_affine,
+            trans_affine_norm=trans_affine_norm,
+            roll_affinity=roll_affinity,
+            roll_affinity_norm=roll_affinity_norm,
+            eval_mesh_health=eval_mesh_health,
+            health_level=health_level,
+            health_every=health_every,
+            eval_bone_health=eval_bone_health,
+            bone_health_every=bone_health_every,
+            max_workers=max_workers,
+            enable_profiling=enable_profiling,
+            validate_output=validate_output,
+            weak_validate=weak_validate,
+            save_intermediate=save_intermediate,
+            output_tree=output_tree,
+            final_outdir_name="opt_out",
+            write_meshes=True,
+        )
 
-            for i, name in enumerate(name_list):
-                v_indices = v_idxs_list[i]
-                p_recon = get_reconstructed_sequence(
-                    v_cb[v_indices, :],
-                    bt,
-                    inv_rbt,
-                    vbw_cb[v_indices, :],
-                )
-                health_res = health_pre_list[i].evaluate(
-                    recon_seq=p_recon,
-                    gt_seq=ba_v_cb[:, v_indices, :],
-                    level=int(health_level),
-                )
-                rel = health_res.get("relative", {})
-                arap_ratios.append(float(rel.get("arap_global_mean_ratio", 0.0)))
-                edge_excesses.append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
-                normal_flips.append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
+    for key, value in train_final_metrics.items():
+        record_metric(key, value)
 
-            final_metrics["04_ARAP_Ratio"] = float(np.mean(arap_ratios)) if arap_ratios else 0.0
-            final_metrics["04_Edge_Excess"] = float(np.mean(edge_excesses)) if edge_excesses else 0.0
-            final_metrics["04_Normal_Flip"] = float(np.mean(normal_flips)) if normal_flips else 0.0
+    record_metric("04_Frame_Count", int(train_indices.shape[0]))
+    record_metric("04_Bone_Count", int(n_b))
+    record_metric("04_Mesh_Count", int(len(name_list)))
+    record_metric("04_Vertex_Count_Total", int(v_cb.shape[0]))
+    record_metric("04_Iter", int(max_iter))
 
-        for key, value in final_metrics.items():
-            record_metric(key, value)
-
-        record_metric("04_Frame_Count", int(n_p))
-        record_metric("04_Bone_Count", int(n_b))
-        record_metric("04_Mesh_Count", int(len(name_list)))
-        record_metric("04_Vertex_Count_Total", int(v_cb.shape[0]))
-        record_metric("04_Iter", int(max_iter))
-
-    with Timer("time_04_data_output"):
-        final_outdir = output_tree / "opt_out"
-        final_outdir.mkdir(parents=True, exist_ok=True)
-
-        output_mesh_paths: dict[str, str] = {}
-
-        for i, mesh_obj in enumerate(skdmeshes):
-            v_indices = v_idxs_list[i]
-            name = name_list[i]
-
-            mesh_obj_out = dict(mesh_obj)
-            mesh_obj_out[KEY_VERTEX_BONE_WEIGHTS] = vbw_cb[v_indices, :]
-            mesh_obj_out[KEY_VERTEX_BONE_WEIGHTS_MASK] = vbw_mask_list[i]
-
-            if validate_output:
-                validate_fitbox_mesh(
-                    mesh_obj_out,
-                    n_poses=n_p,
-                    n_bones=n_b,
-                    name=f"{name}/output",
-                    weak_validate=bool(weak_validate),
-                )
-
-            out_mesh_path = final_outdir / f"{name}.pkl"
-            dump_pkl(out_mesh_path, mesh_obj_out)
-            output_mesh_paths[name] = str(out_mesh_path)
-
-        anim_obj_out = dict(anim_obj)
-        anim_obj_out[KEY_ANIMATION_POSES] = bt
-
-        if validate_output:
-            validate_skeleton_and_animation(anim_obj_out, skelhier_obj)
-
-        out_anim_path = final_outdir / f"{ANIMATION_STEM}.pkl"
-        out_skel_path = final_outdir / f"{SKELETON_STEM}.pkl"
-        out_history_path = final_outdir / "metrics_history_per_frame.npz"
-
-        dump_pkl(out_anim_path, anim_obj_out)
-        dump_pkl(out_skel_path, skelhier_obj)
-        np.savez_compressed(out_history_path, **history_metrics)
-
-        log(f"All optimized data saved to: {final_outdir}")
-        log(f"Detailed history metrics saved to: {out_history_path}")
-
-    summary = {
+    out_skel_path = final_outdir / f"{SKELETON_STEM}.pkl"
+    summary: dict[str, Any] = {
         "schema": "ogd_lbs_ssdr_step04_optimize_weight_and_bone_trans_v1",
         "input_tree": str(input_tree),
         "output_tree": str(output_tree),
@@ -971,46 +1273,153 @@ def optimize_weight_and_bone_trans_tree(
             "metrics_history_per_frame": str(out_history_path),
         },
         "counts": {
-            "frames": int(n_p),
+            "frames": int(train_indices.shape[0]),
+            "input_frames_total": int(n_p),
             "bones": int(n_b),
             "meshes": int(len(name_list)),
             "vertices_total": int(v_cb.shape[0]),
         },
-        "config": {
-            "baked_schedule": baked_schedule_path,
-            "print_every_n": int(print_every_n),
-            "iter": int(max_iter),
-            "org_type": int(org_type),
-            "opt_weight": bool(opt_weight),
-            "input_poses": bool(input_poses),
-            "use_weight_mask": bool(use_weight_mask),
-            "s_max": int(s_max),
-            "mask_mode": str(mask_mode),
-            "mask_threshold": float(mask_threshold),
-            "freeze_weights": bool(freeze_weights),
-            "weight_solver": str(weight_solver),
-            "use_weight_smoothness": bool(use_weight_smoothness),
-            "weights_smooth_step": float(weights_smooth_step),
-            "weight_soft_lock": float(weight_soft_lock),
-            "lambda_reg": float(lambda_reg),
-            "bt_covariance_mode": str(bt_covariance_mode),
-            "trans_affine": float(trans_affine),
-            "trans_affine_norm": float(trans_affine_norm),
-            "roll_affinity": float(roll_affinity),
-            "roll_affinity_norm": float(roll_affinity_norm),
-            "eval_mesh_health": bool(eval_mesh_health),
-            "health_level": int(health_level),
-            "health_every": int(health_every),
-            "health_weight_scheme": str(health_weight_scheme),
-            "eval_bone_health": bool(eval_bone_health),
-            "bone_health_every": int(bone_health_every),
-            "max_workers": max_workers,
-            "validate_output": bool(validate_output),
-            "weak_validate": bool(weak_validate),
-            "save_intermediate": bool(save_intermediate),
-        },
-        "final_metrics": final_metrics,
+        "config": base_config,
+        "final_metrics": train_final_metrics,
     }
+
+    if split_info is not None and test_indices is not None:
+        log("=" * 80)
+        log(
+            f"Running inline held-out test evaluation (fold {fold_index}/{kfold}, "
+            f"test_frames={test_indices.shape[0]}, freeze_weights=True)"
+        )
+        log("=" * 80)
+        with Timer("time_04_test_evaluation_loop"):
+            (
+                _vbw_test,
+                _bt_test_out,
+                test_final_metrics,
+                _test_mesh_paths,
+                test_outdir,
+                test_anim_path,
+                test_history_path,
+            ) = _run_optimization_pass(
+                pass_label="test",
+                frame_indices=test_indices,
+                total_input_frames=n_p,
+                v_cb=v_cb,
+                ba_v_cb_slice=ba_v_cb[test_indices, :, :],
+                bt_init_slice=bt_full[test_indices, :, :, :],
+                vbw_init=vbw_trained,
+                rbt=rbt,
+                inv_rbt=inv_rbt,
+                par_idxs=par_idxs,
+                orig_bone_lens=orig_bone_lens,
+                bone_jnts=bone_jnts,
+                fixed_bones=fixed_bones,
+                bone_names=bone_names,
+                name_list=name_list,
+                v_idxs_list=v_idxs_list,
+                skdmeshes=skdmeshes,
+                anim_obj=anim_obj,
+                skelhier_obj=skelhier_obj,
+                vbw_mask_list=vbw_mask_list,
+                laplacian_solvers=laplacian_solvers,
+                health_pre_list=health_pre_list,
+                bone_health_pre=bone_health_pre,
+                name_col_width=name_col_width,
+                baked_schedule=baked_schedule,
+                print_every_n=print_every_n,
+                max_iter=max_iter,
+                org_type=org_type,
+                opt_weight=False,
+                input_poses=input_poses,
+                s_max=s_max,
+                mask_mode=mask_mode,
+                mask_threshold=mask_threshold,
+                freeze_weights=True,
+                weight_solver=weight_solver,
+                use_weight_smoothness=use_weight_smoothness,
+                weight_soft_lock=weight_soft_lock,
+                lambda_reg=lambda_reg,
+                bt_covariance_mode=bt_covariance_mode,
+                trans_affine=trans_affine,
+                trans_affine_norm=trans_affine_norm,
+                roll_affinity=roll_affinity,
+                roll_affinity_norm=roll_affinity_norm,
+                eval_mesh_health=eval_mesh_health,
+                health_level=health_level,
+                health_every=health_every,
+                eval_bone_health=eval_bone_health,
+                bone_health_every=bone_health_every,
+                max_workers=max_workers,
+                enable_profiling=enable_profiling,
+                validate_output=validate_output,
+                weak_validate=weak_validate,
+                save_intermediate=False,
+                output_tree=output_tree,
+                final_outdir_name="opt_out_test",
+                write_meshes=False,
+            )
+
+        for key, value in test_final_metrics.items():
+            record_metric(f"test_{key}", value)
+        record_metric("test_04_Frame_Count", int(test_indices.shape[0]))
+
+        test_config = dict(base_config)
+        test_config["opt_weight"] = False
+        test_config["freeze_weights"] = True
+
+        test_summary: dict[str, Any] = {
+            "schema": "ogd_lbs_ssdr_step04_optimize_weight_and_bone_trans_v1",
+            "split_role": "test",
+            "input_tree": str(input_tree),
+            "output_tree": str(output_tree),
+            "opt_out": str(test_outdir),
+            "inputs": {
+                "animation": str(anim_path),
+                "skeleton": str(skelhier_path),
+                "meshes": mesh_paths_by_name,
+            },
+            "outputs": {
+                "animation": str(test_anim_path),
+                "skeleton": str(test_outdir / f"{SKELETON_STEM}.pkl"),
+                "meshes": output_mesh_paths,
+                "metrics_history_per_frame": str(test_history_path),
+            },
+            "counts": {
+                "frames": int(test_indices.shape[0]),
+                "input_frames_total": int(n_p),
+                "bones": int(n_b),
+                "meshes": int(len(name_list)),
+                "vertices_total": int(v_cb.shape[0]),
+            },
+            "config": test_config,
+            "split": split_info.stats,
+            "final_metrics": test_final_metrics,
+        }
+
+        fold_plan_obj = {
+            "schema": "ogd_lbs_cv_fold_plan_v1",
+            "fold_index": int(fold_index),
+            "kfold": int(kfold),
+            "special_train_fraction": float(special_train_fraction),
+            "split": split_info.stats,
+        }
+
+        summary["split_role"] = "train"
+        summary["split"] = split_info.stats
+        summary["test_final_metrics"] = test_final_metrics
+        summary["outputs"]["opt_out_test"] = str(test_outdir)
+        summary["outputs"]["test_metrics_history_per_frame"] = str(test_history_path)
+
+        if write_summary_file:
+            test_summary_path = output_tree / "step04_test_summary.json"
+            fold_plan_path = output_tree / "fold_plan.json"
+            write_stage_summary(test_summary_path, test_summary)
+            write_stage_summary(fold_plan_path, fold_plan_obj)
+            test_summary["summary_path"] = str(test_summary_path)
+            summary["outputs"]["test_summary"] = str(test_summary_path)
+            summary["outputs"]["fold_plan"] = str(fold_plan_path)
+            log(f"Step 04 test summary written: {test_summary_path}")
+
+        summary["test_summary"] = test_summary
 
     if write_summary_file:
         summary_path = output_tree / "step04_optimize_summary.json"
@@ -1115,6 +1524,25 @@ def main() -> None:
     parser.add_argument("--eval_bone_health", action="store_true")
     parser.add_argument("--bone_health_every", type=int, default=5)
 
+    parser.add_argument(
+        "--kfold",
+        type=int,
+        default=0,
+        help="Number of folds for inline K-fold CV (0 = disabled / full-frame mode).",
+    )
+    parser.add_argument(
+        "--fold_index",
+        type=int,
+        default=-1,
+        help="0-based fold index in [0, kfold) when --kfold > 1.",
+    )
+    parser.add_argument(
+        "--special_train_fraction",
+        type=float,
+        default=0.0,
+        help="Fraction [0, 1) of initial frames always kept in train and excluded from test folds.",
+    )
+
     parser.add_argument("--max_workers", type=int, default=None)
     parser.add_argument("--enable_profiling", action="store_true")
     parser.add_argument("--validate_output", action="store_true")
@@ -1139,6 +1567,15 @@ def main() -> None:
     if str(args.mask_mode) == "fixed" and float(args.mask_threshold) < 0.0:
         fail("--mask_mode fixed requires --mask_threshold/--tau >= 0")
 
+    if int(args.kfold) < 0 or int(args.kfold) == 1:
+        fail(f"--kfold must be 0 (disabled) or >= 2, got {args.kfold}")
+
+    if int(args.kfold) > 1 and (int(args.fold_index) < 0 or int(args.fold_index) >= int(args.kfold)):
+        fail(f"--fold_index must be in [0, {args.kfold}) when --kfold={args.kfold}, got {args.fold_index}")
+
+    if float(args.special_train_fraction) < 0.0 or float(args.special_train_fraction) >= 1.0:
+        fail(f"--special_train_fraction must be in [0, 1), got {args.special_train_fraction}")
+
     resolution = resolve_ssdr_stage_dirs(
         step_id="04",
         input_dir=args.input_dir,
@@ -1155,25 +1592,28 @@ def main() -> None:
 
     log("=" * 80)
     log("SSDR Step 04: data3 -> data4 Weight/Bone Optimization")
-    log(f"work_dir          : {resolution.work_dir}")
-    log(f"input_tree        : {resolution.input_tree}")
-    log(f"output_tree       : {resolution.output_tree}")
-    log(f"input_source      : {resolution.input_source}")
-    log(f"output_source     : {resolution.output_source}")
-    log(f"baked_schedule    : {args.baked_schedule}")
-    log(f"iter              : {int(args.iter)}")
-    log(f"org_type          : {int(args.org_type)}")
-    log(f"opt_weight        : {bool(args.opt_weight)}")
-    log(f"input_poses       : {bool(args.input_poses)}")
-    log(f"use_weight_mask   : {bool(args.use_weight_mask)}")
-    log(f"s_max             : {int(args.s_max)}")
-    log(f"mask_mode         : {args.mask_mode}")
-    log(f"mask_threshold    : {float(args.mask_threshold)}")
-    log(f"freeze_weights    : {bool(args.freeze_weights)}")
-    log(f"weight_solver     : {args.weight_solver}")
-    log(f"max_workers       : {args.max_workers}")
-    log(f"overwrite_output  : {bool(args.overwrite_output)}")
-    log(f"allow_merge       : {bool(args.allow_merge)}")
+    log(f"work_dir                : {resolution.work_dir}")
+    log(f"input_tree              : {resolution.input_tree}")
+    log(f"output_tree             : {resolution.output_tree}")
+    log(f"input_source            : {resolution.input_source}")
+    log(f"output_source           : {resolution.output_source}")
+    log(f"baked_schedule          : {args.baked_schedule}")
+    log(f"iter                    : {int(args.iter)}")
+    log(f"org_type                : {int(args.org_type)}")
+    log(f"opt_weight              : {bool(args.opt_weight)}")
+    log(f"input_poses             : {bool(args.input_poses)}")
+    log(f"use_weight_mask         : {bool(args.use_weight_mask)}")
+    log(f"s_max                   : {int(args.s_max)}")
+    log(f"mask_mode               : {args.mask_mode}")
+    log(f"mask_threshold          : {float(args.mask_threshold)}")
+    log(f"freeze_weights          : {bool(args.freeze_weights)}")
+    log(f"weight_solver           : {args.weight_solver}")
+    log(f"kfold                   : {int(args.kfold)}")
+    log(f"fold_index              : {int(args.fold_index)}")
+    log(f"special_train_fraction  : {float(args.special_train_fraction)}")
+    log(f"max_workers             : {args.max_workers}")
+    log(f"overwrite_output        : {bool(args.overwrite_output)}")
+    log(f"allow_merge             : {bool(args.allow_merge)}")
     log("=" * 80)
 
     with Timer("time_04_total"):
@@ -1215,6 +1655,9 @@ def main() -> None:
             overwrite_output=bool(args.overwrite_output),
             allow_merge=bool(args.allow_merge),
             write_summary_file=not bool(args.no_summary),
+            kfold=int(args.kfold),
+            fold_index=int(args.fold_index),
+            special_train_fraction=float(args.special_train_fraction),
         )
 
     if args.metrics_dir:
@@ -1227,6 +1670,8 @@ def main() -> None:
     log(f"vertices_total  : {summary['counts']['vertices_total']}")
     log(f"04_L2_Err       : {summary['final_metrics'].get('04_L2_Err')}")
     log(f"04_Hausdorff_Max: {summary['final_metrics'].get('04_Hausdorff_Max')}")
+    if "test_final_metrics" in summary:
+        log(f"test_04_L2_Err  : {summary['test_final_metrics'].get('04_L2_Err')}")
     log(f"opt_out         : {summary['opt_out']}")
     log(f"output_tree     : {resolution.output_tree}")
 

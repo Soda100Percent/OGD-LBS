@@ -35,7 +35,7 @@ def ensure_repo_paths() -> None:
 
 ensure_repo_paths()
 
-from ogd_lbs.utils.common import dump_pkl, load_pkl  # noqa: E402
+from ogd_lbs.utils.common import dump_pkl, load_pkl, load_json  # noqa: E402
 from ogd_lbs.fitbox.schema import (  # noqa: E402
     KEY_ANIMATION_POSES,
     KEY_BAKED_NORMALS,
@@ -69,6 +69,17 @@ def load_builder():
 def load_runner():
     path = REPO_ROOT / "scripts" / "experiments" / "run_4fold_cv.py"
     spec = importlib.util.spec_from_file_location("ogd_lbs_run_4fold_cv_for_tests", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_step04():
+    path = REPO_ROOT / "scripts" / "ssdr" / "04_optimize_weight_and_bone_trans.py"
+    spec = importlib.util.spec_from_file_location("ogd_lbs_step04_for_tests", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from: {path}")
     module = importlib.util.module_from_spec(spec)
@@ -144,15 +155,13 @@ class TestCVPlanning(unittest.TestCase):
                     [[0, 0, 0], [10, 0, 0], [2, 0, 0]],
                     [[0, 1, 0], [10, 1, 0], [2, 1, 0]],
                 ],
-                dtype=np.float64,
-            )
-
+                dtype=np.float64),
             test_mesh = {
                 "name": "mesh",
                 KEY_VERTICES: np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0]], dtype=np.float64),
                 KEY_VERTEX_NORMALS: np.ones((3, 3), dtype=np.float64),
                 KEY_FACES: np.array([[0, 1, 2]], dtype=np.int64),
-                KEY_BAKED_VERTICES: full_vertices,
+                KEY_BAKED_VERTICES: full_vertices[0],
                 KEY_BAKED_NORMALS: np.ones((2, 3, 3), dtype=np.float64),
                 KEY_BONE_NAMES: ["root"],
                 KEY_VERTEX_BONE_WEIGHTS: np.ones((3, 1), dtype=np.float64),
@@ -173,7 +182,7 @@ class TestCVPlanning(unittest.TestCase):
 
             self.assertEqual(summary["counts"]["frames"], 2)
             out_mesh = load_pkl(out / "mesh.pkl")
-            self.assertTrue(np.array_equal(out_mesh[KEY_BAKED_VERTICES], full_vertices[:, [0, 2], :]))
+            self.assertTrue(np.array_equal(out_mesh[KEY_BAKED_VERTICES], full_vertices[0][:, [0, 2], :]))
             self.assertTrue(np.array_equal(out_mesh[KEY_VERTICES], train_mesh[KEY_VERTICES]))
             self.assertTrue(np.array_equal(out_mesh[KEY_VERTEX_BONE_WEIGHTS], train_mesh[KEY_VERTEX_BONE_WEIGHTS]))
             self.assertTrue(np.array_equal(out_mesh[KEY_SCENE_FRAMES], np.array([101, 105], dtype=np.int64)))
@@ -212,6 +221,104 @@ class TestCVPlanning(unittest.TestCase):
             self.assertIn("--use_weight_mask", cmd)
             self.assertIn("--mask_mode", cmd)
             self.assertIn("adaptive", cmd)
+
+    def test_step04_inline_kfold_trains_and_evaluates_test_split(self) -> None:
+        step04 = load_step04()
+
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_step04_inline_cv_") as td:
+            root = Path(td)
+            data3 = root / "data3"
+            data4 = root / "data4"
+            data3.mkdir()
+
+            frame_count = 20
+            dump_pkl(data3 / "skeleton_hierarchy_data.pkl", make_skel())
+            dump_pkl(data3 / "animation_data.pkl", make_anim(frame_count))
+
+            rest_v = np.array(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                dtype=np.float64,
+            )
+            baked_v = np.tile(rest_v[None, :, :], (frame_count, 1, 1))
+            for f_idx in range(frame_count):
+                baked_v[f_idx, :, 0] += 0.01 * float(f_idx)
+
+            mesh_obj = {
+                "name": "body",
+                KEY_VERTICES: rest_v,
+                KEY_VERTEX_NORMALS: np.tile(np.array([[0.0, 0.0, 1.0]], dtype=np.float64), (3, 1)),
+                KEY_FACES: np.array([[0, 1, 2]], dtype=np.int64),
+                KEY_BAKED_VERTICES: baked_v,
+                KEY_BAKED_NORMALS: np.tile(np.array([[[0.0, 0.0, 1.0]]], dtype=np.float64), (frame_count, 3, 1)),
+                KEY_BONE_NAMES: ["root"],
+                KEY_VERTEX_BONE_WEIGHTS: np.ones((3, 1), dtype=np.float64),
+                KEY_SCENE_FRAMES: np.arange(1, 1 + frame_count, dtype=np.int64),
+            }
+            dump_pkl(data3 / "body.pkl", mesh_obj)
+
+            summary = step04.optimize_weight_and_bone_trans_tree(
+                input_tree=data3,
+                output_tree=data4,
+                baked_schedule_path=None,
+                print_every_n=1,
+                max_iter=2,
+                org_type=3,
+                opt_weight=True,
+                input_poses=True,
+                use_weight_mask=True,
+                s_max=4,
+                mask_mode="adaptive",
+                mask_threshold=-1.0,
+                freeze_weights=False,
+                weight_solver="simplex",
+                use_weight_smoothness=False,
+                weights_smooth_step=1.0,
+                weight_soft_lock=0.0,
+                lambda_reg=0.1,
+                bt_covariance_mode="corrected",
+                trans_affine=0.0,
+                trans_affine_norm=4.0,
+                roll_affinity=0.0,
+                roll_affinity_norm=2.0,
+                eval_mesh_health=True,
+                health_level=1,
+                health_every=1,
+                health_weight_scheme="uniform",
+                eval_bone_health=True,
+                bone_health_every=1,
+                max_workers=1,
+                enable_profiling=False,
+                validate_output=True,
+                weak_validate=False,
+                save_intermediate=False,
+                overwrite_output=True,
+                allow_merge=False,
+                write_summary_file=True,
+                kfold=4,
+                fold_index=1,
+                special_train_fraction=0.1,
+            )
+
+            self.assertEqual(summary["counts"]["input_frames_total"], 20)
+            self.assertEqual(summary["counts"]["frames"], 15)
+            self.assertFalse(summary["final_metrics"]["04_Freeze_Weights"])
+            self.assertIn("test_final_metrics", summary)
+            self.assertTrue(summary["test_final_metrics"]["04_Freeze_Weights"])
+
+            test_summary = load_json(data4 / "step04_test_summary.json")
+            self.assertEqual(test_summary["counts"]["frames"], 5)
+            self.assertTrue(test_summary["config"]["freeze_weights"])
+            self.assertEqual(test_summary["split"]["special_count"], 2)
+
+            with np.load(data4 / "opt_out" / "metrics_history_per_frame.npz") as tr_npz:
+                self.assertEqual(tr_npz["l2_err"].shape, (2, 15))
+                self.assertEqual(tr_npz["hausdorff"].shape, (1, 15))
+                self.assertEqual(tr_npz["arap_ratio"].shape, (1, 15))
+
+            with np.load(data4 / "opt_out_test" / "metrics_history_per_frame.npz") as te_npz:
+                self.assertEqual(te_npz["l2_err"].shape, (2, 5))
+                self.assertEqual(te_npz["hausdorff"].shape, (1, 5))
+                self.assertEqual(te_npz["arap_ratio"].shape, (1, 5))
 
 
 class TestCVDatasetSpecialTrainConfig(unittest.TestCase):
