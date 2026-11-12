@@ -271,14 +271,15 @@ def export_spatially_separated_meshes_fbx(
     full_bone_names = [str(x) for x in full_skeleton["bone_names"]]
     bl_meshes = []
 
-    for rec in mesh_records:
+    for idx, rec in enumerate(mesh_records):
         mesh_name = rec["mesh_name"]
+        safe_bl_name = f"__ue_mesh_{idx:02d}_{mesh_name}"
         shifted_verts = rec["shifted_vertices"]
         faces = coerce_fitbox_faces_for_blender(rec["mesh_obj"]["faces"], mesh_name=mesh_name)
         vbw_full = rec["vbw_full_order"]
 
-        mesh_data = bpy.data.meshes.new(name=mesh_name)
-        bl_obj = bpy.data.objects.new(mesh_name, mesh_data)
+        mesh_data = bpy.data.meshes.new(name=safe_bl_name)
+        bl_obj = bpy.data.objects.new(safe_bl_name, mesh_data)
         bpy.context.collection.objects.link(bl_obj)
         mesh_data.from_pydata(shifted_verts.tolist(), [], faces.tolist())
         mesh_data.update(calc_edges=True)

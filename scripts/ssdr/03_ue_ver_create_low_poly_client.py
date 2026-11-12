@@ -236,8 +236,9 @@ def export_single_data2_mesh_fbx(
     )
 
     vertices = np.asarray(mesh_obj[KEY_VERTICES], dtype=np.float64)
-    mesh_data = bpy.data.meshes.new(name=mesh_name)
-    bl_obj = bpy.data.objects.new(mesh_name, mesh_data)
+    safe_bl_name = f"__ue_mesh_{mesh_name}"
+    mesh_data = bpy.data.meshes.new(name=safe_bl_name)
+    bl_obj = bpy.data.objects.new(safe_bl_name, mesh_data)
     bpy.context.collection.objects.link(bl_obj)
     mesh_data.from_pydata(vertices.tolist(), [], tri_faces.astype(int).tolist())
     for poly in mesh_data.polygons:
