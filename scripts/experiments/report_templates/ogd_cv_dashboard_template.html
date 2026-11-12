@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE_HTML__</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2/dist/jspdf.umd.min.js"></script>
+<style>
+:root {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --ssdr12: #d97706;
+  --ssdr14: #7c3aed;
+  --ssdr14v: #1C328A;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 0 20px 60px;
+}
+.container { max-width: 1640px; margin: 0 auto; }
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 950;
+  background: rgba(255,255,255,0.97);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  margin: 0 -20px 22px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+.topbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.topbar-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+.badge-ready { background: #dcfce7; color: #166534; }
+.badge-pending { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
+.ctrl-group {
+  display: inline-flex;
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+  gap: 6px;
+  font-size: 0.86em;
+}
+.ctrl-group label { font-weight: 600; color: #334155; }
+.ctrl-group select {
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: #fff;
+  font-weight: 600;
+  color: #0f172a;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #1e293b;
+  font-size: 0.84em;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:hover { background: #f1f5f9; }
+.btn-primary { background: #1C328A; color: #fff; border-color: #1C328A; }
+.btn-teal { background: #0f766e; color: #fff; border-color: #0f766e; }
+.card {
+  background: var(--card);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  padding: 20px;
+  margin-bottom: 24px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.03);
+}
+.card h2 {
+  margin: 0 0 8px 0;
+  font-size: 1.22em;
+  color: #0f172a;
+  border-left: 4px solid #1C328A;
+  padding-left: 10px;
+}
+.subnote { color: var(--muted); font-size: 0.9em; margin-bottom: 14px; line-height: 1.5; }
+.table-wrap { overflow-x: auto; width: 100%; }
+table { width: 100%; border-collapse: collapse; font-size: 0.86em; white-space: nowrap; }
+th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: middle; }
+th { background: #f8fafc; font-weight: 700; color: #1e293b; }
+th.sub-th-train { background: #f1f5f9; color: #475569; font-size: 0.84em; }
+th.sub-th-test { background: #eff6ff; color: #1e3a8a; font-size: 0.84em; }
+th.sub-th-gap { background: #fefce8; color: #854d0e; font-size: 0.84em; }
+td.col-train { color: #475569; background: #fcfcfd; }
+td.col-test { font-weight: 600; background: #ffffff; }
+td.col-gap { font-size: 0.85em; background: #fefef9; }
+tr:hover td { filter: brightness(0.985); }
+.method-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 0.85em;
+}
+.m-ssdr12 { background: #ffedd5; color: #9a3412; }
+.m-ssdr14 { background: #f3e8ff; color: #5b21b6; }
+.m-ssdr14v { background: #dbeafe; color: #1e3a8a; border: 1px solid #93c5fd; }
+.best-cell { background: #dcfce7 !important; font-weight: 700; color: #14532d; }
+.sig-star { color: #dc2626; font-weight: 800; margin-left: 3px; }
+.sig-yes { background: #dcfce7; color: #166534; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+.sig-no { background: #f1f5f9; color: #64748b; padding: 2px 6px; border-radius: 4px; }
+.delta-good { color: #15803d; font-weight: 600; }
+.delta-bad { color: #b91c1c; font-weight: 600; }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab-btn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  font-weight: 600;
+  cursor: pointer;
+  color: #475569;
+}
+.tab-btn.active { background: #1C328A; color: #fff; border-color: #1C328A; }
+
+/* Strict isolation to prevent SVG chart overflow across grid columns */
+.charts-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  width: 100%;
+}
+@media (max-width: 1280px) {
+  .charts-grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+.chart-card {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chart-header h3 { margin: 0; font-size: 1.0em; color: #1e293b; }
+.chart-box { width: 100%; height: 430px; overflow: hidden; position: relative; }
+.chart-box-tall { width: 100%; height: 520px; overflow: hidden; position: relative; }
+.latex-box {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 14px;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82em;
+  overflow-x: auto;
+  max-height: 280px;
+}
+</style>
+<script>
+window.CV_DASHBOARD = __DATA_JSON__;
+</script>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-left">
+    <strong style="font-size:1.04em;">📊 OGD-LBS 4-Fold CV (Train vs. Held-out Test Generalization &amp; t-Test)</strong>
+    <span id="status-badge"></span>
+    <a class="btn btn-teal" href="downloads/ogd_lbs_cv4_ttest_report_bundle.zip" download>📦 Download ZIP</a>
+    <a class="btn" href="index.html">🗂️ Export Center</a>
+  </div>
+  <div class="topbar-controls">
+    <div class="ctrl-group">
+      <label for="sel-bar-mode">Bar Chart View:</label>
+      <select id="sel-bar-mode">
+        <option value="both" selected>Train (Light) + Held-out Test (Solid) Side-by-Side</option>
+        <option value="test">Held-out Test Only (3 Bars + 4-Fold Whiskers)</option>
+        <option value="train">Train Only (3 Bars + 4-Fold Whiskers)</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <label for="sel-scale">Distance Scale:</label>
+      <select id="sel-scale">
+        <option value="scaled" selected>Model-Scaled (Griffin×0.3, Winter×10, Vroid×1)</option>
+        <option value="raw">Raw Unscaled</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <label for="sel-axis">Chart Y-Axis:</label>
+      <select id="sel-axis">
+        <option value="auto" selected>Auto Pseudo-Log (Large Dynamic Range)</option>
+        <option value="linear">Linear</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- MODULE 1: TRAIN VS HELD-OUT TEST SUMMARY TABLE -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h2>1️⃣ Module 1: 4-Fold Generalization &amp; Method Summary Table (Train vs. Held-out Test vs. Gen. Gap)</h2>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div class="ctrl-group">
+          <label for="sel-m1-layout">Table Columns:</label>
+          <select id="sel-m1-layout">
+            <option value="split3" selected>Explicit Side-by-Side (Train | Held-out Test ★ | Gen. Gap)</option>
+            <option value="stacked">Compact All 7 Metrics (Held-out Test Primary + Train/Gap Subline)</option>
+          </select>
+        </div>
+        <button class="btn" onclick="toggleLatexPreview()">📄 View / Copy Paper LaTeX Table</button>
+        <a class="btn" href="aggregate/model_method_4fold_summary.csv" download>📥 Download CSV</a>
+      </div>
+    </div>
+    <div class="subnote">
+      <b>Protocol:</b> Each model's 200-frame <code>data1</code> sequence is partitioned into 4 folds (for <code>Vroid_*</code>, the first 10% = 20 frames are kept as a core training block; remaining 180 frames form four 45-frame test folds; for <code>Griffin_A2</code> and <code>Winter_Samurai</code>, 200 frames form four 50-frame test folds).
+      In each fold, <b>Train</b> optimizes skinning weights + bone transforms for 70 iterations; <b>Held-out Test</b> freezes the trained skinning weights (<code>freeze_weights=True</code>) and fits only bone transforms on unseen motion frames.
+      Significance stars (<span class="sig-star">* p&lt;0.05, ** p&lt;0.01, *** p&lt;0.001</span>) compare <code>ssdr12 / ssdr14</code> against <b>ssdr14v ★</b> on Held-out Test.
+    </div>
+    <div id="latex-drawer" style="display:none;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <strong>Paper LaTeX Source (<span id="latex-scale-label"></span>):</strong>
+        <button class="btn btn-primary" onclick="copyLatex()">📋 Copy LaTeX</button>
+      </div>
+      <pre id="latex-content" class="latex-box"></pre>
+    </div>
+    <div class="table-wrap" id="module1-table-wrap"></div>
+  </div>
+
+  <!-- MODULE 2: MULTI-LEVEL PAIRED T-TEST & GENERALIZATION ANALYSIS -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h2>2️⃣ Module 2: Statistical Significance (Paired t-Tests) &amp; Train→Test Generalization Gap</h2>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label style="font-size:0.86em;font-weight:600;">Filter Metric:</label>
+        <select id="sel-ttest-metric" style="padding:5px 8px;border-radius:5px;border:1px solid #cbd5e1;">
+          <option value="ALL">All Metrics</option>
+        </select>
+      </div>
+    </div>
+    <div class="subnote">
+      Provides both <b>inter-method significance on unseen test frames</b> (Tabs A, C, D: <code>Candidate - ssdr14v ★</code>, where $\Delta &gt; 0$ in green proves <b>ssdr14v</b> has lower error)
+      and <b>intra-method Train $\rightarrow$ Held-out Test generalization analysis</b> (Tab B: comparing Held-out Test vs. Train across the 4 folds for each method).
+    </div>
+    <div class="charts-grid-2" style="margin-bottom:18px;">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <h3 id="title-winrate-metrics">🏆 ssdr14v ★ Frame-Level Win Rate (%) by Metric</h3>
+            <select id="sel-winrate-model" style="padding:3px 7px;border-radius:5px;border:1px solid #cbd5e1;font-size:0.84em;font-weight:600;">
+              <option value="ALL_5_MODELS" selected>ALL_5_MODELS (Pooled)</option>
+            </select>
+          </div>
+          <div>
+            <button class="btn" onclick="exportChart('chart-winrate-metrics','svg','winrate_by_metric')">📥 SVG</button>
+            <button class="btn" onclick="exportChart('chart-winrate-metrics','png','winrate_by_metric')">🖼️ PNG</button>
+            <button class="btn" onclick="exportChart('chart-winrate-metrics','pdf','winrate_by_metric')">📄 PDF</button>
+          </div>
+        </div>
+        <div id="chart-winrate-metrics" class="chart-box" style="height:370px;"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <h3 id="title-winrate-models">🏆 ssdr14v ★ Frame-Level Win Rate (%) Across Models</h3>
+            <select id="sel-winrate-metric" style="padding:3px 7px;border-radius:5px;border:1px solid #cbd5e1;font-size:0.84em;font-weight:600;"></select>
+          </div>
+          <div>
+            <button class="btn" onclick="exportChart('chart-winrate-models','svg','winrate_by_model')">📥 SVG</button>
+            <button class="btn" onclick="exportChart('chart-winrate-models','png','winrate_by_model')">🖼️ PNG</button>
+            <button class="btn" onclick="exportChart('chart-winrate-models','pdf','winrate_by_model')">📄 PDF</button>
+          </div>
+        </div>
+        <div id="chart-winrate-models" class="chart-box" style="height:370px;"></div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="pooled" onclick="switchTtestTab('pooled')">
+        Tab A: Held-out Test Method Comparison (Pooled Unseen Frames, n=180/200 per model)
+      </button>
+      <button class="tab-btn" data-tab="gengap" onclick="switchTtestTab('gengap')">
+        Tab B: Train → Held-out Test Generalization Gap (Test vs. Train by Method &amp; Model)
+      </button>
+      <button class="tab-btn" data-tab="perfold" onclick="switchTtestTab('perfold')">
+        Tab C: Per-Fold Held-out Test Comparison (Within Each Model × Fold 0..3)
+      </button>
+      <button class="tab-btn" data-tab="summary" onclick="switchTtestTab('summary')">
+        Tab D: Fold-Level (n≤20) &amp; Model-Level (n=5) Summary Paired t-Test
+      </button>
+    </div>
+    <div class="table-wrap" id="module2-table-wrap"></div>
+  </div>
+
+  <!-- MODULE 3A: MODEL x METHOD GROUPED BAR CHARTS (TRAIN + TEST + WHISKERS) -->
+  <div class="card">
+    <h2>3️⃣.1 Module 3A: Model × Method Grouped Bar Charts (Train vs. Held-out Test + 4-Fold [Min, Max] Whiskers)</h2>
+    <div class="subnote">
+      In <b>Train + Held-out Test Side-by-Side</b> mode, each method shows its <b>Train 4-fold mean (translucent bar)</b> immediately followed by its <b>Held-out Test 4-fold mean (solid bar)</b>.
+      Black vertical whiskers show the <b>[min, max] range across the 4 folds</b>; red stars (<span class="sig-star">* / ** / ***</span>) mark significant Held-out Test error increase compared to <b>ssdr14v ★</b>.
+    </div>
+    <div class="charts-grid-2" id="charts-model-grouped"></div>
+  </div>
+
+  <!-- MODULE 3B: PER-FOLD BREAKDOWN CHARTS -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h2>3️⃣.2 Module 3B: Per-Fold Breakdown (Fold 0..3 × ssdr12 / ssdr14 / ssdr14v + Within-Fold Frame Whiskers)</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="ctrl-group">
+          <label for="sel-fold-split">Fold Split:</label>
+          <select id="sel-fold-split">
+            <option value="test" selected>Held-out Test Folds (Unseen Frames)</option>
+            <option value="train">Train Folds</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label for="sel-fold-metric">Metric:</label>
+          <select id="sel-fold-metric"></select>
+        </div>
+      </div>
+    </div>
+    <div class="subnote">
+      Displays all 20 <code>(Model, Fold 0..3)</code> groups. Vertical whiskers represent the within-fold per-frame [min, max] fluctuation range.
+      Hover over any bar to inspect both its <b>Held-out Test</b> and <b>Train</b> values for that fold.
+    </div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3 id="title-perfold-chart">Per-Fold Breakdown</h3>
+        <div>
+          <button class="btn" onclick="exportChart('chart-perfold-main','svg','per_fold_breakdown')">📥 SVG</button>
+          <button class="btn" onclick="exportChart('chart-perfold-main','png','per_fold_breakdown')">🖼️ PNG</button>
+          <button class="btn" onclick="exportChart('chart-perfold-main','pdf','per_fold_breakdown')">📄 PDF</button>
+        </div>
+      </div>
+      <div id="chart-perfold-main" class="chart-box-tall"></div>
+    </div>
+  </div>
+
+  <!-- MODULE 3C: STITCHED OUT-OF-SAMPLE FRAME TRAJECTORY & PAIRED DELTA -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h2>3️⃣.3 Module 3C: Out-of-Sample Unseen Test Frame Trajectory &amp; Paired Difference Δ(t)</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="ctrl-group">
+          <label for="sel-traj-model">Model:</label>
+          <select id="sel-traj-model"></select>
+        </div>
+        <div class="ctrl-group">
+          <label for="sel-traj-metric">Metric:</label>
+          <select id="sel-traj-metric"></select>
+        </div>
+      </div>
+    </div>
+    <div class="subnote">
+      Stitches the 4 mutually exclusive held-out test folds along their true <code>data1</code> animation frame index ($t \in [0, 199]$).
+      <b>Top plot:</b> per-frame metric trajectory on unseen test frames.
+      <b>Bottom plot:</b> paired per-frame excess error $\Delta(t) = \text{Candidate}(t) - \text{ssdr14v}(t)$ (values above 0 mean <b>ssdr14v ★</b> is more accurate at frame $t$).
+    </div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3 id="title-traj-chart">Frame Trajectory</h3>
+        <div>
+          <button class="btn" onclick="exportChart('chart-traj-main','svg','frame_trajectory')">📥 SVG</button>
+          <button class="btn" onclick="exportChart('chart-traj-main','png','frame_trajectory')">🖼️ PNG</button>
+          <button class="btn" onclick="exportChart('chart-traj-main','pdf','frame_trajectory')">📄 PDF</button>
+        </div>
+      </div>
+      <div id="chart-traj-main" style="width:100%;height:560px;overflow:hidden;"></div>
+    </div>
+  </div>
+
+  <!-- MODULE 4: PARETO TRADE-OFF SCATTER (SUPPORTS WIN RATE % & ERROR AXES) -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h2>4️⃣ Module 4: Multi-Metric Win Rate (%) &amp; Error Pareto Scatter</h2>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:0.84em;font-weight:700;color:#475569;">Quick Presets:</span>
+        <button class="btn btn-primary" onclick="setParetoPreset('wr:04_L2_Err','wr:04_Org_Loss','pairwise')">🏆 Win Rate: VD vs. SO (Org)</button>
+        <button class="btn" onclick="setParetoPreset('wr:04_L2_Err','wr:04_ARAP_Ratio','pairwise')">🏆 Win Rate: VD vs. ARAP</button>
+        <button class="btn" onclick="setParetoPreset('wr:04_Hausdorff_Mean','wr:04_Max_Roll','pairwise')">🏆 Win Rate: HD Mean vs. Roll</button>
+        <button class="btn" onclick="setParetoPreset('04_L2_Err','04_Org_Loss','methods')">📉 Error: VD (L2) vs. SO (Org)</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;">
+      <div class="ctrl-group">
+        <label for="sel-pareto-x">X-Axis:</label>
+        <select id="sel-pareto-x"></select>
+      </div>
+      <div class="ctrl-group">
+        <label for="sel-pareto-y">Y-Axis:</label>
+        <select id="sel-pareto-y"></select>
+      </div>
+      <div class="ctrl-group">
+        <label for="sel-pareto-mode">Scatter Series Mode:</label>
+        <select id="sel-pareto-mode">
+          <option value="pairwise" selected>ssdr14v ★ vs. Baselines (4-Fold Pooled ◆ + Per-Fold ○)</option>
+          <option value="pairwise_pooled">ssdr14v ★ vs. Baselines (4-Fold Pooled Models Only ◆)</option>
+          <option value="methods">All 3 Methods: ssdr12 / ssdr14 / ssdr14v ★ (Head-to-Head Win Rate % &amp; Error)</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <label for="sel-pareto-split">Split:</label>
+        <select id="sel-pareto-split">
+          <option value="test" selected>Held-out Test Only (Unseen Frames)</option>
+          <option value="both">Both Held-out Test ◆ &amp; Train ○</option>
+          <option value="train">Train Only</option>
+        </select>
+      </div>
+    </div>
+    <div class="subnote" id="pareto-subnote">
+      Select any <b>Frame-Level Win Rate (%) [↑ Higher = Better]</b> or <b>Error Metric [↓ Lower = Better]</b> on the X-axis and Y-axis.
+      When Win Rate (%) is selected, dashed red lines mark the <b>50% Parity threshold</b>: points in the <b>upper-right quadrant (&gt;50% on both axes)</b> indicate <b>ssdr14v ★</b> wins simultaneously on both metrics.
+    </div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3 id="title-pareto-chart">Pareto Scatter</h3>
+        <div>
+          <button class="btn" onclick="exportChart('chart-pareto-cv','svg','pareto_cv')">📥 SVG</button>
+          <button class="btn" onclick="exportChart('chart-pareto-cv','png','pareto_cv')">🖼️ PNG</button>
+          <button class="btn" onclick="exportChart('chart-pareto-cv','pdf','pareto_cv')">📄 PDF</button>
+        </div>
+      </div>
+      <div id="chart-pareto-cv" class="chart-box-tall"></div>
+    </div>
+  </div>
+
+  <!-- MODULE 5: 60-CASE FOLD DETAIL TABLE (TRAIN & TEST SIDE-BY-SIDE) -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h2>5️⃣ Module 5: Complete 60-Case Fold Detail Table (Train vs. Held-out Test Side-by-Side per Fold)</h2>
+      <div class="ctrl-group">
+        <label for="sel-detail-model">Filter Model:</label>
+        <select id="sel-detail-model">
+          <option value="ALL">All 5 Models (60 Cases)</option>
+        </select>
+      </div>
+    </div>
+    <div class="subnote">
+      Each row corresponds to one <code>ssdr_stage04</code> CV case in the pool, showing the exact frame split (<code>Train / Test (Core)</code>)
+      and side-by-side <b>Train → Held-out Test (Gen. Gap)</b> values for every fold.
+    </div>
+    <div class="table-wrap" id="module5-table-wrap"></div>
+  </div>
+
+</div>
+
+<script>
+const D = window.CV_DASHBOARD;
+const METHOD_COLORS = {
+  ssdr12: '#d97706',
+  ssdr14: '#7c3aed',
+  ssdr14v: '#1C328A'
+};
+const METHOD_TRAIN_COLORS = {
+  ssdr12: 'rgba(217, 119, 6, 0.35)',
+  ssdr14: 'rgba(124, 58, 237, 0.35)',
+  ssdr14v: 'rgba(28, 50, 138, 0.35)'
+};
+let activeTtestTab = 'pooled';
+const chartInstances = [];
+
+function esc(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function num(v) {
+  if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function fmt(v, digits = 4) {
+  const n = num(v);
+  if (n === null) return '-';
+  if (n === 0) return '0';
+  if (Math.abs(n) >= 1e5 || Math.abs(n) < 1e-3) return n.toExponential(2).replace('e+', 'e');
+  return Number(n.toPrecision(digits)).toString();
+}
+
+function fmtP(v) {
+  const n = num(v);
+  if (n === null) return '-';
+  if (n < 1e-4) return n.toExponential(2);
+  return n.toFixed(4);
+}
+
+function getBarMode() { return document.getElementById('sel-bar-mode').value; }
+function getScale() { return document.getElementById('sel-scale').value; }
+function getAxisMode() { return document.getElementById('sel-axis').value; }
+
+function methodPill(m) {
+  const star = m === 'ssdr14v' ? ' ★' : '';
+  return `<span class="method-pill m-${esc(m)}">${esc(m)}${star}</span>`;
+}
+
+function toggleLatexPreview() {
+  const el = document.getElementById('latex-drawer');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function copyLatex() {
+  const text = document.getElementById('latex-content').innerText;
+  navigator.clipboard.writeText(text);
+}
+
+function renderStatusBadge() {
+  const m = D.meta;
+  const el = document.getElementById('status-badge');
+  if (m.pending_cv_cases === 0) {
+    el.className = 'badge badge-ready';
+    el.innerText = `✅ ${m.ready_cv_cases}/${m.total_cv_cases} CV Cases Ready`;
+  } else {
+    el.className = 'badge badge-pending';
+    el.innerText = `⏳ ${m.ready_cv_cases}/${m.total_cv_cases} Ready (${m.pending_cv_cases} Pending: ${m.missing_row_ids.join(', ')})`;
+  }
+}
+
+function MODEL_SCALES_NOTE(model, scaleMode) {
+  if (scaleMode !== 'scaled' || model === 'ALL_5_MODELS') return '';
+  const sc = D.meta.model_scales[model];
+  if (!sc || sc === 1.0) return '';
+  return `<br/><small style="color:#64748b;">dist ×${sc}</small>`;
+}
+
+function renderModule1() {
+  const scale = getScale();
+  const layout = document.getElementById('sel-m1-layout').value;
+  document.getElementById('latex-scale-label').innerText = scale === 'scaled' ? 'Model-Scaled' : 'Raw Unscaled';
+  document.getElementById('latex-content').innerText = (D.latex && D.latex[scale]) || '';
+
+  const testRows = D.summaryRecords.filter(r => r.split === 'test' && r.scale_mode === scale);
+  const trainRows = D.summaryRecords.filter(r => r.split === 'train' && r.scale_mode === scale);
+  const trainMap = {};
+  trainRows.forEach(r => { trainMap[`${r.model}__${r.method}`] = r; });
+
+  const metrics = D.meta.metrics_meta;
+  const modelsOrder = [...D.meta.models, 'ALL_5_MODELS'];
+
+  if (layout === 'split3') {
+    let html = '<table><thead><tr><th rowspan="2">Model</th><th rowspan="2">Method</th><th rowspan="2">Folds (Train/Test Frames)</th>';
+    metrics.forEach(m => {
+      const scTag = (scale === 'scaled' && m.scaled) ? ' <small>(scaled)</small>' : '';
+      html += `<th colspan="3" style="text-align:center;border-bottom:2px solid #cbd5e1;">${esc(m.short)}${scTag}</th>`;
+    });
+    html += '</tr><tr>';
+    metrics.forEach(() => {
+      html += '<th class="sub-th-train">Train (Mean±SD)</th><th class="sub-th-test">Held-out Test ★ (Mean±SD)</th><th class="sub-th-gap">Gen. Gap (Test−Train)</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    modelsOrder.forEach(model => {
+      const mRows = testRows.filter(r => r.model === model);
+      const isVroid = model.startsWith('Vroid_');
+      const frameInfo = model === 'ALL_5_MODELS' ? '150-155 / 45-50' : (isVroid ? '155 / 45 (core=20)' : '150 / 50 (core=0)');
+      mRows.forEach((r, idx) => {
+        const trRec = trainMap[`${r.model}__${r.method}`] || {};
+        const trStyle = model === 'ALL_5_MODELS' ? ' style="background:#f8fafc;border-top:2px solid #94a3b8;"' : '';
+        html += `<tr${trStyle}>`;
+        if (idx === 0) {
+          html += `<td rowspan="${mRows.length}"><strong>${esc(model)}</strong>${MODEL_SCALES_NOTE(model, scale)}</td>`;
+        }
+        html += `<td>${methodPill(r.method)}</td>`;
+        const foldBadge = r.n_pending_folds > 0
+          ? `${r.n_ready_folds}/4 <span style="color:#d97706;font-weight:700;">(⏳${r.n_pending_folds})</span> <small style="color:#64748b;">[${frameInfo}]</small>`
+          : `${r.n_ready_folds}/4 <small style="color:#64748b;">[${frameInfo}]</small>`;
+        html += `<td>${foldBadge}</td>`;
+
+        metrics.forEach(m => {
+          const miTe = (r.metrics || {})[m.key] || {};
+          const miTr = (trRec.metrics || {})[m.key] || {};
+          if (miTe.mean === null || miTe.mean === undefined) {
+            html += `<td colspan="3" style="color:#d97706;font-weight:600;">⏳ PENDING</td>`;
+            return;
+          }
+          const trStr = miTr.mean !== null && miTr.mean !== undefined
+            ? `${fmt(miTe.train_mean ?? miTr.mean)} ± ${fmt(miTr.std, 2)}`
+            : '-';
+          const cls = miTe.is_best ? ' class="col-test best-cell"' : ' class="col-test"';
+          const sig = (r.method !== 'ssdr14v' && miTe.sig && miTe.sig !== 'ns')
+            ? `<span class="sig-star">${esc(miTe.sig)}</span>`
+            : '';
+          let gapStr = '-';
+          const gapV = num(miTe.gen_gap_mean);
+          if (gapV !== null) {
+            const sign = gapV >= 0 ? '+' : '';
+            const gapPct = (num(miTr.mean) && Math.abs(num(miTr.mean)) > 1e-12)
+              ? ` (${sign}${((gapV / num(miTr.mean)) * 100).toFixed(1)}%)`
+              : '';
+            gapStr = `${sign}${fmt(gapV, 3)}${gapPct}`;
+          }
+          html += `<td class="col-train">${trStr}</td>`;
+          html += `<td${cls}>${fmt(miTe.mean)} ± ${fmt(miTe.std, 2)}${sig}</td>`;
+          html += `<td class="col-gap">${gapStr}</td>`;
+        });
+        html += '</tr>';
+      });
+    });
+    html += '</tbody></table>';
+    document.getElementById('module1-table-wrap').innerHTML = html;
+    return;
+  }
+
+  // Stacked compact view
+  let html = '<table><thead><tr><th>Model</th><th>Method</th><th>Folds</th>';
+  metrics.forEach(m => {
+    const scTag = (scale === 'scaled' && m.scaled) ? ' <small>(scaled)</small>' : '';
+    html += `<th>${esc(m.short)}${scTag}<br/><small style="color:#64748b;font-weight:500;">Top: Held-out Test ★ | Sub: Train &amp; Gap</small></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  modelsOrder.forEach(model => {
+    const mRows = testRows.filter(r => r.model === model);
+    mRows.forEach((r, idx) => {
+      const trRec = trainMap[`${r.model}__${r.method}`] || {};
+      html += '<tr>';
+      if (idx === 0) {
+        html += `<td rowspan="${mRows.length}"><strong>${esc(model)}</strong>${MODEL_SCALES_NOTE(model, scale)}</td>`;
+      }
+      html += `<td>${methodPill(r.method)}</td>`;
+      html += `<td>${r.n_ready_folds}/4${r.n_pending_folds > 0 ? ' (⏳' + r.n_pending_folds + ')' : ''}</td>`;
+      metrics.forEach(m => {
+        const miTe = (r.metrics || {})[m.key] || {};
+        const miTr = (trRec.metrics || {})[m.key] || {};
+        if (miTe.mean === null || miTe.mean === undefined) {
+          html += `<td style="color:#d97706;">⏳ PENDING</td>`;
+          return;
+        }
+        const cls = miTe.is_best ? ' class="best-cell"' : '';
+        const sig = (r.method !== 'ssdr14v' && miTe.sig && miTe.sig !== 'ns')
+          ? `<span class="sig-star">${esc(miTe.sig)}</span>`
+          : '';
+        const gapV = num(miTe.gen_gap_mean);
+        const gapSign = gapV !== null && gapV >= 0 ? '+' : '';
+        html += `<td${cls}><div><b>Test:</b> ${fmt(miTe.mean)} ± ${fmt(miTe.std, 2)}${sig}</div>`
+          + `<div style="font-size:0.82em;color:#475569;">Train: ${fmt(miTr.mean)} | Gap: ${gapSign}${fmt(gapV, 3)}</div></td>`;
+      });
+      html += '</tr>';
+    });
+  });
+  html += '</tbody></table>';
+  document.getElementById('module1-table-wrap').innerHTML = html;
+}
+
+function switchTtestTab(tab) {
+  activeTtestTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+  });
+  renderModule2();
+}
+
+function renderModule2() {
+  const scale = getScale();
+  const metricFilter = document.getElementById('sel-ttest-metric').value;
+
+  if (activeTtestTab === 'gengap') {
+    let rows = (D.genGapTtests || []).filter(r => r.scale_mode === scale);
+    if (metricFilter !== 'ALL') rows = rows.filter(r => r.metric === metricFilter);
+
+    let html = '<table><thead><tr>'
+      + '<th>Model</th><th>Method</th><th>Metric</th><th>n (Folds)</th>'
+      + '<th>Train Mean</th><th>Held-out Test Mean</th><th>Gen. Gap (Test − Train)</th>'
+      + '<th>Gap %</th><th>95% CI of Gap</th><th>t-stat (Test vs Train)</th><th>p-value</th>'
+      + '</tr></thead><tbody>';
+
+    rows.forEach(r => {
+      html += '<tr>';
+      html += `<td><strong>${esc(r.model)}</strong></td><td>${methodPill(r.method)}</td><td>${esc(r.metric_short)}</td>`;
+      if (!r.n_pairs || r.n_pairs === 0) {
+        html += '<td colspan="8" style="color:#d97706;">⏳ PENDING</td></tr>';
+        return;
+      }
+      const gap = num(r.mean_diff);
+      const pct = num(r.rel_diff_pct);
+      const sign = gap !== null && gap >= 0 ? '+' : '';
+      const ciStr = (num(r.ci95_low) !== null && num(r.ci95_high) !== null)
+        ? `[${fmt(r.ci95_low, 3)}, ${fmt(r.ci95_high, 3)}]`
+        : '-';
+      html += `<td>${r.n_pairs}${r.pending_folds > 0 ? ' (⏳' + r.pending_folds + ')' : ''}</td>`;
+      html += `<td>${fmt(r.baseline_mean)}</td>`;
+      html += `<td><strong>${fmt(r.candidate_mean)}</strong></td>`;
+      html += `<td><strong>${sign}${fmt(gap)}</strong></td>`;
+      html += `<td>${pct !== null ? sign + pct.toFixed(1) + '%' : '-'}</td>`;
+      html += `<td>${ciStr}</td>`;
+      html += `<td>${fmt(r.t_stat, 3)}</td>`;
+      html += `<td>${fmtP(r.p_value)}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('module2-table-wrap').innerHTML = html;
+    return;
+  }
+
+  let rows = [];
+  if (activeTtestTab === 'pooled') {
+    rows = D.pooledFrameTtests.filter(r => r.scale_mode === scale && r.split === 'test');
+  } else if (activeTtestTab === 'perfold') {
+    rows = D.perFoldFrameTtests.filter(r => r.scale_mode === scale);
+  } else {
+    rows = D.foldModelSummaryTtests.filter(r => r.scale_mode === scale);
+  }
+
+  if (metricFilter !== 'ALL') {
+    rows = rows.filter(r => r.metric === metricFilter);
+  }
+
+  let html = '<table><thead><tr>';
+  if (activeTtestTab === 'pooled') {
+    html += '<th>Model</th><th>Candidate vs Baseline (Held-out Test)</th><th>Metric</th><th>n (Unseen Frames)</th>';
+  } else if (activeTtestTab === 'perfold') {
+    html += '<th>Model</th><th>Fold</th><th>Candidate vs Baseline (Held-out Test)</th><th>Metric</th><th>n (Unseen Frames)</th>';
+  } else {
+    html += '<th>Analysis Unit</th><th>Split</th><th>Candidate vs Baseline</th><th>Metric</th><th>n (Pairs)</th>';
+  }
+  html += '<th>ssdr14v ★ Mean</th><th>Candidate Mean</th><th>Mean Diff Δ (Cand - ssdr14v)</th><th>95% CI of Δ</th><th>Cohen\'s dz</th><th>ssdr14v Win Rate</th><th>t-stat</th><th>p-value</th><th>p-Holm</th><th>Sig (α=0.05)</th></tr></thead><tbody>';
+
+  rows.forEach(r => {
+    html += '<tr>';
+    const comp = `${methodPill(r.candidate)} vs ${methodPill('ssdr14v')}`;
+    if (activeTtestTab === 'pooled') {
+      html += `<td><strong>${esc(r.model)}</strong></td><td>${comp}</td><td>${esc(r.metric_short)}</td>`;
+    } else if (activeTtestTab === 'perfold') {
+      html += `<td><strong>${esc(r.model)}</strong></td><td>Fold ${esc(r.fold_index)}</td><td>${comp}</td><td>${esc(r.metric_short)}</td>`;
+    } else {
+      html += `<td><strong>${esc(r.unit)}</strong></td><td><strong>${esc(r.split.toUpperCase())}</strong></td><td>${comp}</td><td>${esc(r.metric_short)}</td>`;
+    }
+
+    if (!r.n_pairs || r.n_pairs === 0) {
+      html += '<td colspan="11" style="color:#d97706;font-weight:600;">⏳ PENDING (Waiting for fold completion)</td></tr>';
+      return;
+    }
+
+    const pendNote = r.pending_folds > 0 ? ` <small style="color:#d97706;">(⏳${r.pending_folds})</small>` : '';
+    const diff = num(r.mean_diff);
+    const diffCls = diff !== null && diff > 0 ? 'delta-good' : (diff !== null && diff < 0 ? 'delta-bad' : '');
+    const pctStr = num(r.rel_diff_pct) !== null ? ` (${r.rel_diff_pct >= 0 ? '+' : ''}${num(r.rel_diff_pct).toFixed(1)}%)` : '';
+    const ciStr = (num(r.ci95_low) !== null && num(r.ci95_high) !== null)
+      ? `[${fmt(r.ci95_low, 3)}, ${fmt(r.ci95_high, 3)}]`
+      : '-';
+    const winStr = num(r.win_rate_ssdr14v) !== null ? `${num(r.win_rate_ssdr14v).toFixed(1)}%` : '-';
+    const sigBadge = (r.sig && r.sig !== 'ns')
+      ? `<span class="sig-yes">YES (${esc(r.sig)})</span>`
+      : `<span class="sig-no">ns</span>`;
+
+    html += `<td>${r.n_pairs}${pendNote}</td>`;
+    html += `<td><strong>${fmt(r.baseline_mean)}</strong></td>`;
+    html += `<td>${fmt(r.candidate_mean)}</td>`;
+    html += `<td class="${diffCls}">${diff !== null && diff > 0 ? '+' : ''}${fmt(diff)}${pctStr}</td>`;
+    html += `<td>${ciStr}</td>`;
+    html += `<td>${fmt(r.cohens_dz, 3)}</td>`;
+    html += `<td><strong>${winStr}</strong></td>`;
+    html += `<td>${fmt(r.t_stat, 3)}</td>`;
+    html += `<td>${fmtP(r.p_value)}</td>`;
+    html += `<td><strong>${fmtP(r.p_value_holm)}</strong></td>`;
+    html += `<td>${sigBadge}</td>`;
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('module2-table-wrap').innerHTML = html;
+}
+
+function choosePseudoLogC(vals) {
+  const pos = vals.filter(v => v !== null && v > 0).sort((a, b) => a - b);
+  if (pos.length < 2) return null;
+  const ratio = pos[pos.length - 1] / pos[0];
+  if (getAxisMode() === 'linear' || ratio < 40.0) return null;
+  const idx = Math.floor((pos.length - 1) * 0.15);
+  return Math.max(pos[idx], 1e-12);
+}
+
+function txY(v, c) {
+  const n = num(v);
+  if (n === null) return null;
+  if (c === null) return n;
+  return Math.log10(1 + Math.max(0, n) / c);
+}
+
+function invTxY(v, c) {
+  const n = num(v);
+  if (n === null) return null;
+  if (c === null) return n;
+  return c * (Math.pow(10, n) - 1);
+}
+
+function renderModule3A() {
+  const barMode = getBarMode();
+  const scale = getScale();
+  const container = document.getElementById('charts-model-grouped');
+  container.innerHTML = '';
+
+  const testRows = D.summaryRecords.filter(r => r.split === 'test' && r.scale_mode === scale && r.model !== 'ALL_5_MODELS');
+  const trainRows = D.summaryRecords.filter(r => r.split === 'train' && r.scale_mode === scale && r.model !== 'ALL_5_MODELS');
+  const models = D.meta.models;
+
+  D.meta.metrics_meta.forEach(m => {
+    const domId = `chart-m3a-${m.key}`;
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    const scSuffix = (scale === 'scaled' && m.scaled) ? ' (Model-Scaled)' : '';
+    card.innerHTML = `
+      <div class="chart-header">
+        <h3>${esc(m.label)}${scSuffix}</h3>
+        <div>
+          <button class="btn" onclick="exportChart('${domId}','svg','${domId}')">📥 SVG</button>
+          <button class="btn" onclick="exportChart('${domId}','png','${domId}')">🖼️ PNG</button>
+          <button class="btn" onclick="exportChart('${domId}','pdf','${domId}')">📄 PDF</button>
+        </div>
+      </div>
+      <div id="${domId}" class="chart-box"></div>
+    `;
+    container.appendChild(card);
+
+    const allVals = [];
+    [...testRows, ...trainRows].forEach(r => {
+      const mi = (r.metrics || {})[m.key] || {};
+      if (num(mi.mean) !== null) allVals.push(num(mi.mean));
+      if (num(mi.min) !== null) allVals.push(num(mi.min));
+      if (num(mi.max) !== null) allVals.push(num(mi.max));
+    });
+    const c = choosePseudoLogC(allVals);
+
+    // Build flat category axis per (Model, Method) or per Model so whiskers align 100% accurately
+    const categories = [];
+    const barSeriesTrain = [];
+    const barSeriesTest = [];
+    const whiskerData = [];
+
+    models.forEach((model, mIdx) => {
+      D.meta.methods.forEach((method) => {
+        const teRec = testRows.find(r => r.model === model && r.method === method);
+        const trRec = trainRows.find(r => r.model === model && r.method === method);
+        const miTe = (teRec && teRec.metrics && teRec.metrics[m.key]) || {};
+        const miTr = (trRec && trRec.metrics && trRec.metrics[m.key]) || {};
+
+        if (barMode === 'both') {
+          // Train bar slot
+          const idxTr = categories.length;
+          categories.push(`${model}\n${method} (Tr)`);
+          const vTr = num(miTr.mean);
+          barSeriesTrain.push({
+            value: vTr !== null ? txY(vTr, c) : 0,
+            itemStyle: { color: METHOD_TRAIN_COLORS[method], borderColor: METHOD_COLORS[method], borderWidth: 1.5, borderType: 'dashed' },
+            rawTe: miTe, rawTr: miTr, model: model, method: method, split: 'Train'
+          });
+          if (vTr !== null && num(miTr.min) !== null && num(miTr.max) !== null) {
+            whiskerData.push([idxTr, txY(miTr.min, c), txY(miTr.max, c)]);
+          }
+
+          // Test bar slot
+          const idxTe = categories.length;
+          categories.push(`${model}\n${method} (Te)`);
+          const vTe = num(miTe.mean);
+          const sig = (method !== 'ssdr14v' && miTe.sig && miTe.sig !== 'ns') ? miTe.sig : '';
+          barSeriesTrain.push({
+            value: vTe !== null ? txY(vTe, c) : 0,
+            itemStyle: { color: METHOD_COLORS[method] },
+            label: {
+              show: Boolean(sig) || method === 'ssdr14v',
+              position: 'top',
+              formatter: method === 'ssdr14v' ? '★' : sig,
+              color: method === 'ssdr14v' ? '#1C328A' : '#dc2626',
+              fontWeight: 'bold',
+              fontSize: 10
+            },
+            rawTe: miTe, rawTr: miTr, model: model, method: method, split: 'Held-out Test'
+          });
+          if (vTe !== null && num(miTe.min) !== null && num(miTe.max) !== null) {
+            whiskerData.push([idxTe, txY(miTe.min, c), txY(miTe.max, c)]);
+          }
+        } else {
+          const useRec = barMode === 'train' ? miTr : miTe;
+          const idxSlot = categories.length;
+          categories.push(`${model}\n${method}`);
+          const v = num(useRec.mean);
+          const sig = (barMode === 'test' && method !== 'ssdr14v' && miTe.sig && miTe.sig !== 'ns') ? miTe.sig : '';
+          barSeriesTrain.push({
+            value: v !== null ? txY(v, c) : 0,
+            itemStyle: { color: METHOD_COLORS[method] },
+            label: {
+              show: Boolean(sig) || method === 'ssdr14v',
+              position: 'top',
+              formatter: method === 'ssdr14v' ? '★' : sig,
+              color: method === 'ssdr14v' ? '#1C328A' : '#dc2626',
+              fontWeight: 'bold'
+            },
+            rawTe: miTe, rawTr: miTr, model: model, method: method, split: barMode === 'train' ? 'Train' : 'Held-out Test'
+          });
+          if (v !== null && num(useRec.min) !== null && num(useRec.max) !== null) {
+            whiskerData.push([idxSlot, txY(useRec.min, c), txY(useRec.max, c)]);
+          }
+        }
+      });
+      if (mIdx < models.length - 1) {
+        categories.push('');
+        barSeriesTrain.push({ value: null, isGap: true });
+      }
+    });
+
+    const series = [
+      {
+        name: '4-Fold Mean',
+        type: 'bar',
+        barMaxWidth: barMode === 'both' ? 18 : 26,
+        data: barSeriesTrain
+      }
+    ];
+
+    if (whiskerData.length > 0) {
+      series.push({
+        name: '4-Fold [Min, Max]',
+        type: 'custom',
+        z: 10,
+        data: whiskerData,
+        renderItem: (params, api) => {
+          const xIdx = api.value(0);
+          const lowPoint = api.coord([xIdx, api.value(1)]);
+          const highPoint = api.coord([xIdx, api.value(2)]);
+          const hw = 4;
+          return {
+            type: 'group',
+            children: [
+              { type: 'line', shape: { x1: lowPoint[0], y1: lowPoint[1], x2: highPoint[0], y2: highPoint[1] }, style: { stroke: '#0f172a', lineWidth: 1.3 } },
+              { type: 'line', shape: { x1: highPoint[0] - hw, y1: highPoint[1], x2: highPoint[0] + hw, y2: highPoint[1] }, style: { stroke: '#0f172a', lineWidth: 1.3 } },
+              { type: 'line', shape: { x1: lowPoint[0] - hw, y1: lowPoint[1], x2: lowPoint[0] + hw, y2: lowPoint[1] }, style: { stroke: '#0f172a', lineWidth: 1.3 } }
+            ]
+          };
+        }
+      });
+    }
+
+    const dom = document.getElementById(domId);
+    const chart = echarts.init(dom, null, { renderer: 'svg' });
+    chartInstances.push(chart);
+    chart.setOption({
+      animation: false,
+      tooltip: {
+        trigger: 'item',
+        formatter: (p) => {
+          const d = p.data || {};
+          if (d.isGap || !d.model) return '';
+          const te = d.rawTe || {};
+          const tr = d.rawTr || {};
+          const sig = (d.method !== 'ssdr14v' && te.sig) ? ` <b>[${esc(te.sig)}]</b>` : '';
+          return `<b>${esc(d.model)} | ${esc(d.method)}</b> (${esc(d.split)})<br/>`
+            + `<b>Held-out Test (4-Fold):</b> ${fmt(te.mean)} ± ${fmt(te.std, 3)} [${fmt(te.min, 3)}, ${fmt(te.max, 3)}]${sig}<br/>`
+            + `<b>Train (4-Fold):</b> ${fmt(tr.mean)} ± ${fmt(tr.std, 3)} [${fmt(tr.min, 3)}, ${fmt(tr.max, 3)}]<br/>`
+            + `<b>Gen. Gap (Test−Train):</b> ${fmt(te.gen_gap_mean, 3)}`;
+        }
+      },
+      grid: { top: 32, bottom: 85, left: 72, right: 18 },
+      xAxis: {
+        type: 'category',
+        data: categories,
+        axisLabel: {
+          interval: 0,
+          rotate: 45,
+          fontSize: 9,
+          formatter: (val) => val ? val.replace('\n', ' ') : ''
+        }
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        name: c !== null ? `${m.short} (pseudo-log)` : m.short,
+        axisLabel: { formatter: (v) => fmt(invTxY(v, c), 3) }
+      },
+      series: series
+    });
+  });
+}
+
+function renderModule3B() {
+  const split = document.getElementById('sel-fold-split').value;
+  const scale = getScale();
+  const metricKey = document.getElementById('sel-fold-metric').value;
+  const mMeta = D.meta.metrics_meta.find(x => x.key === metricKey) || D.meta.metrics_meta[0];
+  const metField = (scale === 'scaled' && mMeta.scaled) ? 'metrics_scaled' : 'metrics_raw';
+  const stField = (scale === 'scaled' && mMeta.scaled) ? 'frame_stats_scaled' : 'frame_stats_raw';
+
+  document.getElementById('title-perfold-chart').innerText =
+    `${mMeta.label} — Per-Fold Breakdown (${split === 'test' ? 'HELD-OUT TEST' : 'TRAIN'}, ${scale === 'scaled' && mMeta.scaled ? 'Model-Scaled' : 'Raw'})`;
+
+  const casesSplit = D.foldCases.filter(c => c.split === split);
+  const casesOther = D.foldCases.filter(c => c.split === (split === 'test' ? 'train' : 'test'));
+  const otherMap = {};
+  casesOther.forEach(c => { otherMap[`${c.model}_${c.fold_index}_${c.method}`] = c; });
+
+  const categories = [];
+  D.meta.models.forEach(model => {
+    D.meta.folds.forEach(f => {
+      categories.push(`${model}\nFold ${f}`);
+    });
+  });
+
+  const allVals = [];
+  casesSplit.forEach(c => {
+    const v = num((c[metField] || {})[metricKey]);
+    if (v !== null) allVals.push(v);
+  });
+  const cLog = choosePseudoLogC(allVals);
+
+  const series = D.meta.methods.map(method => {
+    const data = [];
+    D.meta.models.forEach(model => {
+      D.meta.folds.forEach(f => {
+        const rec = casesSplit.find(x => x.model === model && x.fold_index === f && x.method === method);
+        const oth = otherMap[`${model}_${f}_${method}`];
+        if (!rec || rec.status !== 'READY' || num((rec[metField] || {})[metricKey]) === null) {
+          data.push({
+            value: 0,
+            isPending: true,
+            model: model,
+            fold: f,
+            method: method,
+            itemStyle: { color: 'rgba(148,163,184,0.25)', borderColor: '#64748b', borderType: 'dashed', borderWidth: 1.5 },
+            label: { show: true, position: 'top', formatter: '⏳', fontSize: 11 }
+          });
+          return;
+        }
+        const v = num(rec[metField][metricKey]);
+        const vOth = oth && oth.status === 'READY' ? num((oth[metField] || {})[metricKey]) : null;
+        const fs = (rec[stField] || {})[metricKey] || {};
+        data.push({
+          value: txY(v, cLog),
+          rawVal: v,
+          otherVal: vOth,
+          frameStats: fs,
+          model: model,
+          fold: f,
+          method: method
+        });
+      });
+    });
+    return {
+      name: method === 'ssdr14v' ? 'ssdr14v ★ (Ours)' : method,
+      type: 'bar',
+      barGap: '12%',
+      itemStyle: { color: METHOD_COLORS[method] },
+      data: data
+    };
+  });
+
+  const dom = document.getElementById('chart-perfold-main');
+  let chart = echarts.getInstanceByDom(dom);
+  if (!chart) {
+    chart = echarts.init(dom, null, { renderer: 'svg' });
+    chartInstances.push(chart);
+  }
+  chart.setOption({
+    animation: false,
+    legend: { top: 4 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        let s = `<b>${esc(params[0].axisValue.replace('\n', ' | '))}</b><br/>`;
+        params.forEach(p => {
+          const d = p.data || {};
+          if (d.isPending) {
+            s += `${esc(p.seriesName)}: <b style="color:#d97706;">⏳ PENDING (running)</b><br/>`;
+          } else {
+            const fs = d.frameStats || {};
+            const othLabel = split === 'test' ? 'Train' : 'Held-out Test';
+            const rangeTxt = (num(fs.min) !== null && num(fs.max) !== null)
+              ? ` | frame [${fmt(fs.min, 3)}, ${fmt(fs.max, 3)}]`
+              : '';
+            s += `${esc(p.seriesName)}: <b>${fmt(d.rawVal)}</b> (${othLabel}: ${fmt(d.otherVal)})${rangeTxt}<br/>`;
+          }
+        });
+        return s;
+      }
+    },
+    grid: { top: 45, bottom: 85, left: 80, right: 25 },
+    xAxis: { type: 'category', data: categories, axisLabel: { interval: 0, rotate: 35, fontSize: 10 } },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      name: cLog !== null ? `${mMeta.short} (pseudo-log)` : mMeta.short,
+      axisLabel: { formatter: (v) => fmt(invTxY(v, cLog), 3) }
+    },
+    series: series
+  }, true);
+}
+
+function renderModule3C() {
+  const scale = getScale();
+  const model = document.getElementById('sel-traj-model').value;
+  const metricKey = document.getElementById('sel-traj-metric').value;
+  const mMeta = D.meta.metrics_meta.find(x => x.key === metricKey) || D.meta.metrics_meta[0];
+  const useScale = (scale === 'scaled' && mMeta.scaled) ? 'scaled' : 'raw';
+
+  document.getElementById('title-traj-chart').innerText =
+    `${model} — Held-out Unseen Test Frame Trajectory & Paired Δ(t) (${mMeta.label})`;
+
+  const trajObj = ((D.trajectories || {})[model] || {})[useScale] || { folds: [] };
+  const xLabels = [];
+  const byMethod = { ssdr12: [], ssdr14: [], ssdr14v: [] };
+  const diff12 = [];
+  const diff14 = [];
+
+  trajObj.folds.forEach((fObj) => {
+    const refF = (fObj.methods.ssdr14v && fObj.methods.ssdr14v.frame_indices.length > 0)
+      ? fObj.methods.ssdr14v.frame_indices
+      : ((fObj.methods.ssdr14 && fObj.methods.ssdr14.frame_indices.length > 0)
+          ? fObj.methods.ssdr14.frame_indices
+          : (fObj.methods.ssdr12 ? fObj.methods.ssdr12.frame_indices : []));
+
+    const len = refF.length;
+    if (len === 0) return;
+    for (let i = 0; i < len; i++) {
+      xLabels.push(`F${fObj.fold_index}:${refF[i]}`);
+      const v12 = ((fObj.methods.ssdr12.series || {})[metricKey] || [])[i] ?? null;
+      const v14 = ((fObj.methods.ssdr14.series || {})[metricKey] || [])[i] ?? null;
+      const v14v = ((fObj.methods.ssdr14v.series || {})[metricKey] || [])[i] ?? null;
+      byMethod.ssdr12.push(v12);
+      byMethod.ssdr14.push(v14);
+      byMethod.ssdr14v.push(v14v);
+      diff12.push((v12 !== null && v14v !== null) ? (v12 - v14v) : null);
+      diff14.push((v14 !== null && v14v !== null) ? (v14 - v14v) : null);
+    }
+  });
+
+  const dom = document.getElementById('chart-traj-main');
+  let chart = echarts.getInstanceByDom(dom);
+  if (!chart) {
+    chart = echarts.init(dom, null, { renderer: 'svg' });
+    chartInstances.push(chart);
+  }
+
+  chart.setOption({
+    animation: false,
+    legend: { top: 4 },
+    tooltip: { trigger: 'axis' },
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    grid: [
+      { top: 45, left: 80, right: 30, height: '42%' },
+      { top: '57%', left: 80, right: 30, height: '33%' }
+    ],
+    xAxis: [
+      { type: 'category', data: xLabels, gridIndex: 0, axisLabel: { show: false } },
+      { type: 'category', data: xLabels, gridIndex: 1, name: 'Test Fold : Original data1 Frame Index', nameLocation: 'middle', nameGap: 32 }
+    ],
+    yAxis: [
+      { type: 'value', gridIndex: 0, name: mMeta.short, scale: true },
+      { type: 'value', gridIndex: 1, name: 'Δ (Cand - ssdr14v)', scale: true }
+    ],
+    series: [
+      { name: 'ssdr12 (Test)', type: 'line', xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1.5, color: METHOD_COLORS.ssdr12 }, itemStyle: { color: METHOD_COLORS.ssdr12 }, data: byMethod.ssdr12 },
+      { name: 'ssdr14 (Test)', type: 'line', xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1.5, color: METHOD_COLORS.ssdr14 }, itemStyle: { color: METHOD_COLORS.ssdr14 }, data: byMethod.ssdr14 },
+      { name: 'ssdr14v ★ (Test)', type: 'line', xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 2.3, color: METHOD_COLORS.ssdr14v }, itemStyle: { color: METHOD_COLORS.ssdr14v }, data: byMethod.ssdr14v },
+      { name: 'Δ(ssdr12 - ssdr14v)', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, itemStyle: { color: 'rgba(217,119,6,0.55)' }, data: diff12 },
+      { name: 'Δ(ssdr14 - ssdr14v)', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, itemStyle: { color: 'rgba(124,58,237,0.65)' }, data: diff14 }
+    ]
+  }, true);
+}
+
+function setParetoPreset(xVal, yVal, modeVal) {
+  const xSel = document.getElementById('sel-pareto-x');
+  const ySel = document.getElementById('sel-pareto-y');
+  const mSel = document.getElementById('sel-pareto-mode');
+  if (xVal) xSel.value = xVal;
+  if (yVal) ySel.value = yVal;
+  if (modeVal) mSel.value = modeVal;
+  renderModule4();
+}
+
+function parseParetoAxisSpec(axisVal) {
+  if (axisVal.startsWith('wr:')) {
+    const mk = axisVal.slice(3);
+    const m = D.meta.metrics_meta.find(x => x.key === mk) || { key: mk, short: mk, label: mk, scaled: false };
+    return {
+      isWinRate: true,
+      metricKey: mk,
+      short: `Win Rate (%): ${m.short}`,
+      label: `🏆 ssdr14v ★ Frame Win Rate (%) on ${m.short} ↑`,
+      scaled: false
+    };
+  }
+  const m = D.meta.metrics_meta.find(x => x.key === axisVal) || { key: axisVal, short: axisVal, label: axisVal, scaled: false };
+  return {
+    isWinRate: false,
+    metricKey: m.key,
+    short: m.short,
+    label: `📉 ${m.label}`,
+    scaled: Boolean(m.scaled)
+  };
+}
+
+function renderModule4() {
+  const scale = getScale();
+  const xSpec = parseParetoAxisSpec(document.getElementById('sel-pareto-x').value);
+  const ySpec = parseParetoAxisSpec(document.getElementById('sel-pareto-y').value);
+  const scatterMode = document.getElementById('sel-pareto-mode').value;
+  const splitFilter = document.getElementById('sel-pareto-split').value;
+  const splits = splitFilter === 'both' ? ['test', 'train'] : [splitFilter];
+
+  document.getElementById('title-pareto-chart').innerText =
+    `${xSpec.short}  vs.  ${ySpec.short}`;
+
+  const dom = document.getElementById('chart-pareto-cv');
+  let chart = echarts.getInstanceByDom(dom);
+  if (!chart) {
+    chart = echarts.init(dom, null, { renderer: 'svg' });
+    chartInstances.push(chart);
+  }
+
+  // Build markLines for 50% parity if X and/or Y is a Win Rate axis
+  const markLineData = [];
+  if (xSpec.isWinRate) markLineData.push({ xAxis: 50, name: 'X=50% Parity' });
+  if (ySpec.isWinRate) markLineData.push({ yAxis: 50, name: 'Y=50% Parity' });
+
+  if (scatterMode === 'pairwise' || scatterMode === 'pairwise_pooled') {
+    const includePerFold = scatterMode === 'pairwise';
+    const pooledRows = D.pooledFrameTtests.filter(r => r.scale_mode === scale);
+    const perFoldRows = D.perFoldFrameTtests.filter(r => r.scale_mode === scale);
+    const sumRows = D.summaryRecords.filter(r => r.scale_mode === scale);
+
+    const getPooledCoord = (sp, model, cand, spec) => {
+      if (spec.isWinRate) {
+        const rec = pooledRows.find(r => r.split === sp && r.model === model && r.candidate === cand && r.metric === spec.metricKey);
+        return rec ? { val: num(rec.win_rate_ssdr14v), rec: rec } : { val: null, rec: null };
+      }
+      const sRec = sumRows.find(r => r.split === sp && r.model === model && r.method === cand);
+      const mi = (sRec && sRec.metrics && sRec.metrics[spec.metricKey]) || {};
+      return { val: num(mi.mean), rec: mi };
+    };
+
+    const getFoldCoord = (sp, model, foldIdx, cand, spec) => {
+      if (spec.isWinRate) {
+        const rec = perFoldRows.find(r => r.split === sp && r.model === model && r.fold_index === foldIdx && r.candidate === cand && r.metric === spec.metricKey);
+        return rec ? { val: num(rec.win_rate_ssdr14v), rec: rec } : { val: null, rec: null };
+      }
+      const cRec = D.foldCases.find(c => c.split === sp && c.model === model && c.fold_index === foldIdx && c.method === cand && c.status === 'READY');
+      if (!cRec) return { val: null, rec: null };
+      const mf = (scale === 'scaled' && spec.scaled) ? 'metrics_scaled' : 'metrics_raw';
+      return { val: num((cRec[mf] || {})[spec.metricKey]), rec: cRec };
+    };
+
+    const rawXAll = [];
+    const rawYAll = [];
+    const collectPts = [];
+
+    ['ssdr12', 'ssdr14'].forEach(cand => {
+      splits.forEach(sp => {
+        // 1. Pooled Model points (5 models + ALL_5_MODELS)
+        [...D.meta.models, 'ALL_5_MODELS'].forEach(model => {
+          const cx = getPooledCoord(sp, model, cand, xSpec);
+          const cy = getPooledCoord(sp, model, cand, ySpec);
+          if (cx.val !== null && cy.val !== null) {
+            rawXAll.push(cx.val);
+            rawYAll.push(cy.val);
+            collectPts.push({
+              kind: 'pooled',
+              cand: cand,
+              split: sp,
+              model: model,
+              fold: 'ALL_4_FOLDS',
+              rawX: cx.val,
+              rawY: cy.val,
+              recX: cx.rec,
+              recY: cy.rec
+            });
+          }
+        });
+        // 2. Per-fold points
+        if (includePerFold) {
+          D.meta.models.forEach(model => {
+            D.meta.folds.forEach(fIdx => {
+              const cx = getFoldCoord(sp, model, fIdx, cand, xSpec);
+              const cy = getFoldCoord(sp, model, fIdx, cand, ySpec);
+              if (cx.val !== null && cy.val !== null) {
+                rawXAll.push(cx.val);
+                rawYAll.push(cy.val);
+                collectPts.push({
+                  kind: 'fold',
+                  cand: cand,
+                  split: sp,
+                  model: model,
+                  fold: `Fold ${fIdx}`,
+                  rawX: cx.val,
+                  rawY: cy.val,
+                  recX: cx.rec,
+                  recY: cy.rec
+                });
+              }
+            });
+          });
+        }
+      });
+    });
+
+    const cxLog = xSpec.isWinRate ? null : choosePseudoLogC(rawXAll);
+    const cyLog = ySpec.isWinRate ? null : choosePseudoLogC(rawYAll);
+
+    const series = [];
+    ['ssdr12', 'ssdr14'].forEach(cand => {
+      splits.forEach(sp => {
+        const pooledData = collectPts
+          .filter(pt => pt.cand === cand && pt.split === sp && pt.kind === 'pooled')
+          .map(pt => ({
+            value: [txY(pt.rawX, cxLog), txY(pt.rawY, cyLog)],
+            pt: pt,
+            symbolSize: pt.model === 'ALL_5_MODELS' ? 22 : 16,
+            label: {
+              show: true,
+              position: 'top',
+              formatter: pt.model === 'ALL_5_MODELS' ? '★ ALL_5' : pt.model.replace('Winter_Samurai', 'Winter').replace('Griffin_A2', 'Griffin'),
+              fontSize: 10,
+              fontWeight: 'bold',
+              color: '#0f172a'
+            }
+          }));
+
+        series.push({
+          name: `ssdr14v ★ vs. ${cand} (4-Fold Pooled ${sp === 'test' ? 'Test' : 'Train'})`,
+          type: 'scatter',
+          symbol: sp === 'test' ? 'diamond' : 'emptyDiamond',
+          itemStyle: {
+            color: METHOD_COLORS[cand],
+            opacity: 0.96,
+            borderColor: '#0f172a',
+            borderWidth: 1.2
+          },
+          data: pooledData,
+          markLine: markLineData.length > 0 ? {
+            silent: true,
+            symbol: 'none',
+            lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
+            label: { color: '#dc2626', fontWeight: 'bold', fontSize: 10 },
+            data: markLineData
+          } : undefined
+        });
+
+        if (includePerFold) {
+          const foldData = collectPts
+            .filter(pt => pt.cand === cand && pt.split === sp && pt.kind === 'fold')
+            .map(pt => ({
+              value: [txY(pt.rawX, cxLog), txY(pt.rawY, cyLog)],
+              pt: pt,
+              symbolSize: 9
+            }));
+
+          series.push({
+            name: `ssdr14v ★ vs. ${cand} (Individual Folds ${sp === 'test' ? 'Test' : 'Train'})`,
+            type: 'scatter',
+            symbol: sp === 'test' ? 'circle' : 'emptyCircle',
+            itemStyle: {
+              color: METHOD_COLORS[cand],
+              opacity: 0.42
+            },
+            data: foldData
+          });
+        }
+      });
+    });
+
+    chart.setOption({
+      animation: false,
+      legend: { top: 4, type: 'scroll' },
+      tooltip: {
+        trigger: 'item',
+        formatter: (p) => {
+          const pt = (p.data && p.data.pt) || {};
+          if (!pt.model) return '';
+          const xValStr = xSpec.isWinRate ? `${pt.rawX.toFixed(1)}%` : fmt(pt.rawX);
+          const yValStr = ySpec.isWinRate ? `${pt.rawY.toFixed(1)}%` : fmt(pt.rawY);
+          const xSig = (xSpec.isWinRate && pt.recX && pt.recX.sig) ? ` [${esc(pt.recX.sig)}, p=${fmtP(pt.recX.p_value_holm)}]` : '';
+          const ySig = (ySpec.isWinRate && pt.recY && pt.recY.sig) ? ` [${esc(pt.recY.sig)}, p=${fmtP(pt.recY.p_value_holm)}]` : '';
+          return `<b>${esc(pt.model)} (${esc(pt.fold)}, ${esc(pt.split.toUpperCase())})</b><br/>`
+            + `Comparison: <b>ssdr14v ★ vs. ${esc(pt.cand)}</b><br/>`
+            + `${esc(xSpec.short)}: <b>${xValStr}</b>${xSig}<br/>`
+            + `${esc(ySpec.short)}: <b>${yValStr}</b>${ySig}`;
+        }
+      },
+      grid: { top: 48, bottom: 58, left: 85, right: 40 },
+      xAxis: {
+        type: 'value',
+        min: xSpec.isWinRate ? 0 : undefined,
+        max: xSpec.isWinRate ? 105 : undefined,
+        scale: !xSpec.isWinRate,
+        name: xSpec.label,
+        nameLocation: 'middle',
+        nameGap: 34,
+        axisLabel: { formatter: (v) => xSpec.isWinRate ? (v <= 100 ? `${v}%` : '') : fmt(invTxY(v, cxLog), 3) }
+      },
+      yAxis: {
+        type: 'value',
+        min: ySpec.isWinRate ? 0 : undefined,
+        max: ySpec.isWinRate ? 105 : undefined,
+        scale: !ySpec.isWinRate,
+        name: ySpec.label,
+        nameLocation: 'middle',
+        nameGap: 60,
+        axisLabel: { formatter: (v) => ySpec.isWinRate ? (v <= 100 ? `${v}%` : '') : fmt(invTxY(v, cyLog), 3) }
+      },
+      series: series
+    }, true);
+    return;
+  }
+
+  // --- Mode B: 3-Method Head-to-Head Scatter (ssdr12, ssdr14, ssdr14v ★) ---
+  const cases = D.foldCases.filter(c => c.status === 'READY' && splits.includes(c.split));
+  const getCaseCoord = (c, spec) => {
+    if (spec.isWinRate) {
+      return num((c.win_rates_h2h || {})[spec.metricKey]);
+    }
+    const mf = (scale === 'scaled' && spec.scaled) ? 'metrics_scaled' : 'metrics_raw';
+    return num((c[mf] || {})[spec.metricKey]);
+  };
+
+  const xVals = [];
+  const yVals = [];
+  cases.forEach(c => {
+    const vx = getCaseCoord(c, xSpec);
+    const vy = getCaseCoord(c, ySpec);
+    if (vx !== null && vy !== null) {
+      xVals.push(vx);
+      yVals.push(vy);
+    }
+  });
+  const cxLog = xSpec.isWinRate ? null : choosePseudoLogC(xVals);
+  const cyLog = ySpec.isWinRate ? null : choosePseudoLogC(yVals);
+
+  const series = [];
+  D.meta.methods.forEach(method => {
+    splits.forEach(sp => {
+      const pts = [];
+      cases.filter(c => c.method === method && c.split === sp).forEach(c => {
+        const rx = getCaseCoord(c, xSpec);
+        const ry = getCaseCoord(c, ySpec);
+        if (rx === null || ry === null) return;
+        pts.push({
+          value: [txY(rx, cxLog), txY(ry, cyLog)],
+          rawX: rx,
+          rawY: ry,
+          model: c.model,
+          fold: c.fold_index,
+          method: method,
+          split: sp
+        });
+      });
+      series.push({
+        name: `${method}${method === 'ssdr14v' ? ' ★' : ''} (${sp === 'test' ? 'Held-out Test' : 'Train'})`,
+        type: 'scatter',
+        symbolSize: sp === 'test' ? (method === 'ssdr14v' ? 16 : 12) : 9,
+        symbol: sp === 'test' ? (method === 'ssdr14v' ? 'diamond' : 'circle') : 'emptyCircle',
+        itemStyle: { color: METHOD_COLORS[method], opacity: sp === 'test' ? 0.92 : 0.45 },
+        data: pts,
+        markLine: (markLineData.length > 0 && series.length === 0) ? {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
+          label: { color: '#dc2626', fontWeight: 'bold', fontSize: 10 },
+          data: markLineData
+        } : undefined
+      });
+    });
+  });
+
+  chart.setOption({
+    animation: false,
+    legend: { top: 4, type: 'scroll' },
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const d = p.data || {};
+        const xStr = xSpec.isWinRate ? `${d.rawX.toFixed(1)}%` : fmt(d.rawX);
+        const yStr = ySpec.isWinRate ? `${d.rawY.toFixed(1)}%` : fmt(d.rawY);
+        return `<b>${esc(d.model)} | Fold ${d.fold} (${esc(d.split.toUpperCase())})</b><br/>`
+          + `Method: <b>${esc(d.method)}</b><br/>`
+          + `${esc(xSpec.short)}: <b>${xStr}</b><br/>`
+          + `${esc(ySpec.short)}: <b>${yStr}</b>`;
+      }
+    },
+    grid: { top: 48, bottom: 58, left: 85, right: 40 },
+    xAxis: {
+      type: 'value',
+      min: xSpec.isWinRate ? 0 : undefined,
+      max: xSpec.isWinRate ? 105 : undefined,
+      scale: !xSpec.isWinRate,
+      name: xSpec.label,
+      nameLocation: 'middle',
+      nameGap: 34,
+      axisLabel: { formatter: (v) => xSpec.isWinRate ? (v <= 100 ? `${v}%` : '') : fmt(invTxY(v, cxLog), 3) }
+    },
+    yAxis: {
+      type: 'value',
+      min: ySpec.isWinRate ? 0 : undefined,
+      max: ySpec.isWinRate ? 105 : undefined,
+      scale: !ySpec.isWinRate,
+      name: ySpec.label,
+      nameLocation: 'middle',
+      nameGap: 60,
+      axisLabel: { formatter: (v) => ySpec.isWinRate ? (v <= 100 ? `${v}%` : '') : fmt(invTxY(v, cyLog), 3) }
+    },
+    series: series
+  }, true);
+}
+
+function renderModule5() {
+  const scale = getScale();
+  const modelFilter = document.getElementById('sel-detail-model').value;
+  let testCases = D.foldCases.filter(c => c.split === 'test');
+  const trainMap = {};
+  D.foldCases.filter(c => c.split === 'train').forEach(c => {
+    trainMap[`${c.model}_${c.fold_index}_${c.method}`] = c;
+  });
+
+  if (modelFilter !== 'ALL') {
+    testCases = testCases.filter(c => c.model === modelFilter);
+  }
+
+  let html = '<table><thead><tr><th>Row ID</th><th>Status</th><th>Model</th><th>Fold</th><th>Method</th><th>Frames (Train / Test)</th><th>Pool Dir</th>';
+  D.meta.metrics_meta.forEach(m => {
+    html += `<th>${esc(m.short)}<br/><small style="color:#64748b;">Test ★ | Train | Gap</small></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  testCases.forEach(c => {
+    const tr = trainMap[`${c.model}_${c.fold_index}_${c.method}`] || {};
+    html += '<tr>';
+    html += `<td><code>${esc(c.row_id)}</code></td>`;
+    if (c.status !== 'READY') {
+      html += `<td><span class="badge badge-pending">⏳ PENDING</span></td>`;
+      html += `<td><strong>${esc(c.model)}</strong></td><td>Fold ${c.fold_index}</td><td>${methodPill(c.method)}</td>`;
+      html += `<td colspan="${2 + D.meta.metrics_meta.length}" style="color:#d97706;font-weight:600;">Running on cluster...</td></tr>`;
+      return;
+    }
+    html += `<td><span class="badge badge-ready">READY</span></td>`;
+    html += `<td><strong>${esc(c.model)}</strong></td><td>Fold ${c.fold_index}</td><td>${methodPill(c.method)}</td>`;
+    html += `<td>${tr.frame_count ?? '-'} / <b>${c.frame_count ?? '-'}</b></td><td><code>${esc(c.data_dir)}</code></td>`;
+
+    D.meta.metrics_meta.forEach(m => {
+      const metField = (scale === 'scaled' && m.scaled) ? 'metrics_scaled' : 'metrics_raw';
+      const vTe = num((c[metField] || {})[m.key]);
+      const vTr = num((tr[metField] || {})[m.key]);
+      const gap = (vTe !== null && vTr !== null) ? (vTe - vTr) : null;
+      const sign = gap !== null && gap >= 0 ? '+' : '';
+      html += `<td><div><b>Test: ${fmt(vTe)}</b></div>`
+        + `<div style="font-size:0.82em;color:#475569;">Train: ${fmt(vTr)} | Gap: ${sign}${fmt(gap, 3)}</div></td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('module5-table-wrap').innerHTML = html;
+}
+
+window.exportChart = function(domId, format, filename) {
+  const dom = document.getElementById(domId);
+  const svgNode = dom ? dom.querySelector('svg') : null;
+  if (!svgNode) return;
+  let svgContent = svgNode.outerHTML;
+  if (!svgContent.includes('xmlns="http://www.w3.org/2000/svg"')) {
+    svgContent = svgContent.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+  }
+  if (format === 'svg') {
+    const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename + '.svg';
+    a.click();
+    return;
+  }
+  const bbox = svgNode.getBoundingClientRect();
+  const w = bbox.width || 1000, h = bbox.height || 520;
+  const canvas = document.createElement('canvas');
+  canvas.width = w * 2; canvas.height = h * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const img = new Image();
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    if (format === 'png') {
+      canvas.toBlob(b => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = filename + '.png';
+        a.click();
+      }, 'image/png');
+    } else if (format === 'pdf' && window.jspdf) {
+      const doc = new window.jspdf.jsPDF({ orientation: w >= h ? 'l' : 'p', unit: 'pt', format: [w, h] });
+      doc.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, w, h);
+      doc.save(filename + '.pdf');
+    }
+  };
+  img.src = URL.createObjectURL(new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' }));
+};
+
+
+function renderWinRateCharts() {
+  const scale = getScale();
+  const selModel = document.getElementById('sel-winrate-model').value || 'ALL_5_MODELS';
+  const selMetric = document.getElementById('sel-winrate-metric').value || '04_L2_Err';
+  const rows = D.pooledFrameTtests.filter(r => r.scale_mode === scale && r.split === 'test');
+
+  // --- Left Chart: Win Rate across all frame-level metrics for selModel ---
+  const frameMetrics = D.meta.metrics_meta.filter(m => Boolean(m.npz));
+  const mLabels = frameMetrics.map(m => m.short);
+
+  const buildBarSeriesForModel = (cand) => {
+    return frameMetrics.map(m => {
+      const rec = rows.find(r => r.model === selModel && r.candidate === cand && r.metric === m.key);
+      const wr = rec ? num(rec.win_rate_ssdr14v) : null;
+      if (wr === null) {
+        return { value: 0, isPending: true, metricShort: m.short, candidate: cand };
+      }
+      const sig = (rec.sig && rec.sig !== 'ns') ? ` ${rec.sig}` : '';
+      return {
+        value: Number(wr.toFixed(1)),
+        raw: rec,
+        metricShort: m.short,
+        candidate: cand,
+        label: {
+          show: true,
+          position: 'top',
+          formatter: `${wr.toFixed(1)}%${sig}`,
+          fontSize: 10,
+          fontWeight: 'bold',
+          color: wr >= 50.0 ? '#0f172a' : '#dc2626'
+        }
+      };
+    });
+  };
+
+  document.getElementById('title-winrate-metrics').innerText =
+    `🏆 ssdr14v ★ Unseen Test Win Rate (%) by Metric (${selModel})`;
+
+  const domLeft = document.getElementById('chart-winrate-metrics');
+  let chartLeft = echarts.getInstanceByDom(domLeft);
+  if (!chartLeft) {
+    chartLeft = echarts.init(domLeft, null, { renderer: 'svg' });
+    chartInstances.push(chartLeft);
+  }
+  chartLeft.setOption({
+    animation: false,
+    legend: { top: 4 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        let s = `<b>${esc(selModel)} — ${esc(params[0].axisValue)}</b> (Held-out Test)<br/>`;
+        params.forEach(p => {
+          const d = p.data || {};
+          const r = d.raw || {};
+          if (d.isPending) {
+            s += `${esc(p.seriesName)}: <b>⏳ PENDING</b><br/>`;
+          } else {
+            const wins = Math.round((num(r.win_rate_ssdr14v) / 100.0) * (r.n_pairs || 0));
+            s += `${esc(p.seriesName)}: <b>${num(r.win_rate_ssdr14v).toFixed(1)}%</b> (${wins}/${r.n_pairs} frames)<br/>`
+              + `&nbsp;&nbsp;Mean Δ: <b>${fmt(r.mean_diff)}</b> | Cohen's dz: <b>${fmt(r.cohens_dz, 3)}</b> | p-Holm: <b>${fmtP(r.p_value_holm)} (${esc(r.sig || 'ns')})</b><br/>`;
+          }
+        });
+        return s;
+      }
+    },
+    grid: { top: 44, bottom: 52, left: 58, right: 24 },
+    xAxis: { type: 'category', data: mLabels, axisLabel: { interval: 0, fontWeight: 'bold', fontSize: 11 } },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 108,
+      interval: 20,
+      name: 'ssdr14v Win Rate (%)',
+      axisLabel: { formatter: (v) => v <= 100 ? `${v}%` : '' }
+    },
+    series: [
+      {
+        name: 'ssdr14v ★ vs. ssdr12 (unconstrained)',
+        type: 'bar',
+        barGap: '18%',
+        barMaxWidth: 32,
+        itemStyle: { color: '#d97706', borderRadius: [4, 4, 0, 0] },
+        data: buildBarSeriesForModel('ssdr12'),
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
+          label: { formatter: '50% Parity', position: 'insideEndTop', color: '#dc2626', fontWeight: 'bold' },
+          data: [{ yAxis: 50 }]
+        }
+      },
+      {
+        name: 'ssdr14v ★ vs. ssdr14 (monotonic)',
+        type: 'bar',
+        barMaxWidth: 32,
+        itemStyle: { color: '#7c3aed', borderRadius: [4, 4, 0, 0] },
+        data: buildBarSeriesForModel('ssdr14')
+      }
+    ]
+  }, true);
+
+  // --- Right Chart: Win Rate across all models (+ ALL_5_MODELS) for selMetric ---
+  const mMeta = frameMetrics.find(m => m.key === selMetric) || frameMetrics[0];
+  const modelsAxis = [...D.meta.models, 'ALL_5_MODELS'];
+
+  const buildBarSeriesForMetric = (cand) => {
+    return modelsAxis.map(modelName => {
+      const rec = rows.find(r => r.model === modelName && r.candidate === cand && r.metric === mMeta.key);
+      const wr = rec ? num(rec.win_rate_ssdr14v) : null;
+      if (wr === null) {
+        return { value: 0, isPending: true, model: modelName, candidate: cand };
+      }
+      const sig = (rec.sig && rec.sig !== 'ns') ? ` ${rec.sig}` : '';
+      return {
+        value: Number(wr.toFixed(1)),
+        raw: rec,
+        model: modelName,
+        candidate: cand,
+        label: {
+          show: true,
+          position: 'top',
+          formatter: `${wr.toFixed(1)}%${sig}`,
+          fontSize: 10,
+          fontWeight: 'bold',
+          color: wr >= 50.0 ? '#0f172a' : '#dc2626'
+        }
+      };
+    });
+  };
+
+  document.getElementById('title-winrate-models').innerText =
+    `🏆 ssdr14v ★ Unseen Test Win Rate (%) Across Models (${mMeta.short})`;
+
+  const domRight = document.getElementById('chart-winrate-models');
+  let chartRight = echarts.getInstanceByDom(domRight);
+  if (!chartRight) {
+    chartRight = echarts.init(domRight, null, { renderer: 'svg' });
+    chartInstances.push(chartRight);
+  }
+  chartRight.setOption({
+    animation: false,
+    legend: { top: 4 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        let s = `<b>${esc(params[0].axisValue)} — ${esc(mMeta.short)}</b> (Held-out Test)<br/>`;
+        params.forEach(p => {
+          const d = p.data || {};
+          const r = d.raw || {};
+          if (d.isPending) {
+            s += `${esc(p.seriesName)}: <b>⏳ PENDING</b><br/>`;
+          } else {
+            const wins = Math.round((num(r.win_rate_ssdr14v) / 100.0) * (r.n_pairs || 0));
+            s += `${esc(p.seriesName)}: <b>${num(r.win_rate_ssdr14v).toFixed(1)}%</b> (${wins}/${r.n_pairs} frames)<br/>`
+              + `&nbsp;&nbsp;ssdr14v Mean: <b>${fmt(r.baseline_mean)}</b> vs Cand: <b>${fmt(r.candidate_mean)}</b> | p-Holm: <b>${fmtP(r.p_value_holm)} (${esc(r.sig || 'ns')})</b><br/>`;
+          }
+        });
+        return s;
+      }
+    },
+    grid: { top: 44, bottom: 52, left: 58, right: 24 },
+    xAxis: { type: 'category', data: modelsAxis, axisLabel: { interval: 0, fontWeight: 'bold', fontSize: 10.5 } },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 108,
+      interval: 20,
+      name: 'ssdr14v Win Rate (%)',
+      axisLabel: { formatter: (v) => v <= 100 ? `${v}%` : '' }
+    },
+    series: [
+      {
+        name: 'ssdr14v ★ vs. ssdr12 (unconstrained)',
+        type: 'bar',
+        barGap: '18%',
+        barMaxWidth: 32,
+        itemStyle: { color: '#d97706', borderRadius: [4, 4, 0, 0] },
+        data: buildBarSeriesForMetric('ssdr12'),
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
+          label: { formatter: '50% Parity', position: 'insideEndTop', color: '#dc2626', fontWeight: 'bold' },
+          data: [{ yAxis: 50 }]
+        }
+      },
+      {
+        name: 'ssdr14v ★ vs. ssdr14 (monotonic)',
+        type: 'bar',
+        barMaxWidth: 32,
+        itemStyle: { color: '#7c3aed', borderRadius: [4, 4, 0, 0] },
+        data: buildBarSeriesForMetric('ssdr14')
+      }
+    ]
+  }, true);
+}
+
+function renderAll() {
+  chartInstances.splice(0, chartInstances.length);
+  renderStatusBadge();
+  renderModule1();
+  renderWinRateCharts();
+  renderModule2();
+  renderModule3A();
+  renderModule3B();
+  renderModule3C();
+  renderModule4();
+  renderModule5();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const ttestSel = document.getElementById('sel-ttest-metric');
+  const foldMetSel = document.getElementById('sel-fold-metric');
+  const trajMetSel = document.getElementById('sel-traj-metric');
+  D.meta.metrics_meta.forEach(m => {
+    ttestSel.innerHTML += `<option value="${esc(m.key)}">${esc(m.short)}</option>`;
+    foldMetSel.innerHTML += `<option value="${esc(m.key)}">${esc(m.label)}</option>`;
+    if (m.npz) {
+      trajMetSel.innerHTML += `<option value="${esc(m.key)}">${esc(m.label)}</option>`;
+    }
+  });
+
+  const trajModSel = document.getElementById('sel-traj-model');
+  const detModSel = document.getElementById('sel-detail-model');
+  const wrModSel = document.getElementById('sel-winrate-model');
+  const wrMetSel = document.getElementById('sel-winrate-metric');
+  D.meta.metrics_meta.forEach(m => {
+    if (m.npz) {
+      wrMetSel.innerHTML += `<option value="${esc(m.key)}">${esc(m.short)}</option>`;
+    }
+  });
+  D.meta.models.forEach(m => {
+    trajModSel.innerHTML += `<option value="${esc(m)}">${esc(m)}</option>`;
+    detModSel.innerHTML += `<option value="${esc(m)}">${esc(m)}</option>`;
+    wrModSel.innerHTML += `<option value="${esc(m)}">${esc(m)}</option>`;
+  });
+  wrModSel.addEventListener('change', renderWinRateCharts);
+  wrMetSel.addEventListener('change', renderWinRateCharts);
+  ttestSel.addEventListener('change', () => {
+    if (ttestSel.value !== 'ALL' && Array.from(wrMetSel.options).some(o => o.value === ttestSel.value)) {
+      wrMetSel.value = ttestSel.value;
+      renderWinRateCharts();
+    }
+  });
+
+  ['sel-bar-mode', 'sel-scale', 'sel-axis'].forEach(id => {
+    document.getElementById(id).addEventListener('change', renderAll);
+  });
+  document.getElementById('sel-m1-layout').addEventListener('change', renderModule1);
+  ttestSel.addEventListener('change', renderModule2);
+  document.getElementById('sel-fold-split').addEventListener('change', renderModule3B);
+  foldMetSel.addEventListener('change', renderModule3B);
+  trajModSel.addEventListener('change', renderModule3C);
+  trajMetSel.addEventListener('change', renderModule3C);
+  const pxSel = document.getElementById('sel-pareto-x');
+  const pySel = document.getElementById('sel-pareto-y');
+  let wrOptHtml = '<optgroup label="🏆 Frame-Level Win Rate (%) [↑ Higher = Better]">';
+  let errOptHtml = '<optgroup label="📉 Error / Distortion Metrics [↓ Lower = Better]">';
+  D.meta.metrics_meta.forEach(m => {
+    if (m.npz) {
+      wrOptHtml += `<option value="wr:${esc(m.key)}">🏆 Win Rate (%): ${esc(m.short)} ↑</option>`;
+    }
+    errOptHtml += `<option value="${esc(m.key)}">📉 ${esc(m.label)}</option>`;
+  });
+  wrOptHtml += '</optgroup>';
+  errOptHtml += '</optgroup>';
+  pxSel.innerHTML = wrOptHtml + errOptHtml;
+  pySel.innerHTML = wrOptHtml + errOptHtml;
+  pxSel.value = 'wr:04_L2_Err';
+  pySel.value = 'wr:04_Org_Loss';
+
+  pxSel.addEventListener('change', renderModule4);
+  pySel.addEventListener('change', renderModule4);
+  document.getElementById('sel-pareto-mode').addEventListener('change', renderModule4);
+  document.getElementById('sel-pareto-split').addEventListener('change', renderModule4);
+  detModSel.addEventListener('change', renderModule5);
+
+  window.addEventListener('resize', () => {
+    chartInstances.forEach(c => { try { c.resize(); } catch (_) {} });
+  });
+
+  renderAll();
+});
+</script>
+</body>
+</html>

@@ -3,43 +3,16 @@
 from __future__ import annotations
 
 """
-Aggregate OGD-LBS experiment metrics.
-
-Supported layouts:
-
-1. OFAT sweep output from scripts/experiments/run_param_sweep.py
-
-    <input_root>/<MODEL>/sweep_<param>/<case_id>/
-    ├── case_config.json
-    ├── metrics_04.json
-    └── data4/step04_optimize_summary.json
-
-2. 4-fold CV output from scripts/experiments/run_4fold_cv.py
-
-    <input_root>/<MODEL>/fold_00/
-    ├── fold_plan.json
-    ├── train/
-    │   ├── metrics_04.json
-    │   └── data4/step04_optimize_summary.json
-    └── test/
-        ├── metrics_04.json
-        └── data4_test/step04_optimize_summary.json
-
-3. Generic recursive metrics_04.json discovery.
-
-Outputs:
-    aggregated_metrics.csv/json
-    summary_by_group.csv
-    summary_table.md
-    summary_table.tex
-    optional ttest_results.csv/json/md
+Aggregate OGD-LBS experiment metrics and compute paired / Welch t-tests
+with effect sizes (Cohen's dz / d), 95% confidence intervals, and Holm-Bonferroni
+multiple-comparison correction.
 """
 
 import argparse
 import csv
 import math
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
@@ -49,9 +22,9 @@ except ModuleNotFoundError:  # pragma: no cover
     from ._env import REPO_ROOT  # noqa: F401
 
 try:
-    from experiment_io import dump_json, load_json, json_safe
+    from experiment_io import dump_json, load_json, json_safe  # noqa: F401
 except ModuleNotFoundError:  # pragma: no cover
-    from .experiment_io import dump_json, load_json, json_safe
+    from .experiment_io import dump_json, load_json, json_safe  # noqa: F401
 
 
 DEFAULT_METRICS = [
@@ -126,7 +99,7 @@ def parse_args() -> argparse.Namespace:
         default="",
         help=(
             "Comma-separated row filter query applied after discovery, e.g. "
-            "\"param=alpha\" or \"param=beta,value=0.3\"."
+            '"param=alpha" or "param=beta,value=0.3".'
         ),
     )
     parser.add_argument(
@@ -150,6 +123,8 @@ def is_scalar(value: Any) -> bool:
 
 def maybe_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
         return None
     try:
         x = float(value)
@@ -214,8 +189,10 @@ def add_history_npz_stats(row: dict[str, Any], npz_path: Path) -> None:
         return
 
     try:
-        with np.load(npz_path, allow_pickle=True) as npz:
+        with np.load(npz_path, allow_pickle=False) as npz:
             for key in npz.files:
+                if key == "frame_indices":
+                    continue
                 arr = np.asarray(npz[key])
                 if not np.issubdtype(arr.dtype, np.number):
                     continue
@@ -237,6 +214,7 @@ def find_step04_summary_for_run(run_root: Path, *, split: str | None = None) -> 
 
     if split == "test":
         candidates.extend([
+            run_root / "data4" / "step04_test_summary.json",
             run_root / "data4_test" / "step04_optimize_summary.json",
             run_root / "data4" / "step04_optimize_summary.json",
         ])
@@ -295,7 +273,6 @@ def load_run_record(
 
     add_history_npz_stats(row, run_root / "opt_out" / "metrics_history_per_frame.npz")
 
-    # Step04 normally writes history under output_tree/opt_out.
     if summary_path is not None:
         summary_parent = summary_path.parent
         add_history_npz_stats(row, summary_parent / "opt_out" / "metrics_history_per_frame.npz")
@@ -309,13 +286,15 @@ def discover_sweep_rows(input_root: Path) -> list[dict[str, Any]]:
     for case_config_path in sorted(input_root.rglob("case_config.json")):
         case_root = case_config_path.parent
         metrics_path = case_root / "metrics_04.json"
-        if not metrics_path.is_file():
-            continue
-
         case_cfg = load_json_if_exists(case_config_path)
+        case_status = str(case_cfg.get("case_status", "READY"))
+
+        if not metrics_path.is_file() and case_status != "PENDING":
+            continue
 
         base: dict[str, Any] = {
             "mode": "sweep",
+            "case_status": case_status,
             "case_config_path": str(case_config_path),
             "case_root": str(case_root),
             "model": case_cfg.get("model"),
@@ -325,13 +304,17 @@ def discover_sweep_rows(input_root: Path) -> list[dict[str, Any]]:
             "stage": case_cfg.get("stage"),
         }
 
+        for extra_k in ("fold_index", "kfold", "split", "org_type", "sched_alias"):
+            if extra_k in case_cfg and is_scalar(case_cfg.get(extra_k)):
+                base[extra_k] = case_cfg.get(extra_k)
+
         eff = case_cfg.get("effective_params", {})
         if isinstance(eff, dict):
             for k, v in eff.items():
                 if is_scalar(v):
                     base[f"eff_{k}"] = v
 
-        summary_path = find_step04_summary_for_run(case_root)
+        summary_path = find_step04_summary_for_run(case_root) if metrics_path.is_file() else None
         rows.append(
             load_run_record(
                 run_root=case_root,
@@ -356,6 +339,7 @@ def discover_cv_rows(input_root: Path) -> list[dict[str, Any]]:
 
         base_common: dict[str, Any] = {
             "mode": "cv",
+            "case_status": str(fold_plan.get("case_status", "READY")),
             "fold_plan_path": str(fold_plan_path),
             "fold_root": str(fold_root),
             "model": fold_plan.get("model", fold_root.parent.name),
@@ -364,17 +348,25 @@ def discover_cv_rows(input_root: Path) -> list[dict[str, Any]]:
             "split_test_count": split_stats.get("test_count"),
             "split_special_count": split_stats.get("special_count"),
         }
+        for extra_k in ("org_type", "sched_alias", "param", "value", "case_id"):
+            if extra_k in fold_plan and is_scalar(fold_plan.get(extra_k)):
+                base_common[extra_k] = fold_plan.get(extra_k)
 
-        for split_name, output_dir_name in [("train", "data4"), ("test", "data4_test")]:
+        for split_name, _output_dir_name in [("train", "data4"), ("test", "data4_test")]:
             run_root = fold_root / split_name
             metrics_path = run_root / "metrics_04.json"
-            if not metrics_path.is_file():
+            case_status = str(fold_plan.get("case_status", "READY"))
+            if not metrics_path.is_file() and case_status != "PENDING":
                 continue
 
             base = dict(base_common)
             base["split"] = split_name
 
-            summary_path = find_step04_summary_for_run(run_root, split=split_name)
+            summary_path = (
+                find_step04_summary_for_run(run_root, split=split_name)
+                if metrics_path.is_file()
+                else None
+            )
 
             rows.append(
                 load_run_record(
@@ -424,6 +416,7 @@ def discover_rows(input_root: Path, mode: str) -> list[dict[str, Any]]:
 def union_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
     preferred = [
         "mode",
+        "case_status",
         "model",
         "param",
         "value",
@@ -431,6 +424,8 @@ def union_fieldnames(rows: list[dict[str, Any]]) -> list[str]:
         "stage",
         "fold_index",
         "split",
+        "org_type",
+        "sched_alias",
         "run_name",
         "relative_run_root",
         "run_root",
@@ -520,6 +515,9 @@ def summarize_rows(
             out[field] = value
 
         out["n_runs"] = int(len(group_rows))
+        pending_cnt = sum(1 for r in group_rows if str(r.get("case_status", "")) == "PENDING")
+        if pending_cnt > 0:
+            out["n_pending"] = int(pending_cnt)
 
         for metric in metrics:
             values = [
@@ -551,7 +549,7 @@ def format_mean_std(row: dict[str, Any], metric: str) -> str:
     n = row.get(f"{metric}_n", 0)
 
     if mean == "" or mean is None:
-        return ""
+        return "PENDING" if int(row.get("n_pending", 0) or 0) > 0 else ""
 
     try:
         mean_f = float(mean)
@@ -635,17 +633,75 @@ def write_latex_summary(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def compute_paired_stats(a: np.ndarray, b: np.ndarray) -> dict[str, float]:
+    """
+    Compute paired t-test statistics for d = b - a (group minus baseline):
+        t_stat, p_value, ci95_low, ci95_high, cohens_dz
+    """
+    out = {
+        "t_stat": float("nan"),
+        "p_value": float("nan"),
+        "ci95_low": float("nan"),
+        "ci95_high": float("nan"),
+        "cohens_dz": float("nan"),
+    }
+    if a.size < 2 or b.size < 2 or a.size != b.size:
+        return out
+
+    diffs = np.asarray(b, dtype=np.float64) - np.asarray(a, dtype=np.float64)
+    diffs = diffs[np.isfinite(diffs)]
+    n = int(diffs.size)
+    if n < 2:
+        return out
+
+    mean_d = float(np.mean(diffs))
+    sd_d = float(np.std(diffs, ddof=1))
+
+    if sd_d <= 1e-15:
+        if abs(mean_d) <= 1e-15:
+            out.update(t_stat=0.0, p_value=1.0, ci95_low=0.0, ci95_high=0.0, cohens_dz=0.0)
+        else:
+            sign = 1.0 if mean_d > 0 else -1.0
+            out.update(
+                t_stat=sign * float("inf"),
+                p_value=0.0,
+                ci95_low=mean_d,
+                ci95_high=mean_d,
+                cohens_dz=sign * float("inf"),
+            )
+        return out
+
+    se_d = sd_d / math.sqrt(n)
+    t_val = mean_d / se_d
+    cohens_dz = mean_d / sd_d
+
+    try:
+        from scipy import stats
+        p_val = float(2.0 * stats.t.sf(abs(t_val), df=n - 1))
+        t_crit = float(stats.t.ppf(0.975, df=n - 1))
+    except Exception:
+        p_val = float("nan")
+        t_crit = 1.96
+
+    out.update(
+        t_stat=float(t_val),
+        p_value=float(p_val),
+        ci95_low=float(mean_d - t_crit * se_d),
+        ci95_high=float(mean_d + t_crit * se_d),
+        cohens_dz=float(cohens_dz),
+    )
+    return out
+
+
 def scipy_ttest(kind: str, a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
+    if kind == "paired":
+        st = compute_paired_stats(a, b)
+        return st["t_stat"], st["p_value"]
+
     try:
         from scipy import stats
     except Exception:
         return float("nan"), float("nan")
-
-    if kind == "paired":
-        if a.size < 2 or b.size < 2 or a.size != b.size:
-            return float("nan"), float("nan")
-        res = stats.ttest_rel(a, b, nan_policy="omit")
-        return float(res.statistic), float(res.pvalue)
 
     if kind == "independent":
         if a.size < 2 or b.size < 2:
@@ -654,6 +710,33 @@ def scipy_ttest(kind: str, a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
         return float(res.statistic), float(res.pvalue)
 
     raise ValueError(f"Unsupported t-test kind: {kind}")
+
+
+def apply_holm_bonferroni(rows: list[dict[str, Any]], *, family_keys: list[str] | None = None) -> None:
+    """
+    In-place Holm-Bonferroni step-down correction on `p_value`, writing
+    `p_value_holm` and `significant_005`.
+    """
+    families: dict[tuple[Any, ...], list[int]] = {}
+    for idx, r in enumerate(rows):
+        p = maybe_float(r.get("p_value"))
+        if p is None:
+            r["p_value_holm"] = float("nan")
+            r["significant_005"] = "NO"
+            continue
+        fkey = tuple(r.get(k, "") for k in (family_keys or ["metric"]))
+        families.setdefault(fkey, []).append(idx)
+
+    for _fkey, indices in families.items():
+        m = len(indices)
+        sorted_indices = sorted(indices, key=lambda i: float(rows[i]["p_value"]))
+        running_max = 0.0
+        for rank, row_idx in enumerate(sorted_indices):
+            raw_p = float(rows[row_idx]["p_value"])
+            adj_p = min(1.0, raw_p * float(m - rank))
+            running_max = max(running_max, adj_p)
+            rows[row_idx]["p_value_holm"] = float(running_max)
+            rows[row_idx]["significant_005"] = "YES" if running_max < 0.05 else "NO"
 
 
 def paired_values(
@@ -670,13 +753,19 @@ def paired_values(
         x = maybe_float(row.get(metric))
         if x is None:
             continue
-        base_map[row_group_key(row, pair_by)] = float(x)
+        k = row_group_key(row, pair_by)
+        if k in base_map:
+            raise ValueError(f"Duplicate pairing key {k!r} in baseline rows for pair_by={pair_by}")
+        base_map[k] = float(x)
 
     for row in group_rows:
         x = maybe_float(row.get(metric))
         if x is None:
             continue
-        group_map[row_group_key(row, pair_by)] = float(x)
+        k = row_group_key(row, pair_by)
+        if k in group_map:
+            raise ValueError(f"Duplicate pairing key {k!r} in candidate group rows for pair_by={pair_by}")
+        group_map[k] = float(x)
 
     keys = sorted(set(base_map.keys()) & set(group_map.keys()), key=lambda k: str(k))
 
@@ -733,20 +822,40 @@ def compute_ttests(
 
         group_fields = {field: value for field, value in zip(group_by, key)}
 
+        # If baseline query does not constrain a field in group_by (e.g. split),
+        # filter baseline_rows to match the non-baseline group_by fields when possible.
+        unconstrained_fields = [f for f in group_by if f not in baseline_query and f not in pair_by]
+        effective_baseline_rows = baseline_rows
+        if unconstrained_fields:
+            sub_base = [
+                r for r in baseline_rows
+                if all(str(r.get(f, "")) == str(group_fields.get(f, "")) for f in unconstrained_fields)
+            ]
+            if sub_base:
+                effective_baseline_rows = sub_base
+
         for metric in metrics:
             if kind == "paired":
                 a, b, paired_n = paired_values(
-                    baseline_rows,
+                    effective_baseline_rows,
                     group_rows,
                     pair_by=pair_by,
                     metric=metric,
                 )
-                t_stat, p_value = scipy_ttest(kind, a, b)
+                p_stats = compute_paired_stats(a, b)
+                t_stat = p_stats["t_stat"]
+                p_value = p_stats["p_value"]
+                ci95_low = p_stats["ci95_low"]
+                ci95_high = p_stats["ci95_high"]
+                cohens_dz = p_stats["cohens_dz"]
                 n_base = int(a.size)
                 n_group = int(b.size)
             else:
-                a, b = independent_values(baseline_rows, group_rows, metric=metric)
+                a, b = independent_values(effective_baseline_rows, group_rows, metric=metric)
                 t_stat, p_value = scipy_ttest(kind, a, b)
+                ci95_low = float("nan")
+                ci95_high = float("nan")
+                cohens_dz = float("nan")
                 paired_n = 0
                 n_base = int(a.size)
                 n_group = int(b.size)
@@ -766,24 +875,32 @@ def compute_ttests(
                     "mean_delta_group_minus_baseline": (
                         float(np.mean(b) - np.mean(a)) if a.size and b.size else ""
                     ),
+                    "ci95_low": ci95_low,
+                    "ci95_high": ci95_high,
+                    "cohens_dz": cohens_dz,
                     "t_stat": t_stat,
                     "p_value": p_value,
                 }
             )
 
+    apply_holm_bonferroni(results, family_keys=["metric"])
     return results
 
 
 def write_ttest_markdown(path: Path, rows: list[dict[str, Any]], *, group_by: list[str]) -> None:
     cols = list(group_by) + [
         "metric",
-        "n_baseline",
-        "n_group",
         "n_pairs",
         "baseline_mean",
         "group_mean",
         "mean_delta_group_minus_baseline",
+        "ci95_low",
+        "ci95_high",
+        "cohens_dz",
+        "t_stat",
         "p_value",
+        "p_value_holm",
+        "significant_005",
     ]
 
     lines = []

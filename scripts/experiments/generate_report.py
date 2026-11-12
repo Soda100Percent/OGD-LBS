@@ -70,6 +70,7 @@ DEFAULT_SWEEP_VALUES = {
     "omega_b": "1000.0",
     "Griffin_A2:delta": "15.0",
     "Winter_Samurai:delta": "1.5",
+    "sched_alias": "ssdr14v",
 }
 
 DEFAULT_MODEL_SCALE_VALUES = {
@@ -773,6 +774,9 @@ def is_default_sweep_value(
     model: Any = None,
 ) -> bool:
     p = str(param)
+    v_str = str(value)
+    if p in {"fold_sched", "cv"} and v_str.endswith("ssdr14v"):
+        return True
     if model is not None:
         m_key = f"{model}:{p}"
         if m_key in default_sweep_values:
@@ -1048,15 +1052,53 @@ def prepare_model_grouped_raw_charts(
         used_nonunit_scales: dict[str, dict[str, Any]] = {}
 
         for row in rows:
-            raw_value = finite_float(row.get(metric))
-            if raw_value is None:
-                continue
-
             model = str(row.get("model", ""))
             param = str(row.get("param", ""))
             value = str(row.get("value", ""))
-
             if not model or not param:
+                continue
+
+            is_pending = str(row.get("case_status", "")) == "PENDING"
+            raw_value = finite_float(row.get(metric))
+            if raw_value is None:
+                if is_pending:
+                    items.append(
+                        {
+                            "model": model,
+                            "param": param,
+                            "value": value,
+                            "groupKey": str(row.get("sched_alias") or value),
+                            "direction": direction,
+                            "isDefault": is_default_sweep_value(param, value, default_sweep_values, model=model),
+                            "isPending": True,
+                            "label": f"{model} | {param}={value} (PENDING)",
+                            "modelScale": 1.0,
+                            "scaleRule": "<pending>",
+                            "metricScaled": False,
+                            "rawMetricValue": None,
+                            "metricValue": None,
+                            "scaleNote": "",
+                            "historyLabel": "",
+                            "rawFrameMean": None,
+                            "rawFrameStd": None,
+                            "rawFrameMin": None,
+                            "rawFrameMax": None,
+                            "frameMean": None,
+                            "frameStd": None,
+                            "frameMin": None,
+                            "frameMax": None,
+                            "hasFrameFluctuation": False,
+                            "rawLow": None,
+                            "rawHigh": None,
+                            "drawLow": None,
+                            "drawHigh": None,
+                            "lowerClippedAtZero": False,
+                            "perFrameStdField": "",
+                            "perFrameStd": None,
+                            "hasPerFrameStd": False,
+                            "fluctuationLabel": "",
+                        }
+                    )
                 continue
 
             model_scale, scale_rule = model_scale_for(model, model_scale_values)
@@ -1427,6 +1469,9 @@ def generate_report(
     rows = decorate_rows(raw_rows, inferred_mode)
     summary_rows = read_csv_rows(aggregate_dir / "summary_by_group.csv")
     ttest_rows = read_csv_rows(aggregate_dir / "ttest_results.csv")
+    frame_ttest_rows = read_csv_rows(aggregate_dir / "frame_ttest_results.csv")
+    if frame_ttest_rows:
+        ttest_rows = frame_ttest_rows + ttest_rows
 
     html_text = build_html(
         title=title,

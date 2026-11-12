@@ -54,6 +54,7 @@ function escapeHtml(v) {
 }
 
 function finiteNumber(v) {
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
 }
@@ -581,14 +582,17 @@ function renderModelGroupedRawCharts() {
                     && finiteNumber(item.drawLow) !== null
                     && finiteNumber(item.drawHigh) !== null;
 
+                const isPending = Boolean(item.isPending);
                 data.push({
-                    value: transformedMetric,
-                    itemStyle: defaultBarStyle(Boolean(item.isDefault), item.value),
+                    value: isPending ? 0 : transformedMetric,
+                    itemStyle: isPending
+                        ? { color: 'rgba(156,163,175,0.25)', borderColor: '#9ca3af', borderWidth: 1.5, borderType: 'dashed' }
+                        : defaultBarStyle(Boolean(item.isDefault), item.groupKey || item.value),
                     label: {
-                        show: Boolean(item.isDefault),
+                        show: isPending || Boolean(item.isDefault),
                         position: 'top',
-                        formatter: '★',
-                        color: '#111827',
+                        formatter: isPending ? '⏳' : '★',
+                        color: isPending ? '#6b7280' : '#111827',
                         fontWeight: 'bold'
                     },
                     rawItem: item
