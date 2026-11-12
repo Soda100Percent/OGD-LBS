@@ -25,6 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import sys
 _THIS_DIR = str(Path(__file__).resolve().parent)
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
