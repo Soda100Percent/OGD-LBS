@@ -26,6 +26,8 @@ if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
 import numpy as np  # noqa: E402
+from scipy.sparse import coo_matrix  # noqa: E402
+from scipy.sparse.csgraph import connected_components  # noqa: E402
 
 from ogd_lbs.fitbox.schema import (  # noqa: E402
     KEY_ANIMATION_POSES,
@@ -39,8 +41,8 @@ from ogd_lbs.fitbox.schema import (  # noqa: E402
 from ogd_lbs.ssdr.bone_health import BoneHealthPrecompute  # noqa: E402
 from ogd_lbs.ssdr.mesh_health import MeshHealthPrecompute  # noqa: E402
 from ogd_lbs.ssdr.reconstruction_err import (  # noqa: E402
-    recon_err,
     recon_err_hausdorff_per_frame,
+    recon_err_per_frame,
 )
 from ogd_lbs.ssdr.skeleton_organization import calc_bone_lens, calc_org_loss  # noqa: E402
 from ogd_lbs.ssdr.skinning import skinning_s, skinning_t, skinning_w  # noqa: E402
@@ -57,6 +59,10 @@ REQUIRED_COMPLEXITY_KEYS = (
     "num_bones_active",
     "max_bones_per_vertex",
     "mean_bones_per_vertex",
+    "num_loose_parts",
+    "num_loose_parts_welded",
+    "num_isolated_vertices",
+    "largest_component_face_ratio",
     "num_frames",
     "num_meshes",
 )
@@ -99,7 +105,8 @@ def is_valid_normalized_metrics_obj(obj: Any, *, expected_name: str | None = Non
         return False
     comp = obj.get("complexity")
     mets = obj.get("metrics")
-    if not isinstance(comp, dict) or not isinstance(mets, dict):
+    fstats = obj.get("frame_stats")
+    if not isinstance(comp, dict) or not isinstance(mets, dict) or not isinstance(fstats, dict):
         return False
     if any(k not in comp or comp[k] is None for k in REQUIRED_COMPLEXITY_KEYS):
         return False
@@ -133,6 +140,73 @@ def _triangulate_faces_array(raw_faces: Any) -> np.ndarray:
     return np.asarray(tris, dtype=np.int64)
 
 
+def compute_mesh_loose_parts_stats(
+    vertices: np.ndarray,
+    tri_faces: np.ndarray,
+    *,
+    weld_eps: float = 1e-5,
+) -> dict[str, Any]:
+    """
+    Headless mesh loose-parts (connected components) analysis via scipy.sparse.csgraph:
+      - num_loose_parts: connected face components using topological vertex indices
+      - num_loose_parts_welded: connected face components after welding coincident vertices (<= weld_eps)
+      - num_isolated_vertices: vertices not referenced by any triangle face
+      - largest_component_face_ratio: fraction of triangles in the largest topological component
+    """
+    v_arr = np.asarray(vertices, dtype=np.float64)
+    f_arr = np.asarray(tri_faces, dtype=np.int64)
+    n_v = int(v_arr.shape[0])
+    n_f = int(f_arr.shape[0])
+
+    if n_v == 0 or n_f == 0:
+        return {
+            "num_loose_parts": 0,
+            "num_loose_parts_welded": 0,
+            "num_isolated_vertices": n_v,
+            "largest_component_face_ratio": 0.0,
+        }
+
+    # 1. Topological connected components
+    u = np.concatenate([f_arr[:, 0], f_arr[:, 1], f_arr[:, 2]])
+    v = np.concatenate([f_arr[:, 1], f_arr[:, 2], f_arr[:, 0]])
+    rows = np.concatenate([u, v])
+    cols = np.concatenate([v, u])
+    ones = np.ones(rows.shape[0], dtype=np.int8)
+    adj_topo = coo_matrix((ones, (rows, cols)), shape=(n_v, n_v))
+    _, comp_labels = connected_components(adj_topo, directed=False)
+
+    face_comp_ids = comp_labels[f_arr[:, 0]]
+    _, comp_face_counts = np.unique(face_comp_ids, return_counts=True)
+    num_loose_parts = int(len(comp_face_counts))
+    largest_ratio = float(np.max(comp_face_counts)) / float(n_f)
+    referenced_verts = int(len(np.unique(f_arr)))
+    isolated_verts = max(0, n_v - referenced_verts)
+
+    # 2. Geometrically welded connected components (merge coincident seam vertices within weld_eps)
+    quant = np.round(v_arr / float(weld_eps)).astype(np.int64)
+    _, weld_inv = np.unique(quant, axis=0, return_inverse=True)
+    weld_inv = np.asarray(weld_inv, dtype=np.int64)
+    n_welded_v = int(np.max(weld_inv) + 1) if weld_inv.size else 0
+    w_faces = weld_inv[f_arr]
+
+    wu = np.concatenate([w_faces[:, 0], w_faces[:, 1], w_faces[:, 2]])
+    wv = np.concatenate([w_faces[:, 1], w_faces[:, 2], w_faces[:, 0]])
+    w_rows = np.concatenate([wu, wv])
+    w_cols = np.concatenate([wv, wu])
+    w_ones = np.ones(w_rows.shape[0], dtype=np.int8)
+    adj_weld = coo_matrix((w_ones, (w_rows, w_cols)), shape=(n_welded_v, n_welded_v))
+    _, w_comp_labels = connected_components(adj_weld, directed=False)
+    w_face_comp_ids = w_comp_labels[w_faces[:, 0]]
+    num_loose_parts_welded = int(len(np.unique(w_face_comp_ids)))
+
+    return {
+        "num_loose_parts": num_loose_parts,
+        "num_loose_parts_welded": num_loose_parts_welded,
+        "num_isolated_vertices": isolated_verts,
+        "largest_component_face_ratio": largest_ratio,
+    }
+
+
 def _normalize_parent_indices(parent_indices: Any, bone_count: int) -> np.ndarray:
     out: list[int | None] = []
     for value in list(parent_indices):
@@ -158,6 +232,47 @@ def _reconstruct_lbs_sequence(
         c = skinning_w(c, vbw)
         p_r[p_id] = skinning_s(c)
     return p_r
+
+
+def _vec_stats(vec: np.ndarray | None) -> dict[str, float] | None:
+    if vec is None:
+        return None
+    arr = np.asarray(vec, dtype=np.float64).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return None
+    return {
+        "mean": float(np.mean(arr)),
+        "std": float(np.std(arr, ddof=0)),
+        "min": float(np.min(arr)),
+        "max": float(np.max(arr)),
+    }
+
+
+def _load_frame_stats_from_npz(npz_path: Path) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    if not npz_path.is_file():
+        return out
+    key_map = {
+        "l2_err": "l2_err",
+        "org_loss": "org_loss",
+        "hausdorff": "hausdorff",
+        "arap_ratio": "arap_ratio",
+        "max_roll": "bone_roll_max",
+        "max_swing": "bone_swing_max",
+    }
+    try:
+        with np.load(npz_path, allow_pickle=False) as npz:
+            for out_k, npz_k in key_map.items():
+                if npz_k in npz.files:
+                    arr = np.asarray(npz[npz_k], dtype=np.float64)
+                    vec = arr[-1, :] if (arr.ndim == 2 and arr.shape[0] > 0) else arr.reshape(-1)
+                    st = _vec_stats(vec)
+                    if st is not None:
+                        out[out_k] = st
+    except Exception:
+        pass
+    return out
 
 
 def _extract_step04_summary_metrics(summary_dict: dict[str, Any]) -> dict[str, float] | None:
@@ -202,7 +317,6 @@ def compute_normalized_stage_metrics(
         else:
             inferred_stage = subdir_name
 
-    # Check if case_parameters.json is available in parent result directory
     case_params: dict[str, Any] = {}
     cand_cp = Path(case_parameters_path) if case_parameters_path else (s_dir.parent / "case_parameters.json")
     if cand_cp.is_file():
@@ -211,7 +325,6 @@ def compute_normalized_stage_metrics(
     pool_dims = case_params.get("pool_dimensions") or {}
     dim_vals = case_params.get("dimension_values") or {}
 
-    # Locate PKL directory (for data4, meshes and optimized anim/skel live in data4/opt_out)
     pkl_dir = (s_dir / "opt_out") if (s_dir / "opt_out").is_dir() else s_dir
 
     skel_path = pkl_dir / "skeleton_hierarchy_data.pkl"
@@ -230,7 +343,6 @@ def compute_normalized_stage_metrics(
     inv_rbt = np.linalg.inv(rbt)
     n_p = int(bt.shape[0])
 
-    # Load existing stage summaries if present
     s02_sum = _read_json_if_exists(s_dir / "step02_reduce_bone_weight_summary.json") or _read_json_if_exists(
         s_dir / "step02_ue_lod_summary.json"
     )
@@ -241,7 +353,6 @@ def compute_normalized_stage_metrics(
     reused_fields: list[str] = []
     computed_fields: list[str] = []
 
-    # Determine bone_quota_variant and method_version
     variant_name = (
         dim_vals.get("ssdr_stage02.variant")
         or pool_dims.get("ssdr_stage02.variant")
@@ -261,7 +372,6 @@ def compute_normalized_stage_metrics(
         or "v1"
     )
 
-    # Scan all mesh PKL files in pkl_dir
     mesh_paths = [
         p
         for p in sorted(pkl_dir.glob("*.pkl"), key=lambda x: x.name)
@@ -279,6 +389,10 @@ def compute_normalized_stage_metrics(
 
     v_offset = 0
     total_triangles = 0
+    total_loose_parts = 0
+    total_loose_parts_welded = 0
+    total_isolated_verts = 0
+    weighted_largest_comp_faces = 0.0
 
     for mp in mesh_paths:
         m_obj = load_data(mp)
@@ -292,10 +406,15 @@ def compute_normalized_stage_metrics(
 
         nnz_per_vert = np.count_nonzero(vbw > float(weight_eps), axis=1)
         active_bones_mesh = int(np.count_nonzero(np.any(vbw > float(weight_eps), axis=0)))
+        lp_stats = compute_mesh_loose_parts_stats(v, tri_f)
 
         n_v = int(v.shape[0])
         n_f = int(tri_f.shape[0])
         total_triangles += n_f
+        total_loose_parts += lp_stats["num_loose_parts"]
+        total_loose_parts_welded += lp_stats["num_loose_parts_welded"]
+        total_isolated_verts += lp_stats["num_isolated_vertices"]
+        weighted_largest_comp_faces += lp_stats["largest_component_face_ratio"] * float(n_f)
 
         per_mesh_list.append({
             "name": m_name,
@@ -304,6 +423,7 @@ def compute_normalized_stage_metrics(
             "num_bones_active": active_bones_mesh,
             "max_bones_per_vertex": int(np.max(nnz_per_vert)) if nnz_per_vert.size else 0,
             "mean_bones_per_vertex": float(np.mean(nnz_per_vert)) if nnz_per_vert.size else 0.0,
+            **lp_stats,
         })
 
         v_slices.append(np.arange(v_offset, v_offset + n_v, dtype=np.int64))
@@ -334,39 +454,59 @@ def compute_normalized_stage_metrics(
         "num_bones_active": int(active_bones_total),
         "max_bones_per_vertex": int(np.max(nnz_all)) if nnz_all.size else 0,
         "mean_bones_per_vertex": float(np.mean(nnz_all)) if nnz_all.size else 0.0,
+        "num_loose_parts": int(total_loose_parts),
+        "num_loose_parts_welded": int(total_loose_parts_welded),
+        "num_isolated_vertices": int(total_isolated_verts),
+        "largest_component_face_ratio": (
+            float(weighted_largest_comp_faces) / float(total_triangles) if total_triangles > 0 else 0.0
+        ),
         "s_max_limit": int(s_max_limit) if s_max_limit is not None else None,
         "num_frames": int(n_p),
         "num_meshes": int(len(per_mesh_list)),
     }
-    computed_fields.extend(["num_vertices", "num_triangles", "num_bones_active", "max_bones_per_vertex", "mean_bones_per_vertex"])
+    computed_fields.extend([
+        "num_vertices",
+        "num_triangles",
+        "num_bones_active",
+        "max_bones_per_vertex",
+        "mean_bones_per_vertex",
+        "num_loose_parts",
+        "num_loose_parts_welded",
+    ])
 
-    # Try reusing precomputed error/health metrics from step04_optimize_summary.json first
+    frame_stats_out: dict[str, dict[str, float]] = {}
     reused_s04 = _extract_step04_summary_metrics(s04_sum) if s04_sum else None
     if reused_s04 is not None:
         metrics_out = reused_s04
         reused_fields.extend(list(REQUIRED_METRIC_KEYS))
+        npz_path = pkl_dir / "metrics_history_per_frame.npz"
+        frame_stats_out = _load_frame_stats_from_npz(npz_path)
     else:
-        # Compute directly from v_cb, ba_v_cb, vbw_cb, bt, rbt
-        l2_val = float(recon_err(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb))
-        h_per_frame = recon_err_hausdorff_per_frame(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
-        h_mean = float(np.mean(h_per_frame)) if h_per_frame.size else 0.0
-        h_max = float(np.max(h_per_frame)) if h_per_frame.size else 0.0
+        l2_seq = recon_err_per_frame(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
+        l2_val = float(np.mean(l2_seq)) if l2_seq.size else 0.0
+        h_seq = recon_err_hausdorff_per_frame(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
+        h_mean = float(np.mean(h_seq)) if h_seq.size else 0.0
+        h_max = float(np.max(h_seq)) if h_seq.size else 0.0
 
         orig_bone_lens = calc_bone_lens(rbt, par_idxs)
-        org_losses = [
-            float(calc_org_loss(orig_bone_lens, calc_bone_lens(bt[p_i], par_idxs)))
-            for p_i in range(n_p)
-        ]
-        org_loss_val = float(np.mean(org_losses)) if org_losses else 0.0
+        org_seq = np.asarray(
+            [float(calc_org_loss(orig_bone_lens, calc_bone_lens(bt[p_i], par_idxs))) for p_i in range(n_p)],
+            dtype=np.float64,
+        )
+        org_loss_val = float(np.mean(org_seq)) if org_seq.size else 0.0
 
         bh_pre = BoneHealthPrecompute(rbt=rbt, par_idxs=par_idxs)
-        bh_res = bh_pre.evaluate(bt, bone_names=bone_names)
+        bh_res = bh_pre.evaluate(bt, bone_names=bone_names, return_maps=True)
         max_roll = float(bh_res.get("roll_abs_deg_max", 0.0))
         max_swing = float(bh_res.get("swing_delta_max", 0.0))
+        roll_seq = bh_res.get("roll_max_per_frame")
+        swing_seq = bh_res.get("swing_max_per_frame")
 
         arap_ratios: list[float] = []
         edge_excesses: list[float] = []
         normal_flips: list[float] = []
+        arap_seq_list: list[np.ndarray] = []
+
         for idx_m, v_indices in enumerate(v_slices):
             v_m = v_cb[v_indices, :]
             gt_m = ba_v_cb[:, v_indices, :]
@@ -374,11 +514,19 @@ def compute_normalized_stage_metrics(
             f_m = faces_by_mesh[idx_m]
             p_recon = _reconstruct_lbs_sequence(v_m, bt, inv_rbt, vbw_m)
             mh_pre = MeshHealthPrecompute(rest_v=v_m, faces=f_m, weight_scheme="uniform")
-            mh_res = mh_pre.evaluate(recon_seq=p_recon, gt_seq=gt_m, level=1)
+            mh_res = mh_pre.evaluate(recon_seq=p_recon, gt_seq=gt_m, level=1, return_maps=True)
             rel = mh_res.get("relative", {})
             arap_ratios.append(float(rel.get("arap_global_mean_ratio", 0.0)))
             edge_excesses.append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
             normal_flips.append(float(rel.get("normal_vs_gt_flip_ratio", 0.0)))
+
+            recon_arap_seq = mh_res.get("recon", {}).get("arap_spokes", {}).get("global_energy_seq")
+            gt_arap_seq = mh_res.get("gt", {}).get("arap_spokes", {}).get("global_energy_seq")
+            if recon_arap_seq is not None and gt_arap_seq is not None:
+                arap_seq_list.append(
+                    (np.asarray(recon_arap_seq, dtype=np.float64) + 1e-10)
+                    / (np.asarray(gt_arap_seq, dtype=np.float64) + 1e-10)
+                )
 
         metrics_out = {
             "l2_err": l2_val,
@@ -393,6 +541,21 @@ def compute_normalized_stage_metrics(
         }
         computed_fields.extend(list(REQUIRED_METRIC_KEYS))
 
+        arap_seq_combined = (
+            np.mean(np.stack(arap_seq_list, axis=0), axis=0) if arap_seq_list else None
+        )
+        for k_stat, seq_arr in [
+            ("l2_err", l2_seq),
+            ("hausdorff", h_seq),
+            ("org_loss", org_seq),
+            ("arap_ratio", arap_seq_combined),
+            ("max_roll", roll_seq),
+            ("max_swing", swing_seq),
+        ]:
+            st = _vec_stats(seq_arr)
+            if st is not None:
+                frame_stats_out[k_stat] = st
+
     test_metrics_out = _extract_step04_summary_metrics(s04_test_sum) if s04_test_sum else None
     if test_metrics_out is not None:
         reused_fields.append("test_metrics")
@@ -406,6 +569,7 @@ def compute_normalized_stage_metrics(
         "generated_at_epoch": time.time(),
         "complexity": complexity,
         "metrics": metrics_out,
+        "frame_stats": frame_stats_out,
         "test_metrics": test_metrics_out,
         "per_mesh": per_mesh_list,
         "provenance": {
@@ -444,7 +608,6 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result_obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    # Also write a copy at result root (<result_dir>/<metrics_name>) if stage_dir is a stage subdir (data2/data3/data4)
     if args.output is None and stage_dir.parent != stage_dir and (stage_dir.parent / "case_parameters.json").is_file():
         root_copy = stage_dir.parent / metrics_name
         root_copy.write_text(json.dumps(result_obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

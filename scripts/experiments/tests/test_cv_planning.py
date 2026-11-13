@@ -235,3 +235,36 @@ class TestInlineCVAndAugmentation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_ckdtree_hausdorff_matches_cdist_and_loose_parts_welding(self) -> None:
+        from scipy.spatial.distance import cdist
+        from ogd_lbs.ssdr.reconstruction_err import calc_hausdorff
+        augment = load_augment()
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((120, 3))
+        B = rng.standard_normal((150, 3))
+        d_mat = cdist(A, B)
+        expected_h = float(max(np.max(np.min(d_mat, axis=1)), np.max(np.min(d_mat, axis=0))))
+        actual_h = calc_hausdorff(A, B)
+        self.assertAlmostEqual(actual_h, expected_h, places=12)
+
+        # Two triangles sharing edge coordinates (1,0,0)-(0,1,0) but using distinct vertex indices + 1 isolated vertex
+        verts = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],  # duplicate of vertex 1
+            [0.0, 1.0, 0.0],  # duplicate of vertex 2
+            [1.0, 1.0, 0.0],
+            [9.0, 9.0, 9.0],  # isolated vertex 6
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [3, 5, 4],
+        ], dtype=np.int64)
+        lp = augment.compute_mesh_loose_parts_stats(verts, faces)
+        self.assertEqual(lp["num_loose_parts"], 2)
+        self.assertEqual(lp["num_loose_parts_welded"], 1)
+        self.assertEqual(lp["num_isolated_vertices"], 1)
+        self.assertAlmostEqual(lp["largest_component_face_ratio"], 0.5)

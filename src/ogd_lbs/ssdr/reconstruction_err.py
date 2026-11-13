@@ -1,24 +1,38 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.spatial.distance import cdist
+from scipy.spatial import cKDTree
 
-from ogd_lbs.ssdr.skinning import skinning_t, skinning_w, skinning_s
+from ogd_lbs.ssdr.skinning import skinning_s, skinning_t, skinning_w
 
 
 def calc_hausdorff_directed(A: np.ndarray, B: np.ndarray) -> float:
     """
-    Compute the directed Hausdorff distance between two N-D point sets.
+    Compute the directed Hausdorff distance max_{a in A} min_{b in B} ||a - b||_2
+    using cKDTree to avoid O(N^2) memory allocation on high-poly meshes.
     """
-    distances = cdist(A, B)
-    return float(np.max(np.min(distances, axis=1)))
+    A_arr = np.asarray(A, dtype=np.float64)
+    B_arr = np.asarray(B, dtype=np.float64)
+    if A_arr.size == 0 or B_arr.size == 0:
+        return 0.0
+    tree_b = cKDTree(B_arr)
+    dists, _ = tree_b.query(A_arr, k=1, workers=-1)
+    return float(np.max(dists))
 
 
 def calc_hausdorff(A: np.ndarray, B: np.ndarray) -> float:
     """
-    Compute the Hausdorff distance between two N-D point sets.
+    Compute the symmetric Hausdorff distance between two N-D point sets.
     """
-    return max(calc_hausdorff_directed(A, B), calc_hausdorff_directed(B, A))
+    A_arr = np.asarray(A, dtype=np.float64)
+    B_arr = np.asarray(B, dtype=np.float64)
+    if A_arr.size == 0 or B_arr.size == 0:
+        return 0.0
+    tree_a = cKDTree(A_arr)
+    tree_b = cKDTree(B_arr)
+    d_ab, _ = tree_b.query(A_arr, k=1, workers=-1)
+    d_ba, _ = tree_a.query(B_arr, k=1, workers=-1)
+    return float(max(np.max(d_ab), np.max(d_ba)))
 
 
 def recon_err(
@@ -75,7 +89,7 @@ def recon_err_hausdorff(
     vbw: np.ndarray,
 ) -> tuple[float, float]:
     """
-    Compute Hausdorff distance frame by frame to avoid OOM.
+    Compute Hausdorff distance frame by frame.
     Returns: (mean_hausdorff, max_hausdorff) across all frames.
     """
     hausdorff_dists = recon_err_hausdorff_per_frame(v, p, bt, inv_rbt, vbw)
