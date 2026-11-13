@@ -233,9 +233,6 @@ class TestInlineCVAndAugmentation(unittest.TestCase):
             self.assertIsNotNone(norm_d4["test_metrics"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
     def test_ckdtree_hausdorff_matches_cdist_and_loose_parts_welding(self) -> None:
         from scipy.spatial.distance import cdist
         from ogd_lbs.ssdr.reconstruction_err import calc_hausdorff
@@ -268,3 +265,7 @@ if __name__ == "__main__":
         self.assertEqual(lp["num_loose_parts_welded"], 1)
         self.assertEqual(lp["num_isolated_vertices"], 1)
         self.assertAlmostEqual(lp["largest_component_face_ratio"], 0.5)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -8,178 +8,194 @@
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2/dist/jspdf.umd.min.js"></script>
 <style>
 :root {
-  --bg: #f4f6f9;
+  --bg: #f1f5f9;
   --card: #ffffff;
-  --border: #e2e8f0;
-  --text: #0f172a;
+  --ink: #0f172a;
   --muted: #475569;
-  --primary: #1C328A;
+  --border: #cbd5e1;
+  --navy: #1C328A;
   --teal: #0f766e;
+  --amber: #d97706;
+  --dock-width: 410px;
 }
 * { box-sizing: border-box; }
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  background: var(--bg);
-  color: var(--text);
   margin: 0;
-  padding: 0 0 60px;
+  background: var(--bg);
+  color: var(--ink);
   line-height: 1.5;
 }
-.topbar {
+.top-bar {
   position: sticky;
   top: 0;
-  z-index: 950;
-  background: rgba(255, 255, 255, 0.96);
+  z-index: 300;
+  background: rgba(255,255,255,0.97);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
-  padding: 12px 24px;
+  padding: 10px 22px;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
 }
-.topbar-title {
-  font-weight: 700;
-  font-size: 1.05rem;
-  color: var(--primary);
+.top-bar h1 {
+  margin: 0;
+  font-size: 1.12rem;
+  color: var(--navy);
 }
-.controls-row {
+.top-controls {
   display: flex;
   flex-wrap: wrap;
+  gap: 10px;
   align-items: center;
-  gap: 12px;
 }
 .ctrl-group {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.88rem;
   background: #f8fafc;
-  padding: 5px 10px;
+  padding: 4px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
+  font-size: 0.83rem;
 }
 .ctrl-group select {
-  border: 1px solid #cbd5e1;
+  border: 1px solid #94a3b8;
   border-radius: 4px;
   padding: 3px 6px;
-  font-size: 0.86rem;
+  font-size: 0.83rem;
   background: #fff;
 }
 .btn {
-  display: inline-block;
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
   border-radius: 6px;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
   border: 1px solid transparent;
 }
-.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary { background: var(--navy); color: #fff; }
 .btn-teal { background: var(--teal); color: #fff; }
-.btn-outline { background: #fff; color: var(--text); border-color: #cbd5e1; }
-.container {
-  max-width: 1560px;
-  margin: 24px auto;
-  padding: 0 20px;
+.btn-outline { background: #fff; color: var(--ink); border-color: var(--border); }
+.btn-sm { padding: 3px 8px; font-size: 0.76rem; }
+
+/* Main 2-column layout: Left Report + Right Sticky Multi-Card Render Dock */
+.workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--dock-width);
+  gap: 18px;
+  max-width: 1920px;
+  margin: 0 auto;
+  padding: 18px 20px 60px;
+  align-items: start;
+}
+.workspace-layout.dock-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workspace-layout.dock-collapsed .render-dock {
+  display: none;
+}
+.main-column {
+  min-width: 0;
 }
 .section-card {
   background: var(--card);
-  border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 22px;
-  margin-bottom: 24px;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--border);
+  padding: 18px 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.04);
 }
 .section-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  border-bottom: 2px solid #f1f5f9;
-  padding-bottom: 12px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
 }
 .section-header h2 {
   margin: 0;
-  font-size: 1.22rem;
+  font-size: 1.08rem;
   color: #1e293b;
 }
 .note-box {
   background: #f8fafc;
-  border-left: 4px solid var(--primary);
-  padding: 10px 14px;
-  font-size: 0.9rem;
+  border-left: 4px solid var(--navy);
+  padding: 9px 13px;
+  font-size: 0.85rem;
   color: var(--muted);
   border-radius: 4px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 .table-wrap {
   overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
 }
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   white-space: nowrap;
 }
 th, td {
-  border: 1px solid var(--border);
-  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  padding: 7px 10px;
   text-align: right;
 }
-th:first-child, td:first-child,
-th:nth-child(2), td:nth-child(2),
-th:nth-child(3), td:nth-child(3) {
+th:nth-child(1), th:nth-child(2), th:nth-child(3),
+td:nth-child(1), td:nth-child(2), td:nth-child(3) {
   text-align: left;
 }
 th {
-  background: #f8fafc;
-  font-weight: 700;
+  background: #f1f5f9;
   color: #1e293b;
-}
-tr:nth-child(even) { background: #fcfcfd; }
-tr:hover { background: #f1f5f9; }
-.row-ours {
-  background: #eff6ff !important;
-  font-weight: 600;
-}
-.row-input {
-  background: #fefce8 !important;
-  color: #713f12;
-}
-.best-cell {
-  font-weight: 700;
-  color: #0f766e;
-  background: #f0fdf4 !important;
-}
-.badge {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 0.76rem;
   font-weight: 700;
 }
-.badge-ours { background: #dbeafe; color: #1e40af; }
-.badge-ue { background: #ffedd5; color: #9a3412; }
-.badge-hybrid { background: #f3e8ff; color: #6b21a8; }
-.badge-input { background: #fef3c7; color: #92400e; }
+tr.hoverable-row {
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+tr.hoverable-row:hover {
+  background-color: #e0f2fe !important;
+}
+tr.row-active-hover {
+  outline: 2px solid #0284c7;
+  background-color: #e0f2fe !important;
+}
+tr.row-ours { background: #eff6ff; font-weight: 600; }
+tr.row-input { background: #f8fafc; color: #475569; }
+td.best-cell {
+  color: #b91c1c;
+  font-weight: 700;
+  background: #fef2f2;
+}
+.charts-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
 .charts-grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-@media (max-width: 1100px) {
-  .charts-grid-2 { grid-template-columns: 1fr; }
+  gap: 14px;
+  margin-top: 14px;
 }
 .chart-card {
-  border: 1px solid var(--border);
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
-  padding: 14px;
+  padding: 12px;
   background: #fff;
   min-width: 0;
   overflow: hidden;
@@ -188,746 +204,1262 @@ tr:hover { background: #f1f5f9; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .chart-card-header h3 {
   margin: 0;
-  font-size: 0.98rem;
+  font-size: 0.9rem;
   color: #1e293b;
-}
-.export-btns {
-  display: flex;
-  gap: 4px;
-}
-.btn-xs {
-  padding: 2px 7px;
-  font-size: 0.75rem;
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: 600;
 }
 .chart-box {
   width: 100%;
-  height: 440px;
+  height: 360px;
   overflow: hidden;
 }
 .chart-box-tall {
   width: 100%;
-  height: 500px;
+  height: 430px;
   overflow: hidden;
 }
-pre.latex-box {
+
+/* Right Sticky Multi-Card Render Inspector Dock */
+.render-dock {
+  position: sticky;
+  top: 64px;
+  max-height: calc(100vh - 76px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 4px;
+}
+.dock-panel-header {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 10px 14px;
+  border-radius: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.2);
+}
+.dock-panel-header h3 {
+  margin: 0;
+  font-size: 0.94rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.render-card {
+  background: #0f172a;
+  color: #f8fafc;
+  border: 2px solid #334155;
+  border-radius: 11px;
+  overflow: hidden;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+.render-card.current-card {
+  border-color: #38bdf8;
+}
+.render-card.history-card {
+  border-color: #10b981;
+}
+.rc-header {
+  padding: 8px 11px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rc-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.rc-sub {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.rc-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 5px;
+}
+.rc-badge-current { background: #0284c7; color: #fff; }
+.rc-badge-history { background: #059669; color: #fff; }
+.rc-controls {
+  padding: 8px 11px;
+  background: #131c31;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.76rem;
+}
+.rc-ctrl-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+.rc-ctrl-row select {
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+}
+.rc-layer-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.rc-layer-pills label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1e293b;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  cursor: pointer;
+  user-select: none;
+}
+.rc-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+}
+.bg-checker {
+  background: repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 50% / 22px 22px;
+}
+.bg-dark { background: #090d16; }
+.bg-white { background: #ffffff; }
+.rc-viewport img.layer-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.rc-viewport img.colorbar-img {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  height: 54%;
+  width: auto;
+  background: rgba(15, 23, 42, 0.78);
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  pointer-events: none;
+}
+.rc-metrics-bar {
+  padding: 6px 10px;
+  background: #090d16;
+  border-top: 1px solid #334155;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px 8px;
+  font-size: 0.73rem;
+  color: #cbd5e1;
+}
+.rc-metrics-bar b { color: #fff; }
+.rc-footer {
+  padding: 7px 10px;
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  display: flex;
+  gap: 6px;
+}
+.rc-footer button, .rc-footer a {
+  flex: 1;
+  text-align: center;
+  text-decoration: none;
+  padding: 5px 7px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #f8fafc;
+}
+.rc-footer button:hover, .rc-footer a:hover {
+  background: #2563eb;
+  border-color: #3b82f6;
+}
+.rc-icon-btn {
+  background: #334155;
+  color: #f8fafc;
+  border: 1px solid #475569;
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rc-icon-btn:hover { background: #475569; }
+.rc-icon-btn.danger:hover { background: #dc2626; border-color: #ef4444; }
+.latex-box {
+  display: none;
   background: #0f172a;
   color: #e2e8f0;
-  padding: 14px;
+  padding: 12px;
   border-radius: 8px;
-  font-size: 0.82rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
   overflow-x: auto;
-  max-height: 360px;
-}
-.sub-val {
-  display: block;
-  font-size: 0.75rem;
-  color: #64748b;
+  margin-bottom: 12px;
 }
 </style>
 </head>
 <body>
 
-<div class="topbar">
-  <div class="topbar-title">📊 __TITLE_HTML__</div>
-  <div class="controls-row">
+<div class="top-bar">
+  <h1>📊 __TITLE_HTML__</h1>
+  <div class="top-controls">
     <div class="ctrl-group">
-      <label for="sel-scale"><strong>Distance Scale:</strong></label>
-      <select id="sel-scale">
+      <strong>Distance Scale:</strong>
+      <select id="global-scale-mode">
         <option value="scaled" selected>Model-Scaled (Griffin×0.3, Winter×10, Vroid×1)</option>
         <option value="raw">Raw Unscaled</option>
       </select>
     </div>
     <div class="ctrl-group">
-      <label for="sel-axis"><strong>Chart Y-Axis:</strong></label>
-      <select id="sel-axis">
+      <strong>Chart Y-Axis:</strong>
+      <select id="global-axis-mode">
         <option value="auto" selected>Auto Pseudo-Log (Large Dynamic Range)</option>
         <option value="linear">Linear</option>
       </select>
     </div>
+    <div class="ctrl-group">
+      <strong>Render BG:</strong>
+      <select id="global-render-bg">
+        <option value="bg-checker" selected>Checkerboard</option>
+        <option value="bg-dark">Dark</option>
+        <option value="bg-white">White (Paper)</option>
+      </select>
+    </div>
+    <button class="btn btn-outline" onclick="toggleDock()">🖼️ Toggle Render Dock</button>
     <a class="btn btn-teal" href="downloads/ogd_lbs_ue5_equal_bone_budget_report_bundle.zip" download>📦 Download ZIP</a>
-    <a class="btn btn-outline" href="index.html">🗂️ Export Center</a>
+    <a class="btn btn-primary" href="index.html">🗂️ Export Center</a>
   </div>
 </div>
 
-<div class="container">
+<div class="workspace-layout" id="workspace-layout">
+  <!-- LEFT COLUMN: Tables & Interactive Charts -->
+  <div class="main-column">
 
-  <!-- MODULE 1: INPUT & EQUAL BONE BUDGET COMPLEXITY AUDIT -->
-  <section class="section-card">
-    <div class="section-header">
-      <h2>1️⃣ Module 1: Original Input (Raw .blend &amp; Data1) vs. Multi-Stage Complexity &amp; Loose-Parts Audit</h2>
-      <div>
-        <a class="btn btn-outline" href="aggregate/complexity_audit_table.csv" download>📥 Download Complexity CSV</a>
-      </div>
-    </div>
-    <div class="note-box">
-      <strong>Full Pipeline Complexity &amp; Equal-Budget Audit:</strong>
-      Records exact <strong>Meshes ($M$)</strong>, <strong>Vertices ($V$)</strong>, <strong>Triangles ($F$)</strong>,
-      <strong>Total Bones ($B$)</strong>, <strong>Active Bones</strong>, <strong>Max Bones/Vertex ($K_{\max}$)</strong>,
-      and headless <strong>Loose Parts (Topological vs. Welded)</strong> across:
-      <strong>Original Input</strong> $\rightarrow$ <strong>Step 02 (Bone Reduction)</strong> $\rightarrow$ <strong>Step 03 (Bone + QEM)</strong> $\rightarrow$ <strong>Step 04 (Bone + QEM + SSDR)</strong>.
-    </div>
-    <div class="table-wrap" id="table-complexity-audit"></div>
-  </section>
-
-  <!-- MODULE 2: STEP 02 (BONE REDUCTION) -->
-  <section class="section-card">
-    <div class="section-header">
-      <h2>2️⃣ Module 2: Step 02 (Bone Reduction) — High-Poly Skinning Comparison</h2>
-      <div>
-        <a class="btn btn-outline" href="aggregate/step02_comparison_summary.csv" download>📥 Download Step 02 CSV</a>
-      </div>
-    </div>
-    <div class="note-box">
-      <strong>Step 02 (Bone Reduction):</strong>
-      Compares <strong>Ours Bone Reduction ★</strong> against <strong>UE5 Bone Reduction</strong> directly on the high-poly mesh (identical $V, F, B$) before QEM decimation and SSDR optimization.
-    </div>
-    <div class="table-wrap" id="table-step02-comparison" style="margin-bottom: 20px;"></div>
-    <div class="charts-grid-2" id="charts-step02-grid"></div>
-  </section>
-
-  <!-- MODULE 3: STEP 03 (BONE + QEM) -->
-  <section class="section-card">
-    <div class="section-header">
-      <h2>3️⃣ Module 3: Step 03 (Bone + QEM) — Low-Poly Comparison Before SSDR Optimization</h2>
-      <div>
-        <a class="btn btn-outline" href="aggregate/step03_comparison_summary.csv" download>📥 Download Step 03 CSV</a>
-      </div>
-    </div>
-    <div class="note-box">
-      <strong>Step 03 (Bone + QEM):</strong>
-      Compares the 4 combinations of <strong>Bone Reduction (Ours vs. UE5) × QEM Decimation (Ours vs. UE5)</strong> on the decimated low-poly mesh prior to Stage 04 SSDR optimization:
-      <strong>Ours Bone + Ours QEM ★</strong>, <strong>UE5 Bone + Ours QEM</strong>, <strong>Ours Bone + UE5 QEM</strong>, and <strong>UE5 Bone + UE5 QEM</strong>.
-    </div>
-    <div class="table-wrap" id="table-step03-comparison" style="margin-bottom: 20px;"></div>
-    <div class="charts-grid-2" id="charts-step03-grid"></div>
-  </section>
-
-  <!-- MODULE 4: STEP 04 (BONE + QEM + SSDR) -->
-  <section class="section-card">
-    <div class="section-header">
-      <h2>4️⃣ Module 4: Step 04 (Bone + QEM + SSDR) — Final Optimized Comparison Across Equal Bone Quotas</h2>
-      <div style="display:flex; gap:8px;">
-        <button class="btn btn-outline" onclick="toggleLatexBox()">📄 View / Copy Paper LaTeX Table</button>
-        <a class="btn btn-outline" href="aggregate/step04_comparison_summary.csv" download>📥 Download Step 04 CSV</a>
-      </div>
-    </div>
-    <div class="note-box">
-      <strong>Step 04 (Bone + QEM + SSDR):</strong>
-      Compares all 4 branches after joint weight and bone-transform optimization under identical bone budgets ($B$) and per-vertex sparsity ($K_{\max} \le 4$):
-      <strong>Ours Bone + Ours QEM + SSDR ★</strong>, <strong>UE5 Bone + Ours QEM + SSDR</strong>, <strong>Ours Bone + UE5 QEM + SSDR</strong>, and <strong>UE5 Bone + UE5 QEM + SSDR</strong>.
-    </div>
-    <div id="latex-panel" style="display:none; margin-bottom:18px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <strong>Paper LaTeX Source (<span id="latex-scale-label">Model-Scaled</span>):</strong>
-        <button class="btn btn-primary" onclick="copyLatexSource()">📋 Copy LaTeX</button>
-      </div>
-      <pre class="latex-box" id="latex-source-box"></pre>
-    </div>
-    <div class="table-wrap" id="table-step04-comparison" style="margin-bottom: 20px;"></div>
-    <div class="charts-grid-2" id="charts-step04-grid"></div>
-  </section>
-
-  <!-- MODULE 5: PARETO TRADE-OFF & 3-STAGE PROGRESSION -->
-  <section class="section-card">
-    <div class="section-header">
-      <h2>5️⃣ Module 5: Multi-Metric Trade-off Pareto Scatter &amp; 3-Stage Progression (Step 02 → Step 03 → Step 04)</h2>
-      <div class="controls-row">
-        <div class="ctrl-group">
-          <label for="sel-pareto-stage"><strong>Pareto Stage:</strong></label>
-          <select id="sel-pareto-stage">
-            <option value="step04" selected>Step 04 (Bone + QEM + SSDR)</option>
-            <option value="step03">Step 03 (Bone + QEM)</option>
-          </select>
-        </div>
-        <div class="ctrl-group">
-          <label for="sel-pareto-x"><strong>X-Axis:</strong></label>
-          <select id="sel-pareto-x"></select>
-        </div>
-        <div class="ctrl-group">
-          <label for="sel-pareto-y"><strong>Y-Axis:</strong></label>
-          <select id="sel-pareto-y"></select>
+    <!-- MODULE 1: Original Input & Multi-Stage Complexity Audit -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>1️⃣ Module 1: Original Input (Raw .blend &amp; Data1) vs. Multi-Stage Complexity &amp; Loose-Parts Audit</h2>
+        <div>
+          <a class="btn btn-outline btn-sm" href="aggregate/complexity_audit_table.csv" download>📥 Download Complexity CSV</a>
         </div>
       </div>
-    </div>
-    <div class="charts-grid-2">
-      <div class="chart-card">
-        <div class="chart-card-header">
-          <h3 id="pareto-chart-title">Multi-Metric Pareto Trade-off (Lower-Left = Better)</h3>
-          <div class="export-btns">
-            <button class="btn-xs" onclick="exportChartDom('chart-pareto-box', 'svg', 'ue_cmp_pareto')">SVG</button>
-            <button class="btn-xs" onclick="exportChartDom('chart-pareto-box', 'png', 'ue_cmp_pareto')">PNG</button>
-            <button class="btn-xs" onclick="exportChartDom('chart-pareto-box', 'pdf', 'ue_cmp_pareto')">PDF</button>
+      <div class="note-box">
+        <b>Hover over any row (or click to Pin to History):</b> The right-side Render Dock immediately switches its <b>Current Card</b> to that entry's 3D render.
+        Records exact <b>Meshes ($M$)</b>, <b>Vertices ($V$)</b>, <b>Triangles ($F$)</b>, <b>Total Bones ($B$)</b>, <b>Active Bones</b>, <b>Max Bones/Vertex ($K_{\max}$)</b>, and headless <b>Loose Parts (Topological vs. Welded)</b>.
+      </div>
+      <div class="table-wrap" id="table-complexity-audit"></div>
+    </section>
+
+    <!-- MODULE 2: Step 02 (Bone Reduction) -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>2️⃣ Module 2: Step 02 (Bone Reduction) — High-Poly Skinning Comparison</h2>
+        <div>
+          <a class="btn btn-outline btn-sm" href="aggregate/step02_comparison_summary.csv" download>📥 Download Step 02 CSV</a>
+        </div>
+      </div>
+      <div class="note-box">
+        <b>Step 02 (Bone Reduction):</b> Compares <b>Ours Bone Reduction ★</b> against <b>UE5 Bone Reduction</b> directly on the high-poly mesh (identical $V, F, B$) before QEM decimation and SSDR optimization. Hover any row or bar to inspect its high-poly render &amp; L2 heatmap on the right.
+      </div>
+      <div class="table-wrap" id="table-step02"></div>
+      <div class="charts-grid-3" id="charts-step02"></div>
+    </section>
+
+    <!-- MODULE 3: Step 03 (Bone + QEM) -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>3️⃣ Module 3: Step 03 (Bone + QEM) — Low-Poly Comparison Before SSDR Optimization</h2>
+        <div>
+          <a class="btn btn-outline btn-sm" href="aggregate/step03_comparison_summary.csv" download>📥 Download Step 03 CSV</a>
+        </div>
+      </div>
+      <div class="note-box">
+        <b>Step 03 (Bone + QEM):</b> Compares the 4 combinations of <b>Bone Reduction (Ours vs. UE5) × QEM Decimation (Ours vs. UE5)</b> on the decimated low-poly mesh prior to Stage 04 SSDR optimization.
+      </div>
+      <div class="table-wrap" id="table-step03"></div>
+      <div class="charts-grid-3" id="charts-step03"></div>
+    </section>
+
+    <!-- MODULE 4: Step 04 (Bone + QEM + SSDR) -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>4️⃣ Module 4: Step 04 (Bone + QEM + SSDR) — Final Optimized Comparison Across Equal Bone Quotas</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline btn-sm" onclick="toggleLatex()">📄 View / Copy Paper LaTeX Table</button>
+          <a class="btn btn-outline btn-sm" href="aggregate/step04_comparison_summary.csv" download>📥 Download Step 04 CSV</a>
+        </div>
+      </div>
+      <div class="note-box">
+        <b>Step 04 (Bone + QEM + SSDR):</b> Compares all 4 branches after joint weight and bone-transform optimization under identical bone budgets ($B$) and per-vertex sparsity ($K_{\max} \le 4$). Click any row or bar to pin a History Card on the right for side-by-side visual comparison!
+      </div>
+      <div class="latex-box" id="latex-container">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <span>Paper LaTeX Source (<b id="latex-scale-lbl">Model-Scaled</b>):</span>
+          <button class="btn btn-primary btn-sm" onclick="copyLatex()">📋 Copy LaTeX</button>
+        </div>
+        <pre id="latex-code" style="margin:0;white-space:pre-wrap;"></pre>
+      </div>
+      <div class="table-wrap" id="table-step04"></div>
+      <div class="charts-grid-3" id="charts-step04"></div>
+    </section>
+
+    <!-- MODULE 5: Pareto & 3-Stage Progression -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>5️⃣ Module 5: Multi-Metric Trade-off Pareto Scatter &amp; 3-Stage Progression (Step 02 → Step 03 → Step 04)</h2>
+        <div style="display:flex;gap:10px;align-items:center;font-size:0.83rem;">
+          <label>Pareto Stage:
+            <select id="pareto-stage">
+              <option value="step04" selected>Step 04 (Bone + QEM + SSDR)</option>
+              <option value="step03">Step 03 (Bone + QEM)</option>
+            </select>
+          </label>
+          <label>X-Axis: <select id="pareto-x"></select></label>
+          <label>Y-Axis: <select id="pareto-y"></select></label>
+        </div>
+      </div>
+      <div class="charts-grid-2">
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <h3>Multi-Metric Pareto Trade-off (Lower-Left = Better)</h3>
+            <div>
+              <button class="btn btn-outline btn-sm" onclick="exportChart('chart-pareto', 'svg')">SVG</button>
+              <button class="btn btn-outline btn-sm" onclick="exportChart('chart-pareto', 'png')">PNG</button>
+              <button class="btn btn-outline btn-sm" onclick="exportChart('chart-pareto', 'pdf')">PDF</button>
+            </div>
           </div>
+          <div id="chart-pareto" class="chart-box-tall"></div>
         </div>
-        <div id="chart-pareto-box" class="chart-box-tall"></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-header">
-          <h3>Stage Progression: Step 02 (Bone) → Step 03 (Bone+QEM) → Step 04 (Bone+QEM+SSDR)</h3>
-          <div class="export-btns">
-            <button class="btn-xs" onclick="exportChartDom('chart-progression-box', 'svg', 'stage_progression')">SVG</button>
-            <button class="btn-xs" onclick="exportChartDom('chart-progression-box', 'png', 'stage_progression')">PNG</button>
-            <button class="btn-xs" onclick="exportChartDom('chart-progression-box', 'pdf', 'stage_progression')">PDF</button>
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <h3>Stage Progression: Step 02 (Bone) → Step 03 (Bone+QEM) → Step 04 (Bone+QEM+SSDR)</h3>
+            <div>
+              <button class="btn btn-outline btn-sm" onclick="exportChart('chart-progression', 'svg')">SVG</button>
+              <button class="btn btn-outline btn-sm" onclick="exportChart('chart-progression', 'png')">PNG</button>
+              <button class="btn btn-outline btn-sm" onclick="exportChart('chart-progression', 'pdf')">PDF</button>
+            </div>
           </div>
+          <div id="chart-progression" class="chart-box-tall"></div>
         </div>
-        <div id="chart-progression-box" class="chart-box-tall"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- RIGHT COLUMN: Sticky Multi-Card Render Inspector Dock -->
+  <aside class="render-dock" id="render-dock">
+    <div class="dock-panel-header">
+      <h3>🖼️ Render Inspector Dock</h3>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;" title="Pause hover switching">
+          <input type="checkbox" id="lock-hover-chk"> 🔒 Lock Hover
+        </label>
+        <button class="rc-icon-btn" onclick="pinCurrentCard()" title="Pin current card to history">📌 Pin</button>
+        <button class="rc-icon-btn danger" onclick="clearHistoryCards()" title="Remove all pinned history cards">🗑️ Clear (<span id="hist-count">0</span>)</button>
       </div>
     </div>
-  </section>
 
+    <!-- Current Hover Card -->
+    <div id="current-render-card-slot"></div>
+
+    <!-- Pinned History Cards Stack -->
+    <div id="history-render-cards-slot" style="display:flex;flex-direction:column;gap:12px;"></div>
+  </aside>
 </div>
 
 <script>
-window.REPORT_PAYLOAD = __DATA_JSON__;
+window.REPORT_DATA = __DATA_JSON__;
+const D = window.REPORT_DATA;
+const METRICS = D.metricsMeta || [];
+const BENCHMARKS = D.benchmarks || [];
+const RENDERS_BY_DD = D.rendersByDataDir || {};
+const SUMMARY_BY_DD = D.entrySummaryByDataDir || {};
 
-const METHOD_COLORS = {
-  "s02_v1": "#1C328A",
-  "s02_ue": "#d97706",
-  "s03_v1_v1": "#1C328A",
-  "s03_ue_v1": "#0284c7",
-  "s03_v1_ue": "#7c3aed",
-  "s03_ue_ue": "#d97706",
-  "s04_v1_v1": "#1C328A",
-  "s04_ue_v1": "#0284c7",
-  "s04_v1_ue": "#7c3aed",
-  "s04_ue_ue": "#d97706"
+const chartInstances = {};
+let nextCardSeq = 1;
+
+// Default card configuration state:
+// currentCard tracks hovered data_dir; historyCards is an array of pinned card state objects
+let currentCardState = {
+  cardId: 'current',
+  isHistory: false,
+  dataDir: null,
+  baseMode: 'l2_heatmap', // 'clay' | 'l2_heatmap' | 'wireframe' | 'bone'
+  overlayBone: true,
+  overlayWire: false,
+  overlayOpacity: 0.72,
+  camera: 'front',
+  frameToken: 'f0000',
 };
 
-const chartInstances = [];
+let historyCards = [];
 
-function esc(v) {
-  return String(v ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+const METHOD_COLORS = {
+  s02_v1: '#1C328A',
+  s02_ue: '#D97706',
+  s03_v1_v1: '#1C328A',
+  s03_ue_v1: '#0F766E',
+  s03_v1_ue: '#7C3AED',
+  s03_ue_ue: '#DC2626',
+  s04_v1_v1: '#1C328A',
+  s04_ue_v1: '#0F766E',
+  s04_v1_ue: '#7C3AED',
+  s04_ue_ue: '#DC2626',
+};
 
-function fmtNum(v, digits = 4) {
-  if (v === null || v === undefined || v === "" || !Number.isFinite(Number(v))) return "-";
+function fmtNum(v) {
+  if (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) return '-';
   const n = Number(v);
-  if (Math.abs(n) === 0) return "0";
-  if (Math.abs(n) >= 1e5 || (Math.abs(n) > 0 && Math.abs(n) < 1e-3)) return n.toExponential(3);
-  return Number(n.toPrecision(digits)).toString();
+  if (!Number.isFinite(n)) return '-';
+  if (Math.abs(n) >= 10000 || (Math.abs(n) > 0 && Math.abs(n) < 0.001)) return n.toExponential(3);
+  return Number(n.toPrecision(4)).toString();
 }
 
 function fmtInt(v) {
-  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "-";
-  return Math.round(Number(v)).toLocaleString("en-US");
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
+  return Number(v).toLocaleString();
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function getScaleMode() {
-  return document.getElementById("sel-scale").value;
+  return document.getElementById('global-scale-mode').value;
 }
 
 function getAxisMode() {
-  return document.getElementById("sel-axis").value;
+  return document.getElementById('global-axis-mode').value;
 }
 
-function toggleLatexBox() {
-  const el = document.getElementById("latex-panel");
-  el.style.display = el.style.display === "none" ? "block" : "none";
+function getRenderBgClass() {
+  return document.getElementById('global-render-bg').value;
 }
 
-function copyLatexSource() {
-  const txt = document.getElementById("latex-source-box").innerText;
-  navigator.clipboard.writeText(txt);
+function toggleDock() {
+  document.getElementById('workspace-layout').classList.toggle('dock-collapsed');
+  setTimeout(() => {
+    Object.values(chartInstances).forEach(c => { try { c.resize(); } catch (_) {} });
+  }, 150);
 }
 
-function renderComplexityAuditTable() {
-  const P = window.REPORT_PAYLOAD;
-  const rows = P.complexityAuditRows || [];
-  let html = `<table>
-    <thead>
-      <tr>
-        <th>Model</th>
-        <th>Stage / Quota Tier</th>
-        <th>Method</th>
-        <th>Meshes (M)</th>
-        <th>Vertices (V)</th>
-        <th>Triangles (F)</th>
-        <th>Total Bones (B)</th>
-        <th>Active Bones</th>
-        <th>Max Bones/Vert (K)</th>
-        <th>Mean Bones/Vert</th>
-        <th>Loose Parts (Topo)</th>
-        <th>Loose Parts (Welded)</th>
-        <th>Main Comp. Face %</th>
-        <th>Pool Dir</th>
-      </tr>
-    </thead>
-    <tbody>`;
+/* =========================================================================
+   MULTI-CARD RENDER DOCK LOGIC (Current Hover Card + Pinned History Cards)
+   ========================================================================= */
 
-  rows.forEach(r => {
-    const c = r.complexity || {};
-    const rowCls = r.is_input ? "row-input" : (r.is_ours_full ? "row-ours" : "");
-    const badgeCls = r.is_input ? "badge-input" : (r.is_ours ? "badge-ours" : (r.is_hybrid ? "badge-hybrid" : "badge-ue"));
-    const mainPct = c.largest_component_face_ratio != null ? (Number(c.largest_component_face_ratio) * 100).toFixed(1) + "%" : "-";
-    html += `<tr class="${rowCls}">
-      <td><strong>${esc(r.model)}</strong></td>
-      <td>${esc(r.tier_label)}</td>
-      <td><span class="badge ${badgeCls}">${esc(r.method_label)}</span></td>
-      <td>${fmtInt(c.num_meshes)}</td>
-      <td>${fmtInt(c.num_vertices)}</td>
-      <td>${fmtInt(c.num_triangles)}</td>
-      <td><strong>${fmtInt(c.num_bones_total)}</strong></td>
-      <td>${fmtInt(c.num_bones_active)}</td>
-      <td><strong>${fmtInt(c.max_bones_per_vertex)}</strong></td>
-      <td>${fmtNum(c.mean_bones_per_vertex, 3)}</td>
-      <td><strong>${fmtInt(c.num_loose_parts)}</strong></td>
-      <td>${fmtInt(c.num_loose_parts_welded)}</td>
-      <td>${mainPct}</td>
-      <td><code>${esc(r.data_dir || "-")}</code></td>
-    </tr>`;
-  });
-
-  html += `</tbody></table>`;
-  document.getElementById("table-complexity-audit").innerHTML = html;
-}
-
-function renderStageSection(sectionKind, methodOrder, tableDomId, gridDomId, stageTitlePrefix) {
-  const P = window.REPORT_PAYLOAD;
-  const scaleMode = getScaleMode();
-  const mField = scaleMode === "scaled" ? "metrics_scaled" : "metrics_raw";
-  const fField = scaleMode === "scaled" ? "frame_stats_scaled" : "frame_stats_raw";
-  const benchmarks = P.benchmarks || [];
-  const metricsMeta = P.metricsMeta || [];
-
-  const isStep02 = sectionKind === "step02";
-  const chartMetrics = isStep02
-    ? metricsMeta.filter(m => ["l2_err", "hausdorff_mean", "hausdorff_max", "arap_ratio", "edge_excess", "normal_flip"].includes(m.key))
-    : metricsMeta;
-
-  let html = `<table>
-    <thead>
-      <tr>
-        <th>Model</th>
-        <th>Bone Quota Tier (Bones B)</th>
-        <th>${esc(stageTitlePrefix)} Method</th>
-        <th>Vertices / Tris</th>
-        <th>Bones (B / K_max)</th>
-        <th>Loose (Topo/Weld)</th>`;
-  chartMetrics.forEach(m => {
-    html += `<th>${esc(m.short)}${m.scaled && scaleMode === "scaled" ? " (Scaled)" : ""}</th>`;
-  });
-  html += `</tr></thead><tbody>`;
-
-  const oursKey = methodOrder[0];
-
-  benchmarks.forEach(bm => {
-    const stageMap = bm[sectionKind] || {};
-    const items = methodOrder.map(k => stageMap[k]).filter(Boolean);
-    const bestByMetric = {};
-    chartMetrics.forEach(m => {
-      const vals = items.map(it => it[mField][m.key]).filter(v => v != null && Number.isFinite(v));
-      if (vals.length) bestByMetric[m.key] = Math.min(...vals);
-    });
-    const baseItem = stageMap[oursKey];
-
-    items.forEach((it, idx) => {
-      const c = it.complexity;
-      const isOurs = it.method_key === oursKey;
-      const isPureUe = it.method_key.endsWith("ue_ue") || it.method_key === "s02_ue";
-      const badgeCls = isOurs ? "badge-ours" : (isPureUe ? "badge-ue" : "badge-hybrid");
-
-      html += `<tr class="${isOurs ? 'row-ours' : ''}">
-        <td>${idx === 0 ? '<strong>' + esc(bm.model) + '</strong>' : ''}</td>
-        <td>${idx === 0 ? esc(bm.quota_display) + ' (<strong>B=' + c.num_bones_total + '</strong>)' : ''}</td>
-        <td><span class="badge ${badgeCls}">${esc(it.method_label)}</span></td>
-        <td>${fmtInt(c.num_vertices)} / ${fmtInt(c.num_triangles)}</td>
-        <td><strong>${fmtInt(c.num_bones_total)}</strong> / ${fmtInt(c.max_bones_per_vertex)}</td>
-        <td>${fmtInt(c.num_loose_parts)} / ${fmtInt(c.num_loose_parts_welded)}</td>`;
-
-      chartMetrics.forEach(m => {
-        const val = it[mField][m.key];
-        const baseVal = baseItem ? baseItem[mField][m.key] : null;
-        const isBest = val != null && bestByMetric[m.key] != null && Math.abs(val - bestByMetric[m.key]) <= 1e-12;
-        let subHtml = "";
-        if (!isOurs && val != null && baseVal != null && Math.abs(baseVal) > 1e-12) {
-          const pct = ((val - baseVal) / baseVal) * 100.0;
-          const sign = pct >= 0 ? "+" : "";
-          const color = pct > 0 ? "#dc2626" : "#0f766e";
-          subHtml = `<span class="sub-val" style="color:${color};font-weight:600;">(${sign}${pct.toFixed(1)}% vs Ours★)</span>`;
-        } else {
-          const fst = (it[fField] || {})[m.fstat_key];
-          if (fst) {
-            subHtml = `<span class="sub-val">[${fmtNum(fst.min, 3)}, ${fmtNum(fst.max, 3)}] ±${fmtNum(fst.std, 2)}</span>`;
-          }
-        }
-        html += `<td class="${isBest ? 'best-cell' : ''}">${fmtNum(val, 4)}${subHtml}</td>`;
-      });
-      html += `</tr>`;
-    });
-  });
-
-  html += `</tbody></table>`;
-  document.getElementById(tableDomId).innerHTML = html;
-
-  const grid = document.getElementById(gridDomId);
-  grid.innerHTML = "";
-
-  chartMetrics.forEach(m => {
-    const domId = `chart-${sectionKind}-${m.key}`;
-    const card = document.createElement("div");
-    card.className = "chart-card";
-    card.innerHTML = `
-      <div class="chart-card-header">
-        <h3>${esc(stageTitlePrefix)}: ${esc(m.label)} ${m.scaled && scaleMode === "scaled" ? "(Model-Scaled)" : "(Raw)"}</h3>
-        <div class="export-btns">
-          <button class="btn-xs" onclick="exportChartDom('${domId}', 'svg', '${domId}')">SVG</button>
-          <button class="btn-xs" onclick="exportChartDom('${domId}', 'png', '${domId}')">PNG</button>
-          <button class="btn-xs" onclick="exportChartDom('${domId}', 'pdf', '${domId}')">PDF</button>
-        </div>
-      </div>
-      <div id="${domId}" class="chart-box"></div>`;
-    grid.appendChild(card);
-
-    renderGroupedBarChart(domId, benchmarks, m, scaleMode, sectionKind, methodOrder);
-  });
-}
-
-function renderGroupedBarChart(domId, benchmarks, metricMeta, scaleMode, sectionKind, methodKeys) {
-  const dom = document.getElementById(domId);
-  if (!dom) return;
-  const chart = echarts.init(dom, null, { renderer: "svg" });
-  chartInstances.push(chart);
-
-  const mField = scaleMode === "scaled" ? "metrics_scaled" : "metrics_raw";
-  const fField = scaleMode === "scaled" ? "frame_stats_scaled" : "frame_stats_raw";
-  const mk = metricMeta.key;
-  const fk = metricMeta.fstat_key;
-
-  const categories = benchmarks.map(b => `${b.model}\n[${b.quota_short}: ${b.bones_count}B]`);
-
-  const allPositiveVals = [];
-  benchmarks.forEach(bm => {
-    const container = bm[sectionKind] || {};
-    methodKeys.forEach(k => {
-      const it = container[k];
-      if (!it) return;
-      const v = it[mField][mk];
-      if (v != null && v > 0) allPositiveVals.push(v);
-    });
-  });
-
-  let usePseudoLog = false;
-  let cThresh = 1e-4;
-  if (getAxisMode() === "auto" && allPositiveVals.length >= 2) {
-    const minP = Math.min(...allPositiveVals);
-    const maxP = Math.max(...allPositiveVals);
-    if (maxP / Math.max(minP, 1e-12) >= 35.0) {
-      usePseudoLog = true;
-      const sorted = [...allPositiveVals].sort((a, b) => a - b);
-      cThresh = Math.max(sorted[Math.floor(sorted.length * 0.15)], 1e-8);
+function findDefaultDataDir() {
+  for (const bm of BENCHMARKS) {
+    const s04 = bm.step04 && bm.step04.s04_v1_v1;
+    if (s04 && RENDERS_BY_DD[s04.data_dir] && (RENDERS_BY_DD[s04.data_dir].items || []).length > 0) {
+      return s04.data_dir;
     }
   }
+  const keys = Object.keys(RENDERS_BY_DD).filter(k => (RENDERS_BY_DD[k].items || []).length > 0);
+  return keys[0] || null;
+}
 
-  const fwd = (v) => {
-    if (v == null || !Number.isFinite(v)) return null;
-    return usePseudoLog ? Math.log10(1 + Math.max(0, v) / cThresh) : v;
-  };
-  const inv = (y) => {
-    if (y == null || !Number.isFinite(y)) return null;
-    return usePseudoLog ? cThresh * (Math.pow(10, y) - 1) : y;
-  };
+function resolveCardLayers(cardState) {
+  const rec = RENDERS_BY_DD[cardState.dataDir];
+  if (!rec || !rec.items || rec.items.length === 0) {
+    return { available: false, cameras: [], frames: [], baseItem: null, overlayItems: [] };
+  }
+  const cameras = rec.cameras && rec.cameras.length ? rec.cameras : ['front'];
+  const frames = rec.frames && rec.frames.length ? rec.frames : ['f0000'];
 
-  const series = methodKeys.map(mKey => {
-    let sampleLabel = mKey;
-    const dataArr = benchmarks.map(bm => {
-      const container = bm[sectionKind] || {};
-      const it = container[mKey];
-      if (!it) return { value: null };
-      sampleLabel = it.method_short || it.method_label;
-      const rawV = it[mField][mk];
-      const fst = (it[fField] || {})[fk];
+  const activeCam = cameras.includes(cardState.camera) ? cardState.camera : cameras[0];
+  const activeFrame = frames.includes(cardState.frameToken) ? cardState.frameToken : frames[0];
+
+  // Filter items matching (activeCam, activeFrame), with fallback to any frame/camera if combination wasn't rendered yet
+  let pool = rec.items.filter(it => it.camera_short === activeCam && it.frame_token === activeFrame);
+  let fallbackNotice = '';
+  if (pool.length === 0) {
+    pool = rec.items.filter(it => it.camera_short === activeCam);
+    if (pool.length > 0) fallbackNotice = `(Showing ${pool[0].frame_token} for ${activeCam})`;
+  }
+  if (pool.length === 0) {
+    pool = rec.items.filter(it => it.frame_token === activeFrame);
+    if (pool.length > 0) fallbackNotice = `(Showing ${pool[0].camera_short} for ${activeFrame})`;
+  }
+  if (pool.length === 0) {
+    pool = rec.items;
+  }
+
+  const byMode = {};
+  pool.forEach(it => { byMode[it.render_mode] = it; });
+
+  const baseItem = byMode[cardState.baseMode] || byMode['l2_heatmap'] || byMode['clay'] || pool[0];
+  const overlayItems = [];
+  if (cardState.overlayBone && byMode['bone'] && baseItem.render_mode !== 'bone') {
+    overlayItems.push(byMode['bone']);
+  }
+  if (cardState.overlayWire && byMode['wireframe'] && baseItem.render_mode !== 'wireframe') {
+    overlayItems.push(byMode['wireframe']);
+  }
+
+  return {
+    available: true,
+    cameras,
+    frames,
+    activeCam,
+    activeFrame,
+    fallbackNotice,
+    baseItem,
+    overlayItems,
+    byMode,
+  };
+}
+
+function buildRenderCardHtml(cardState) {
+  const cid = cardState.cardId;
+  const dd = cardState.dataDir;
+  const summary = SUMMARY_BY_DD[dd] || {};
+  const comp = summary.complexity || {};
+  const mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+  const mets = summary[mField] || {};
+  const layers = resolveCardLayers(cardState);
+  const bgClass = getRenderBgClass();
+  const entryShort = dd ? dd.split('/').pop() : '-';
+
+  const badgeHtml = cardState.isHistory
+    ? `<span class="rc-badge rc-badge-history">📌 HISTORY #${cardState.seq}</span>`
+    : `<span class="rc-badge rc-badge-current">🎯 CURRENT (HOVER)</span>`;
+
+  const actionBtnHtml = cardState.isHistory
+    ? `<button class="rc-icon-btn danger" onclick="removeHistoryCard('${cid}')" title="Delete this history card">✖ Delete</button>`
+    : `<button class="rc-icon-btn" onclick="pinCurrentCard()" title="Pin this card to History">📌 Pin to History</button>`;
+
+  if (!layers.available) {
+    return `
+      <div class="render-card ${cardState.isHistory ? 'history-card' : 'current-card'}" id="rc-${cid}">
+        <div class="rc-header">
+          <div>
+            <div class="rc-title">${badgeHtml} ${escapeHtml(summary.model || '')} · ${escapeHtml(entryShort)}</div>
+            <div class="rc-sub">${escapeHtml(summary.stage_label || '')} — ${escapeHtml(summary.method_label || 'No render available')}</div>
+          </div>
+          ${actionBtnHtml}
+        </div>
+        <div style="padding:28px 16px;text-align:center;color:#94a3b8;font-size:0.82rem;">
+          No rendered images found for <code>${escapeHtml(dd || '-')}</code>.<br>
+          Hover over any Step 02 / Step 03 / Step 04 row or bar chart to preview renders.
+        </div>
+      </div>
+    `;
+  }
+
+  const camOpts = layers.cameras.map(c =>
+    `<option value="${escapeHtml(c)}" ${c === layers.activeCam ? 'selected' : ''}>${escapeHtml(c)}</option>`
+  ).join('');
+  const frameOpts = layers.frames.map(f =>
+    `<option value="${escapeHtml(f)}" ${f === layers.activeFrame ? 'selected' : ''}>${escapeHtml(f)}</option>`
+  ).join('');
+
+  const baseModes = [
+    ['l2_heatmap', '🔥 L2 Heatmap'],
+    ['clay', '🎨 Clay Shaded'],
+    ['wireframe', '🕸️ Wireframe'],
+    ['bone', '🦴 Skeleton Only'],
+  ];
+  const baseOpts = baseModes.map(([val, lbl]) =>
+    `<option value="${val}" ${cardState.baseMode === val ? 'selected' : ''}>${lbl}</option>`
+  ).join('');
+
+  const imgsHtml = [
+    `<img class="layer-img base-layer" src="${escapeHtml(layers.baseItem.rel_png)}" alt="base">`,
+    ...layers.overlayItems.map(ov =>
+      `<img class="layer-img ov-layer" src="${escapeHtml(ov.rel_png)}" style="opacity:${cardState.overlayOpacity}" alt="${escapeHtml(ov.render_mode)}">`
+    ),
+    layers.baseItem.rel_colorbar
+      ? `<img class="colorbar-img" src="${escapeHtml(layers.baseItem.rel_colorbar)}" alt="colorbar">`
+      : '',
+  ].join('');
+
+  return `
+    <div class="render-card ${cardState.isHistory ? 'history-card' : 'current-card'}" id="rc-${cid}">
+      <div class="rc-header">
+        <div>
+          <div class="rc-title">${badgeHtml} ${escapeHtml(summary.model || '')} · <span style="color:#38bdf8">${escapeHtml(entryShort)}</span></div>
+          <div class="rc-sub">${escapeHtml(summary.stage_label || '')} | <b>${escapeHtml(summary.method_label || '')}</b> (${escapeHtml(summary.quota_label || '')})</div>
+        </div>
+        ${actionBtnHtml}
+      </div>
+
+      <div class="rc-controls">
+        <div class="rc-ctrl-row">
+          <label>Type:
+            <select onchange="updateCardSetting('${cid}', 'baseMode', this.value)">${baseOpts}</select>
+          </label>
+          <label>View:
+            <select onchange="updateCardSetting('${cid}', 'camera', this.value)">${camOpts}</select>
+          </label>
+          <label>Frame:
+            <select onchange="updateCardSetting('${cid}', 'frameToken', this.value)">${frameOpts}</select>
+          </label>
+        </div>
+        <div class="rc-ctrl-row">
+          <div class="rc-layer-pills">
+            <span style="color:#94a3b8;">Overlay:</span>
+            <label>
+              <input type="checkbox" ${cardState.overlayBone ? 'checked' : ''} onchange="updateCardSetting('${cid}', 'overlayBone', this.checked)">
+              +🦴 Bone
+            </label>
+            <label>
+              <input type="checkbox" ${cardState.overlayWire ? 'checked' : ''} onchange="updateCardSetting('${cid}', 'overlayWire', this.checked)">
+              +🕸️ Wire
+            </label>
+          </div>
+          <label title="Overlay layer opacity">Alpha:
+            <input type="range" min="15" max="100" value="${Math.round(cardState.overlayOpacity * 100)}" style="width:68px;"
+              oninput="updateCardSetting('${cid}', 'overlayOpacity', Number(this.value)/100)">
+          </label>
+        </div>
+        ${layers.fallbackNotice ? `<div style="color:#fbbf24;font-size:0.71rem;">ℹ️ ${escapeHtml(layers.fallbackNotice)}</div>` : ''}
+      </div>
+
+      <div class="rc-viewport ${bgClass}">
+        ${imgsHtml}
+      </div>
+
+      <div class="rc-metrics-bar">
+        <div>V / F: <b>${fmtInt(comp.num_vertices)} / ${fmtInt(comp.num_triangles)}</b></div>
+        <div>Bones: <b>${fmtInt(comp.num_bones_total)} (K=${fmtInt(comp.max_bones_per_vertex)})</b></div>
+        <div>Loose: <b>${fmtInt(comp.num_loose_parts)}/${fmtInt(comp.num_loose_parts_welded)}</b></div>
+        <div>VD (L2): <b>${fmtNum(mets.l2_err)}</b></div>
+        <div>HD Mean: <b>${fmtNum(mets.hausdorff_mean)}</b></div>
+        <div>ARAP: <b>${fmtNum(mets.arap_ratio)}</b></div>
+      </div>
+
+      <div class="rc-footer">
+        <a href="${escapeHtml(layers.baseItem.rel_png)}" download="${escapeHtml(entryShort)}_${escapeHtml( summary.model || 'model')}_${escapeHtml(layers.baseItem.render_type)}_${escapeHtml(layers.baseItem.frame_token)}.png">
+          📥 Raw PNG
+        </a>
+        <button onclick="exportCardCompositedPng('${cid}')">
+          🖼️ Export Composited PNG
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderDockCards() {
+  if (!currentCardState.dataDir) {
+    currentCardState.dataDir = findDefaultDataDir();
+  }
+  const curSlot = document.getElementById('current-render-card-slot');
+  curSlot.innerHTML = buildRenderCardHtml(currentCardState);
+
+  const histSlot = document.getElementById('history-render-cards-slot');
+  histSlot.innerHTML = historyCards.map(hc => buildRenderCardHtml(hc)).join('');
+  document.getElementById('hist-count').textContent = String(historyCards.length);
+}
+
+function getCardById(cardId) {
+  if (cardId === 'current') return currentCardState;
+  return historyCards.find(c => c.cardId === cardId) || null;
+}
+
+function updateCardSetting(cardId, field, value) {
+  const card = getCardById(cardId);
+  if (!card) return;
+  card[field] = value;
+  renderDockCards();
+}
+
+function hoverEntryDataDir(dataDir) {
+  if (!dataDir) return;
+  if (document.getElementById('lock-hover-chk').checked) return;
+  if (currentCardState.dataDir === dataDir) return;
+  currentCardState.dataDir = dataDir;
+  renderDockCards();
+
+  document.querySelectorAll('tr.hoverable-row').forEach(tr => {
+    tr.classList.toggle('row-active-hover', tr.getAttribute('data-dir') === dataDir);
+  });
+}
+
+function pinDataDirToHistory(dataDir) {
+  const targetDir = dataDir || currentCardState.dataDir;
+  if (!targetDir) return;
+  const seq = nextCardSeq++;
+  const cloned = {
+    ...currentCardState,
+    cardId: `hist_${seq}`,
+    seq: seq,
+    isHistory: true,
+    dataDir: targetDir,
+  };
+  historyCards.unshift(cloned);
+  renderDockCards();
+}
+
+function pinCurrentCard() {
+  pinDataDirToHistory(currentCardState.dataDir);
+}
+
+function removeHistoryCard(cardId) {
+  historyCards = historyCards.filter(c => c.cardId !== cardId);
+  renderDockCards();
+}
+
+function clearHistoryCards() {
+  historyCards = [];
+  renderDockCards();
+}
+
+function loadImagePromise(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function exportCardCompositedPng(cardId) {
+  const card = getCardById(cardId);
+  if (!card) return;
+  const layers = resolveCardLayers(card);
+  if (!layers.available || !layers.baseItem) return;
+
+  const w = (layers.baseItem.resolution && layers.baseItem.resolution[0]) || 1024;
+  const h = (layers.baseItem.resolution && layers.baseItem.resolution[1]) || 1024;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  const bgMode = getRenderBgClass();
+  if (bgMode === 'bg-white') {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+  } else if (bgMode === 'bg-dark') {
+    ctx.fillStyle = '#090d16';
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  const baseImg = await loadImagePromise(layers.baseItem.rel_png);
+  ctx.globalAlpha = 1.0;
+  ctx.drawImage(baseImg, 0, 0, w, h);
+
+  for (const ov of layers.overlayItems) {
+    const ovImg = await loadImagePromise(ov.rel_png);
+    ctx.globalAlpha = card.overlayOpacity;
+    ctx.drawImage(ovImg, 0, 0, w, h);
+  }
+  ctx.globalAlpha = 1.0;
+
+  if (layers.baseItem.rel_colorbar) {
+    try {
+      const cbImg = await loadImagePromise(layers.baseItem.rel_colorbar);
+      const cbH = Math.round(h * 0.52);
+      const cbW = Math.round((cbImg.width / Math.max(1, cbImg.height)) * cbH);
+      const x0 = w - cbW - 18;
+      const y0 = h - cbH - 18;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+      ctx.fillRect(x0 - 6, y0 - 6, cbW + 12, cbH + 12);
+      ctx.drawImage(cbImg, x0, y0, cbW, cbH);
+    } catch (_) {}
+  }
+
+  const summary = SUMMARY_BY_DD[card.dataDir] || {};
+  const entryShort = (card.dataDir || 'render').split('/').pop();
+  canvas.toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${entryShort}_${summary.model || 'model'}_${layers.baseItem.render_mode}_composited.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+}
+
+/* =========================================================================
+   TABLES & ECHARTS RENDERING WITH HOVER / CLICK BINDINGS
+   ========================================================================= */
+
+function renderComplexityTable() {
+  const rows = D.complexityAuditRows || [];
+  let html = `
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Pipeline Stage &amp; Quota Tier</th>
+          <th>Method</th>
+          <th>Entry</th>
+          <th>Meshes ($M$)</th>
+          <th>Vertices ($V$)</th>
+          <th>Triangles ($F$)</th>
+          <th>Total Bones ($B$)</th>
+          <th>Active Bones</th>
+          <th>Max $K$</th>
+          <th>Mean $K$</th>
+          <th>Loose (Topo / Welded)</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  rows.forEach(r => {
+    const c = r.complexity || {};
+    const cls = r.is_input ? 'row-input' : (r.is_ours ? 'row-ours' : '');
+    const entryShort = (r.data_dir || '').split('/').pop();
+    html += `
+      <tr class="hoverable-row ${cls}" data-dir="${escapeHtml(r.data_dir)}"
+          onmouseenter="hoverEntryDataDir('${escapeHtml(r.data_dir)}')"
+          onclick="pinDataDirToHistory('${escapeHtml(r.data_dir)}')">
+        <td><b>${escapeHtml(r.model)}</b></td>
+        <td>${escapeHtml(r.tier_label)}</td>
+        <td>${escapeHtml(r.method_label)}</td>
+        <td><code>${escapeHtml(entryShort)}</code></td>
+        <td>${fmtInt(c.num_meshes)}</td>
+        <td>${fmtInt(c.num_vertices)}</td>
+        <td>${fmtInt(c.num_triangles)}</td>
+        <td><b>${fmtInt(c.num_bones_total)}</b></td>
+        <td>${fmtInt(c.num_bones_active)}</td>
+        <td>${fmtInt(c.max_bones_per_vertex)}</td>
+        <td>${fmtNum(c.mean_bones_per_vertex)}</td>
+        <td>${fmtInt(c.num_loose_parts)} / ${fmtInt(c.num_loose_parts_welded)}</td>
+      </tr>
+    `;
+  });
+  html += '</tbody></table>';
+  document.getElementById('table-complexity-audit').innerHTML = html;
+}
+
+function renderStageComparisonTable(containerId, stageField, branchKeys) {
+  const mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+  let html = `
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Quota ($B$)</th>
+          <th>Method</th>
+          <th>Entry</th>
+          <th>Verts ($V$)</th>
+          <th>Tris ($F$)</th>
+          <th>Max $K$</th>
+          <th>Loose (Topo/Weld)</th>
+          ${METRICS.map(m => `<th>${escapeHtml(m.short)}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  BENCHMARKS.forEach(bm => {
+    const stageMap = bm[stageField] || {};
+    const items = branchKeys.map(k => stageMap[k]).filter(Boolean);
+    const bestByMetric = {};
+    METRICS.forEach(m => {
+      const vals = items.map(it => (it[mField] || {})[m.key]).filter(v => typeof v === 'number' && Number.isFinite(v));
+      if (vals.length) bestByMetric[m.key] = Math.min(...vals);
+    });
+
+    items.forEach((it, idx) => {
+      const c = it.complexity || {};
+      const mt = it[mField] || {};
+      const isOurs = it.method_key.endsWith('_v1_v1') || it.method_key === 's02_v1';
+      const entryShort = (it.data_dir || '').split('/').pop();
+
+      html += `
+        <tr class="hoverable-row ${isOurs ? 'row-ours' : ''}" data-dir="${escapeHtml(it.data_dir)}"
+            onmouseenter="hoverEntryDataDir('${escapeHtml(it.data_dir)}')"
+            onclick="pinDataDirToHistory('${escapeHtml(it.data_dir)}')">
+          <td><b>${idx === 0 ? escapeHtml(bm.model) : ''}</b></td>
+          <td>${idx === 0 ? `${escapeHtml(bm.quota_short)} (${bm.bones_count})` : ''}</td>
+          <td>${escapeHtml(it.method_label)}</td>
+          <td><code>${escapeHtml(entryShort)}</code></td>
+          <td>${fmtInt(c.num_vertices)}</td>
+          <td>${fmtInt(c.num_triangles)}</td>
+          <td>${fmtInt(c.max_bones_per_vertex)}</td>
+          <td>${fmtInt(c.num_loose_parts)} / ${fmtInt(c.num_loose_parts_welded)}</td>
+          ${METRICS.map(m => {
+            const val = mt[m.key];
+            const isBest = val !== null && val !== undefined && bestByMetric[m.key] !== undefined && Math.abs(val - bestByMetric[m.key]) <= 1e-12;
+            return `<td class="${isBest ? 'best-cell' : ''}">${fmtNum(val)}</td>`;
+          }).join('')}
+        </tr>
+      `;
+    });
+  });
+
+  html += '</tbody></table>';
+  document.getElementById(containerId).innerHTML = html;
+}
+
+function renderStageBarCharts(containerId, stageField, branchKeys) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  const mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+  const fField = getScaleMode() === 'scaled' ? 'frame_stats_scaled' : 'frame_stats_raw';
+  const chartMetrics = METRICS.slice(0, 6);
+
+  const xLabels = BENCHMARKS.map(bm => `${bm.model}\n${bm.quota_short}(B=${bm.bones_count})`);
+
+  chartMetrics.forEach(m => {
+    const domId = `chart-${stageField}-${m.key}`;
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `
+      <div class="chart-card-header">
+        <h3>${escapeHtml(m.label)}</h3>
+        <div>
+          <button class="btn btn-outline btn-sm" onclick="exportChart('${domId}', 'svg')">SVG</button>
+          <button class="btn btn-outline btn-sm" onclick="exportChart('${domId}', 'png')">PNG</button>
+        </div>
+      </div>
+      <div id="${domId}" class="chart-box"></div>
+    `;
+    container.appendChild(card);
+
+    const dom = document.getElementById(domId);
+    const chart = echarts.init(dom, null, { renderer: 'svg' });
+    chartInstances[domId] = chart;
+
+    const allPositive = [];
+    const series = branchKeys.map(bKey => {
+      const sampleIt = BENCHMARKS[0] && BENCHMARKS[0][stageField] && BENCHMARKS[0][stageField][bKey];
+      const seriesName = sampleIt ? sampleIt.method_short : bKey;
+      const data = BENCHMARKS.map(bm => {
+        const it = (bm[stageField] || {})[bKey];
+        if (!it) return null;
+        const val = (it[mField] || {})[m.key];
+        if (typeof val === 'number' && val > 0) allPositive.push(val);
+        const fstat = m.fstat_key ? ((it[fField] || {})[m.fstat_key] || null) : null;
+        return {
+          value: val,
+          dataDir: it.data_dir,
+          model: bm.model,
+          quota: `${bm.quota_short} (B=${bm.bones_count})`,
+          method: it.method_label,
+          fstat: fstat,
+        };
+      });
       return {
-        value: fwd(rawV),
-        rawVal: rawV,
-        fstat: fst,
-        bmLabel: `${bm.model} (${bm.quota_display}, B=${bm.bones_count})`,
-        methodLabel: it.method_label
+        name: seriesName,
+        type: 'bar',
+        barMaxWidth: 22,
+        itemStyle: { color: METHOD_COLORS[bKey] || '#1C328A' },
+        data: data,
       };
     });
 
-    return {
-      name: sampleLabel,
-      type: "bar",
-      barMaxWidth: 24,
-      itemStyle: {
-        color: METHOD_COLORS[mKey] || "#475569",
-        borderRadius: [3, 3, 0, 0]
-      },
-      data: dataArr
-    };
-  });
+    const useLog = getAxisMode() === 'auto' && allPositive.length >= 2 && (Math.max(...allPositive) / Math.min(...allPositive) > 45);
 
-  chart.setOption({
-    animation: false,
-    tooltip: {
-      trigger: "axis",
-      axisPointer: { type: "shadow" },
-      formatter: (params) => {
-        if (!params || !params.length) return "";
-        const head = params[0].data.bmLabel || params[0].name;
-        let lines = [`<strong>${esc(head)}</strong>`];
-        params.forEach(p => {
+    chart.setOption({
+      animation: false,
+      tooltip: {
+        trigger: 'item',
+        formatter: p => {
           const d = p.data || {};
-          const fLine = d.fstat ? ` <span style="color:#64748b;">(min=${fmtNum(d.fstat.min,3)}, max=${fmtNum(d.fstat.max,3)}, std=${fmtNum(d.fstat.std,2)})</span>` : "";
-          lines.push(`${p.marker} ${esc(p.seriesName)}: <strong>${fmtNum(d.rawVal, 4)}</strong>${fLine}`);
-        });
-        return lines.join("<br/>");
+          let s = `<b>${escapeHtml(d.model)} · ${escapeHtml(d.quota)}</b><br/>` +
+                  `${escapeHtml(d.method)}<br/>` +
+                  `${escapeHtml(m.short)}: <b>${fmtNum(d.value)}</b>`;
+          if (d.fstat && d.fstat.min !== undefined) {
+            s += `<br/>Frame [min, max]: [${fmtNum(d.fstat.min)}, ${fmtNum(d.fstat.max)}]`;
+          }
+          s += `<br/><span style="color:#0284c7;font-size:11px;">(Click bar to Pin render card)</span>`;
+          return s;
+        }
+      },
+      legend: { top: 4, type: 'plain', itemWidth: 12, itemHeight: 10, textStyle: { fontSize: 10.5 } },
+      grid: { top: 54, left: 64, right: 16, bottom: 58 },
+      xAxis: {
+        type: 'category',
+        data: xLabels,
+        axisLabel: { fontSize: 9.5, interval: 0, rotate: 18 }
+      },
+      yAxis: {
+        type: useLog ? 'log' : 'value',
+        name: m.short,
+        nameLocation: 'middle',
+        nameGap: 48,
+        scale: useLog
+      },
+      series: series
+    });
+
+    chart.on('mouseover', params => {
+      if (params.data && params.data.dataDir) {
+        hoverEntryDataDir(params.data.dataDir);
       }
-    },
-    legend: {
-      type: "plain",
-      top: 4,
-      left: "center",
-      itemGap: 14,
-      itemWidth: 16,
-      itemHeight: 11,
-      textStyle: { fontSize: 11.5 }
-    },
-    grid: {
-      top: sectionKind === "step02" ? 54 : 84,
-      left: 76,
-      right: 22,
-      bottom: 76
-    },
-    xAxis: {
-      type: "category",
-      data: categories,
-      axisLabel: { interval: 0, fontSize: 10.5, rotate: 16, margin: 10 }
-    },
-    yAxis: {
-      type: "value",
-      name: usePseudoLog ? `${metricMeta.short} (pseudo-log)` : metricMeta.short,
-      nameLocation: "middle",
-      nameGap: 56,
-      nameTextStyle: { fontWeight: "bold", fontSize: 11.5 },
-      axisLabel: {
-        formatter: (v) => fmtNum(inv(v), 3)
+    });
+    chart.on('click', params => {
+      if (params.data && params.data.dataDir) {
+        pinDataDirToHistory(params.data.dataDir);
       }
-    },
-    series: series
-  }, true);
-}
-
-function initParetoSelectors() {
-  const P = window.REPORT_PAYLOAD;
-  const metricsMeta = P.metricsMeta || [];
-  const selX = document.getElementById("sel-pareto-x");
-  const selY = document.getElementById("sel-pareto-y");
-  selX.innerHTML = "";
-  selY.innerHTML = "";
-
-  metricsMeta.forEach((m) => {
-    const optX = document.createElement("option");
-    optX.value = m.key;
-    optX.textContent = m.label;
-    if (m.key === "l2_err") optX.selected = true;
-    selX.appendChild(optX);
-
-    const optY = document.createElement("option");
-    optY.value = m.key;
-    optY.textContent = m.label;
-    if (m.key === "arap_ratio") optY.selected = true;
-    selY.appendChild(optY);
+    });
   });
 }
 
 function renderParetoAndProgression() {
-  const P = window.REPORT_PAYLOAD;
-  const scaleMode = getScaleMode();
-  const paretoStage = document.getElementById("sel-pareto-stage").value || "step04";
-  const mField = scaleMode === "scaled" ? "metrics_scaled" : "metrics_raw";
-  const benchmarks = P.benchmarks || [];
-  const metricsMeta = P.metricsMeta || [];
-  const metaByKey = Object.fromEntries(metricsMeta.map(m => [m.key, m]));
+  const mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+  const pStage = document.getElementById('pareto-stage').value;
+  const xKey = document.getElementById('pareto-x').value;
+  const yKey = document.getElementById('pareto-y').value;
+  const xMeta = METRICS.find(m => m.key === xKey) || METRICS[0];
+  const yMeta = METRICS.find(m => m.key === yKey) || METRICS[3];
 
-  const xKey = document.getElementById("sel-pareto-x").value || "l2_err";
-  const yKey = document.getElementById("sel-pareto-y").value || "arap_ratio";
-  const xMeta = metaByKey[xKey] || { short: xKey };
-  const yMeta = metaByKey[yKey] || { short: yKey };
+  const paretoDom = document.getElementById('chart-pareto');
+  let pChart = chartInstances['chart-pareto'] || echarts.init(paretoDom, null, { renderer: 'svg' });
+  chartInstances['chart-pareto'] = pChart;
 
-  // 1. Pareto Scatter
-  const domP = document.getElementById("chart-pareto-box");
-  const chartP = echarts.init(domP, null, { renderer: "svg" });
-  chartInstances.push(chartP);
+  const branchKeys = pStage === 'step04'
+    ? ['s04_v1_v1', 's04_ue_v1', 's04_v1_ue', 's04_ue_ue']
+    : ['s03_v1_v1', 's03_ue_v1', 's03_v1_ue', 's03_ue_ue'];
 
-  const methodOrder = paretoStage === "step03"
-    ? ["s03_v1_v1", "s03_ue_v1", "s03_v1_ue", "s03_ue_ue"]
-    : ["s04_v1_v1", "s04_ue_v1", "s04_v1_ue", "s04_ue_ue"];
-
-  const pSeries = methodOrder.map((mKey, mIdx) => {
-    let sName = mKey;
+  const pSeries = branchKeys.map(bKey => {
+    const sampleIt = BENCHMARKS[0] && BENCHMARKS[0][pStage] && BENCHMARKS[0][pStage][bKey];
+    const name = sampleIt ? sampleIt.method_short : bKey;
     const pts = [];
-    benchmarks.forEach(bm => {
-      const it = (bm[paretoStage] || {})[mKey];
+    BENCHMARKS.forEach(bm => {
+      const it = (bm[pStage] || {})[bKey];
       if (!it) return;
-      sName = it.method_short || it.method_label;
-      const xv = it[mField][xKey];
-      const yv = it[mField][yKey];
-      if (xv != null && yv != null) {
+      const xv = (it[mField] || {})[xKey];
+      const yv = (it[mField] || {})[yKey];
+      if (typeof xv === 'number' && typeof yv === 'number') {
         pts.push({
           value: [xv, yv],
-          bmLabel: `${bm.model} [${bm.quota_display}, B=${bm.bones_count}]`,
-          methodLabel: it.method_label
+          dataDir: it.data_dir,
+          model: bm.model,
+          quota: `${bm.quota_short} (B=${bm.bones_count})`,
+          method: it.method_label,
         });
       }
     });
     return {
-      name: sName,
-      type: "scatter",
-      symbolSize: mIdx === 0 ? 16 : 12,
-      symbol: mIdx === 0 ? "diamond" : "circle",
-      itemStyle: { color: METHOD_COLORS[mKey] || "#475569", opacity: 0.9 },
-      data: pts
+      name: name,
+      type: 'scatter',
+      symbolSize: bKey.endsWith('_v1_v1') ? 16 : 12,
+      itemStyle: { color: METHOD_COLORS[bKey] || '#1C328A' },
+      data: pts,
     };
   });
 
-  chartP.setOption({
+  pChart.setOption({
     animation: false,
     tooltip: {
-      trigger: "item",
-      formatter: (p) => {
+      trigger: 'item',
+      formatter: p => {
         const d = p.data || {};
-        return `<strong>${esc(d.bmLabel)}</strong><br/>`
-          + `${esc(d.methodLabel)}<br/>`
-          + `${esc(xMeta.short)}: <strong>${fmtNum(d.value[0], 4)}</strong><br/>`
-          + `${esc(yMeta.short)}: <strong>${fmtNum(d.value[1], 4)}</strong>`;
+        return `<b>${escapeHtml(d.model)} · ${escapeHtml(d.quota)}</b><br/>` +
+               `${escapeHtml(d.method)}<br/>` +
+               `${escapeHtml(xMeta.short)}: <b>${fmtNum(d.value[0])}</b><br/>` +
+               `${escapeHtml(yMeta.short)}: <b>${fmtNum(d.value[1])}</b>`;
       }
     },
-    legend: { type: "plain", top: 4, left: "center", itemGap: 12, textStyle: { fontSize: 11.5 } },
-    grid: { top: 82, left: 76, right: 28, bottom: 58 },
-    xAxis: { type: "value", name: xMeta.short, nameLocation: "middle", nameGap: 32, scale: true },
-    yAxis: { type: "value", name: yMeta.short, nameLocation: "middle", nameGap: 54, scale: true },
+    legend: { top: 4, type: 'plain', textStyle: { fontSize: 10.5 } },
+    grid: { top: 52, left: 68, right: 24, bottom: 52 },
+    xAxis: { type: 'value', name: xMeta.label, nameLocation: 'middle', nameGap: 32, scale: true },
+    yAxis: { type: 'value', name: yMeta.label, nameLocation: 'middle', nameGap: 50, scale: true },
     series: pSeries
   }, true);
 
-  // 2. 3-Stage Progression Chart (Step 02 -> Step 03 -> Step 04)
-  const domProg = document.getElementById("chart-progression-box");
-  const chartProg = echarts.init(domProg, null, { renderer: "svg" });
-  chartInstances.push(chartProg);
+  pChart.off('mouseover');
+  pChart.off('click');
+  pChart.on('mouseover', params => {
+    if (params.data && params.data.dataDir) hoverEntryDataDir(params.data.dataDir);
+  });
+  pChart.on('click', params => {
+    if (params.data && params.data.dataDir) pinDataDirToHistory(params.data.dataDir);
+  });
 
-  const cats = benchmarks.map(b => `${b.model}\n[${b.quota_short}: ${b.bones_count}B]`);
-  const progSpecs = [
-    { label: "Step 02 (Bone Reduction): Ours", color: "#93c5fd", getter: bm => bm.step02.s02_v1 },
-    { label: "Step 02 (Bone Reduction): UE5", color: "#fdba74", getter: bm => bm.step02.s02_ue },
-    { label: "Step 03 (Bone + QEM): Ours", color: "#3b82f6", getter: bm => bm.step03.s03_v1_v1 },
-    { label: "Step 03 (Bone + QEM): UE5", color: "#f97316", getter: bm => bm.step03.s03_ue_ue },
-    { label: "Step 04 (Bone + QEM + SSDR): Ours ★", color: "#1C328A", getter: bm => bm.step04.s04_v1_v1 },
-    { label: "Step 04 (Bone + QEM + SSDR): UE5", color: "#b45309", getter: bm => bm.step04.s04_ue_ue }
-  ];
+  // Stage Progression Chart (Step 02 -> Step 03 -> Step 04 L2 Error)
+  const progDom = document.getElementById('chart-progression');
+  let gChart = chartInstances['chart-progression'] || echarts.init(progDom, null, { renderer: 'svg' });
+  chartInstances['chart-progression'] = gChart;
 
-  const progSeries = progSpecs.map(sp => ({
-    name: sp.label,
-    type: "bar",
-    barMaxWidth: 16,
-    itemStyle: { color: sp.color, borderRadius: [2, 2, 0, 0] },
-    data: benchmarks.map(bm => {
-      const it = sp.getter(bm);
-      return it ? it[mField]["l2_err"] : null;
-    })
-  }));
+  const progSeries = [];
+  BENCHMARKS.forEach(bm => {
+    const s02Ours = bm.step02.s02_v1;
+    const s03Ours = bm.step03.s03_v1_v1;
+    const s04Ours = bm.step04.s04_v1_v1;
+    const s02Ue = bm.step02.s02_ue;
+    const s03Ue = bm.step03.s03_ue_ue;
+    const s04Ue = bm.step04.s04_ue_ue;
 
-  chartProg.setOption({
+    progSeries.push({
+      name: `${bm.model} (${bm.quota_short}) Ours ★`,
+      type: 'line',
+      symbolSize: 9,
+      lineStyle: { width: 2.5 },
+      data: [
+        { value: s02Ours[mField][xKey], dataDir: s02Ours.data_dir, model: bm.model, method: s02Ours.method_label },
+        { value: s03Ours[mField][xKey], dataDir: s03Ours.data_dir, model: bm.model, method: s03Ours.method_label },
+        { value: s04Ours[mField][xKey], dataDir: s04Ours.data_dir, model: bm.model, method: s04Ours.method_label },
+      ],
+    });
+    progSeries.push({
+      name: `${bm.model} (${bm.quota_short}) UE5`,
+      type: 'line',
+      symbolSize: 8,
+      lineStyle: { width: 1.8, type: 'dashed' },
+      data: [
+        { value: s02Ue[mField][xKey], dataDir: s02Ue.data_dir, model: bm.model, method: s02Ue.method_label },
+        { value: s03Ue[mField][xKey], dataDir: s03Ue.data_dir, model: bm.model, method: s03Ue.method_label },
+        { value: s04Ue[mField][xKey], dataDir: s04Ue.data_dir, model: bm.model, method: s04Ue.method_label },
+      ],
+    });
+  });
+
+  gChart.setOption({
     animation: false,
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    legend: { type: "plain", top: 4, left: "center", itemGap: 10, textStyle: { fontSize: 11 } },
-    grid: { top: 88, left: 76, right: 22, bottom: 76 },
-    xAxis: { type: "category", data: cats, axisLabel: { interval: 0, fontSize: 10.5, rotate: 16, margin: 10 } },
-    yAxis: { type: "value", name: `VD / L2 Error (${scaleMode})`, nameLocation: "middle", nameGap: 56, nameTextStyle: { fontWeight: "bold", fontSize: 11.5 } },
+    tooltip: {
+      trigger: 'item',
+      formatter: p => {
+        const d = p.data || {};
+        return `<b>${escapeHtml(d.model)}</b><br/>${escapeHtml(d.method)}<br/>${escapeHtml(xMeta.short)}: <b>${fmtNum(d.value)}</b>`;
+      }
+    },
+    legend: { top: 2, type: 'scroll', textStyle: { fontSize: 10 } },
+    grid: { top: 48, left: 68, right: 24, bottom: 44 },
+    xAxis: { type: 'category', data: ['Step 02 (Bone)', 'Step 03 (Bone+QEM)', 'Step 04 (Bone+QEM+SSDR)'] },
+    yAxis: { type: 'value', name: xMeta.label, nameLocation: 'middle', nameGap: 50, scale: true },
     series: progSeries
   }, true);
+
+  gChart.off('mouseover');
+  gChart.off('click');
+  gChart.on('mouseover', params => {
+    if (params.data && params.data.dataDir) hoverEntryDataDir(params.data.dataDir);
+  });
+  gChart.on('click', params => {
+    if (params.data && params.data.dataDir) pinDataDirToHistory(params.data.dataDir);
+  });
 }
 
-window.exportChartDom = function(domId, format, filename) {
+function toggleLatex() {
+  const box = document.getElementById('latex-container');
+  box.style.display = box.style.display === 'block' ? 'none' : 'block';
+  updateLatexBox();
+}
+
+function updateLatexBox() {
+  const sm = getScaleMode();
+  document.getElementById('latex-scale-lbl').textContent = sm === 'scaled' ? 'Model-Scaled' : 'Raw Unscaled';
+  document.getElementById('latex-code').textContent = (D.latex && D.latex[sm]) || '';
+}
+
+function copyLatex() {
+  navigator.clipboard.writeText(document.getElementById('latex-code').textContent);
+}
+
+window.exportChart = function(domId, format) {
   const dom = document.getElementById(domId);
-  const svgNode = dom ? dom.querySelector("svg") : null;
-  if (!svgNode) return;
-  let svgContent = svgNode.outerHTML;
-  if (!svgContent.includes('xmlns="http://www.w3.org/2000/svg"')) {
-    svgContent = svgContent.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+  const svg = dom ? dom.querySelector('svg') : null;
+  if (!svg) return;
+  let content = svg.outerHTML;
+  if (!content.includes('xmlns="http://www.w3.org/2000/svg"')) {
+    content = content.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
   }
-  if (format === "svg") {
-    const blob = new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" });
+  if (format === 'svg') {
+    const blob = new Blob([content], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename + ".svg";
-    a.click();
+    const a = document.createElement('a');
+    a.href = url; a.download = `${domId}.svg`; a.click();
     URL.revokeObjectURL(url);
     return;
   }
-  const bbox = svgNode.getBoundingClientRect();
-  const width = parseFloat(svgNode.getAttribute("width")) || bbox.width || 900;
-  const height = parseFloat(svgNode.getAttribute("height")) || bbox.height || 450;
-  const canvas = document.createElement("canvas");
-  const scale = 2;
-  canvas.width = width * scale;
-  canvas.height = height * scale;
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const w = parseFloat(svg.getAttribute('width')) || 800;
+  const h = parseFloat(svg.getAttribute('height')) || 500;
+  const canvas = document.createElement('canvas');
+  canvas.width = w * 2; canvas.height = h * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
   const img = new Image();
-  const url = URL.createObjectURL(new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" }));
+  const url = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml;charset=utf-8' }));
   img.onload = () => {
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     URL.revokeObjectURL(url);
-    if (format === "png") {
-      canvas.toBlob(blob => {
-        const u = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = u;
-        a.download = filename + ".png";
-        a.click();
+    if (format === 'png') {
+      canvas.toBlob(b => {
+        const u = URL.createObjectURL(b);
+        const a = document.createElement('a');
+        a.href = u; a.download = `${domId}.png`; a.click();
         URL.revokeObjectURL(u);
-      }, "image/png");
-    } else if (format === "pdf" && window.jspdf && window.jspdf.jsPDF) {
-      const imgData = canvas.toDataURL("image/jpeg", 0.98);
-      const doc = new window.jspdf.jsPDF({ orientation: width >= height ? "l" : "p", unit: "pt", format: [width, height] });
-      doc.addImage(imgData, "JPEG", 0, 0, width, height);
-      doc.save(filename + ".pdf");
+      }, 'image/png');
+    } else if (format === 'pdf' && window.jspdf) {
+      const doc = new window.jspdf.jsPDF({ orientation: w >= h ? 'l' : 'p', unit: 'pt', format: [w, h] });
+      doc.addImage(canvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, w, h);
+      doc.save(`${domId}.pdf`);
     }
   };
   img.src = url;
 };
 
-function renderAll() {
-  chartInstances.splice(0, chartInstances.length).forEach(c => {
-    try { c.dispose(); } catch (_) {}
-  });
-  const P = window.REPORT_PAYLOAD;
-  const scaleMode = getScaleMode();
-  document.getElementById("latex-scale-label").innerText = scaleMode === "scaled" ? "Model-Scaled" : "Raw Unscaled";
-  document.getElementById("latex-source-box").innerText = (P.latex && P.latex[scaleMode]) || "";
+function renderAllReportSections() {
+  renderComplexityTable();
+  renderStageComparisonTable('table-step02', 'step02', ['s02_v1', 's02_ue']);
+  renderStageComparisonTable('table-step03', 'step03', ['s03_v1_v1', 's03_ue_v1', 's03_v1_ue', 's03_ue_ue']);
+  renderStageComparisonTable('table-step04', 'step04', ['s04_v1_v1', 's04_ue_v1', 's04_v1_ue', 's04_ue_ue']);
 
-  renderComplexityAuditTable();
-  renderStageSection("step02", ["s02_v1", "s02_ue"], "table-step02-comparison", "charts-step02-grid", "Step 02 (Bone Reduction)");
-  renderStageSection("step03", ["s03_v1_v1", "s03_ue_v1", "s03_v1_ue", "s03_ue_ue"], "table-step03-comparison", "charts-step03-grid", "Step 03 (Bone + QEM)");
-  renderStageSection("step04", ["s04_v1_v1", "s04_ue_v1", "s04_v1_ue", "s04_ue_ue"], "table-step04-comparison", "charts-step04-grid", "Step 04 (Bone + QEM + SSDR)");
+  renderStageBarCharts('charts-step02', 'step02', ['s02_v1', 's02_ue']);
+  renderStageBarCharts('charts-step03', 'step03', ['s03_v1_v1', 's03_ue_v1', 's03_v1_ue', 's03_ue_ue']);
+  renderStageBarCharts('charts-step04', 'step04', ['s04_v1_v1', 's04_ue_v1', 's04_v1_ue', 's04_ue_ue']);
+
   renderParetoAndProgression();
+  updateLatexBox();
+  renderDockCards();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  initParetoSelectors();
-  ["sel-scale", "sel-axis", "sel-pareto-stage", "sel-pareto-x", "sel-pareto-y"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener("change", renderAll);
+document.addEventListener('DOMContentLoaded', () => {
+  const px = document.getElementById('pareto-x');
+  const py = document.getElementById('pareto-y');
+  METRICS.forEach((m, idx) => {
+    const o1 = document.createElement('option');
+    o1.value = m.key; o1.textContent = m.short;
+    if (idx === 0) o1.selected = true;
+    px.appendChild(o1);
+
+    const o2 = document.createElement('option');
+    o2.value = m.key; o2.textContent = m.short;
+    if (m.key === 'org_loss') o2.selected = true;
+    py.appendChild(o2);
   });
-  window.addEventListener("resize", () => {
-    chartInstances.forEach(c => { try { c.resize(); } catch (_) {} });
+
+  document.getElementById('global-scale-mode').addEventListener('change', renderAllReportSections);
+  document.getElementById('global-axis-mode').addEventListener('change', renderAllReportSections);
+  document.getElementById('global-render-bg').addEventListener('change', renderDockCards);
+  document.getElementById('pareto-stage').addEventListener('change', renderParetoAndProgression);
+  px.addEventListener('change', renderParetoAndProgression);
+  py.addEventListener('change', renderParetoAndProgression);
+
+  window.addEventListener('resize', () => {
+    Object.values(chartInstances).forEach(c => { try { c.resize(); } catch (_) {} });
   });
-  renderAll();
+
+  renderAllReportSections();
 });
 </script>
 </body>

@@ -857,16 +857,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Normalize and augment stage metrics into a unified JSON file."
     )
-    parser.add_argument("-i", "--stage_dir", required=True, help="Stage output directory (e.g. .../data2, .../data3, .../data4).")
+    parser.add_argument("-i", "--stage_dir", "--input_dir", dest="stage_dir", required=True, help="Stage output directory (read-only input).")
     parser.add_argument("-s", "--stage", default=None, help="Optional stage name (e.g. ssdr_stage02).")
     parser.add_argument("-n", "--name", default=DEFAULT_METRICS_FILENAME, help="Output metrics JSON filename.")
     parser.add_argument("-o", "--output", default=None, help="Optional explicit output file path.")
+    parser.add_argument("--output_dir", default=None, help="Optional output subdirectory path (generic augmentation contract).")
     parser.add_argument("--overwrite", action="store_true", help="Recompute even if valid metrics file already exists.")
     args = parser.parse_args()
 
     stage_dir = Path(args.stage_dir).expanduser().resolve(strict=True)
     metrics_name = Path(args.name).name
-    out_path = Path(args.output).expanduser().resolve(strict=False) if args.output else (stage_dir / metrics_name)
+    if args.output:
+        out_path = Path(args.output).expanduser().resolve(strict=False)
+    elif args.output_dir:
+        out_path = Path(args.output_dir).expanduser().resolve(strict=False) / metrics_name
+    else:
+        out_path = stage_dir / metrics_name
 
     if out_path.is_file() and not args.overwrite:
         existing = _read_json_if_exists(out_path)

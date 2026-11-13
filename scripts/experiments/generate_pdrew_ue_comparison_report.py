@@ -8,7 +8,8 @@ with separate sections for:
   - Step 02 (Bone Reduction)
   - Step 03 (Bone + QEM)
   - Step 04 (Bone + QEM + SSDR)
-directly from in-pool normalized_metrics_v1.json files.
+and an interactive Right-Side Multi-Card Render Inspector Dock (Hover Current Card +
+Pinned History Cards with per-card Render Type / Overlay / Camera / Frame controls & PNG export).
 """
 
 import argparse
@@ -27,6 +28,14 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+
+try:
+    import datalad.api as _dl_check  # noqa: F401
+except ModuleNotFoundError:
+    _pdrew_py = Path("/opt/conda/envs/pd-rew/bin/python")
+    if _pdrew_py.is_file() and Path(sys.executable).resolve() != _pdrew_py.resolve():
+        os.execv(str(_pdrew_py), [str(_pdrew_py), str(Path(__file__).resolve()), *sys.argv[1:]])
+
 
 from generate_pdrew_gamma_report import (  # noqa: E402
     DEFAULT_BINDING,
@@ -109,10 +118,126 @@ def _load_in_pool_normalized_metrics(
     raise FileNotFoundError(f"normalized_metrics_v1.json not found in {r_root} (expected_subdir={expected_subdir})")
 
 
+def _collect_in_pool_renders_for_entry(
+    *,
+    dl: Any,
+    pool: Path,
+    data_dir: str,
+    expected_subdir: str,
+    output_dir: Path,
+    bundled_rel_files: list[str],
+) -> dict[str, Any]:
+    """
+    Discover all rendered subdirectories under <pool>/<data_dir>, materialize & copy
+    render.png (+ colorbar.png) into <output_dir>/renders/<entry_name>/..., and return
+    structured metadata for the frontend Render Dock.
+    """
+    r_root = safe_pool_data_dir(pool, data_dir)
+    entry_name = r_root.name
+
+    search_roots = []
+    for cand_sub in (expected_subdir, "data4", "data3", "data2", "data1", "data0_json", "data_prep_00"):
+        if cand_sub and (r_root / cand_sub / "renders").is_dir():
+            if (r_root / cand_sub) not in search_roots:
+                search_roots.append(r_root / cand_sub)
+    if (r_root / "renders").is_dir():
+        search_roots.append(r_root)
+
+    seen_keys: set[str] = set()
+    items: list[dict[str, Any]] = []
+    cameras_set: set[str] = set()
+    frames_set: set[str] = set()
+    types_set: set[str] = set()
+
+    for s_root in search_roots:
+        renders_dir = s_root / "renders"
+        for meta_path in sorted(renders_dir.rglob("render_meta.json")):
+            png_path = meta_path.parent / "render.png"
+            if not os.path.lexists(png_path):
+                continue
+            materialize_pool_file(datalad_api=dl, pool=pool, path=meta_path, required=False)
+            materialize_pool_file(datalad_api=dl, pool=pool, path=png_path, required=False)
+            if not meta_path.is_file() or not png_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            r_key = str(meta.get("render_key") or meta_path.parent.name)
+            if r_key in seen_keys:
+                continue
+            seen_keys.add(r_key)
+
+            r_type = str(meta.get("render_type") or "")
+            r_mode = str(meta.get("render_mode") or "")
+            f_token = str(meta.get("frame_token") or "f0000")
+            f_idx = int(meta.get("frame_index_effective", meta.get("frame_index_requested", 0)))
+            cam_id = str(meta.get("camera_id") or "front")
+            cam_short = cam_id.split("_")[0]
+
+            rel_dir = f"renders/{entry_name}/{r_type}/{f_token}_cam-{cam_id}"
+            rel_png = f"{rel_dir}/render.png"
+            dst_png = output_dir / rel_png
+            dst_png.parent.mkdir(parents=True, exist_ok=True)
+            if dst_png.exists() or dst_png.is_symlink():
+                dst_png.unlink()
+            shutil.copyfile(png_path, dst_png)
+            dst_png.chmod(0o644)
+            if rel_png not in bundled_rel_files:
+                bundled_rel_files.append(rel_png)
+
+            rel_cb = None
+            cb_src = meta_path.parent / "colorbar.png"
+            if os.path.lexists(cb_src):
+                materialize_pool_file(datalad_api=dl, pool=pool, path=cb_src, required=False)
+                if cb_src.is_file():
+                    rel_cb = f"{rel_dir}/colorbar.png"
+                    dst_cb = output_dir / rel_cb
+                    if dst_cb.exists() or dst_cb.is_symlink():
+                        dst_cb.unlink()
+                    shutil.copyfile(cb_src, dst_cb)
+                    dst_cb.chmod(0o644)
+                    if rel_cb not in bundled_rel_files:
+                        bundled_rel_files.append(rel_cb)
+
+            cameras_set.add(cam_short)
+            frames_set.add(f_token)
+            types_set.add(r_type)
+
+            items.append({
+                "render_key": r_key,
+                "render_type": r_type,
+                "render_mode": r_mode,
+                "frame_index": f_idx,
+                "frame_token": f_token,
+                "camera_id": cam_id,
+                "camera_short": cam_short,
+                "resolution": meta.get("resolution") or [1024, 1024],
+                "rel_png": rel_png,
+                "rel_colorbar": rel_cb,
+                "heatmap_range": (meta.get("camera_framing") or {}).get("heatmap_range"),
+                "frame_l2_mean": (meta.get("geometry_stats") or {}).get("frame_l2_mean"),
+                "frame_l2_max": (meta.get("geometry_stats") or {}).get("frame_l2_max"),
+                "alpha_coverage_pct": (meta.get("optical_qa") or {}).get("alpha_coverage_pct"),
+            })
+
+    return {
+        "data_dir": data_dir,
+        "entry_name": entry_name,
+        "cameras": sorted(cameras_set),
+        "frames": sorted(frames_set),
+        "render_types": sorted(types_set),
+        "items": items,
+    }
+
+
 def _decorate_norm_obj(
     norm_obj: dict[str, Any],
     *,
     model: str,
+    stage_label: str,
+    quota_label: str,
     data_dir: str,
     method_key: str,
     method_label: str,
@@ -146,6 +271,8 @@ def _decorate_norm_obj(
     return {
         "model": model,
         "model_scale": scale,
+        "stage_label": stage_label,
+        "quota_label": quota_label,
         "data_dir": data_dir,
         "method_key": method_key,
         "method_label": method_label,
@@ -272,6 +399,12 @@ def generate_ue_comparison_dashboard(
         }
 
     if output_dir.exists():
+        for root_p, _dirs, files in os.walk(output_dir):
+            for fn in files:
+                try:
+                    os.chmod(os.path.join(root_p, fn), 0o644)
+                except Exception:
+                    pass
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     agg_dir = output_dir / "aggregate"
@@ -283,13 +416,28 @@ def generate_ue_comparison_dashboard(
     step04_csv_rows: list[dict[str, Any]] = []
     benchmarks_payload: list[dict[str, Any]] = []
 
+    renders_by_data_dir: dict[str, dict[str, Any]] = {}
+    entry_summary_by_data_dir: dict[str, dict[str, Any]] = {}
+    bundled_render_files: list[str] = []
+
+    def _ensure_renders_collected(dd: str, expected_sub: str, summary_info: dict[str, Any]) -> None:
+        entry_summary_by_data_dir[dd] = summary_info
+        if dd not in renders_by_data_dir:
+            renders_by_data_dir[dd] = _collect_in_pool_renders_for_entry(
+                dl=dl,
+                pool=pool,
+                data_dir=dd,
+                expected_subdir=expected_sub,
+                output_dir=output_dir,
+                bundled_rel_files=bundled_render_files,
+            )
+
     seen_input_models: set[str] = set()
 
     for bm_spec in QUOTA_BENCHMARKS:
         model = bm_spec["model"]
         variant = bm_spec["variant"]
 
-        # 1. Original Input rows (Raw .blend & Data1 Full Skeleton) once per model
         if model not in seen_input_models:
             seen_input_models.add(model)
             h_dd = handoff_dir_by_model[model]
@@ -310,13 +458,24 @@ def generate_ue_comparison_dashboard(
                     "data_dir": h_dd,
                     "complexity": h_norm["complexity"],
                 })
+                _ensure_renders_collected(h_dd, "data_prep_00", {
+                    "data_dir": h_dd,
+                    "model": model,
+                    "stage_label": "0A. Raw Input (.blend)",
+                    "quota_label": "Full Skeleton",
+                    "method_label": "Raw Asset (Pre-VDB)",
+                    "complexity": h_norm["complexity"],
+                    "metrics_scaled": {},
+                    "metrics_raw": {},
+                })
 
             s01_norm = _load_in_pool_normalized_metrics(
                 dl=dl, pool=pool, data_dir=s01_dd, expected_subdir="data1"
             )
+            t_lbl = "0B. Data1 Full Skeleton" if model in {"Griffin_A2", "Winter_Samurai"} else "0. Original Input (data1 Full)"
             complexity_audit_rows.append({
                 "model": model,
-                "tier_label": "0B. Data1 Full Skeleton" if model in {"Griffin_A2", "Winter_Samurai"} else "0. Original Input (data1 Full)",
+                "tier_label": t_lbl,
                 "method_label": "Full Skeleton (Pre-Step02)",
                 "is_input": True,
                 "is_ours": False,
@@ -324,6 +483,16 @@ def generate_ue_comparison_dashboard(
                 "is_hybrid": False,
                 "data_dir": s01_dd,
                 "complexity": s01_norm["complexity"],
+            })
+            _ensure_renders_collected(s01_dd, "data1", {
+                "data_dir": s01_dd,
+                "model": model,
+                "stage_label": t_lbl,
+                "quota_label": "Full Skeleton",
+                "method_label": "Full Skeleton (Pre-Step02)",
+                "complexity": s01_norm["complexity"],
+                "metrics_scaled": {},
+                "metrics_raw": {},
             })
 
         rec_v1_v1 = row_lookup[(model, variant, "v1", "v1")]
@@ -344,6 +513,8 @@ def generate_ue_comparison_dashboard(
         s02_v1_dec = _decorate_norm_obj(
             s02_v1_norm,
             model=model,
+            stage_label="Step 02 (Bone Reduction)",
+            quota_label=tier_full_label,
             data_dir=s02_v1_dd,
             method_key="s02_v1",
             method_label="Ours Bone Reduction ★",
@@ -352,6 +523,8 @@ def generate_ue_comparison_dashboard(
         s02_ue_dec = _decorate_norm_obj(
             s02_ue_norm,
             model=model,
+            stage_label="Step 02 (Bone Reduction)",
+            quota_label=tier_full_label,
             data_dir=s02_ue_dd,
             method_key="s02_ue",
             method_label="UE5 Bone Reduction",
@@ -359,6 +532,7 @@ def generate_ue_comparison_dashboard(
         )
 
         for dec_s02, is_ours in [(s02_v1_dec, True), (s02_ue_dec, False)]:
+            _ensure_renders_collected(dec_s02["data_dir"], "data2", dec_s02)
             complexity_audit_rows.append({
                 "model": model,
                 "tier_label": f"Step 02 (Bone Reduction) — {tier_full_label}",
@@ -395,12 +569,15 @@ def generate_ue_comparison_dashboard(
             dec = _decorate_norm_obj(
                 norm_obj,
                 model=model,
+                stage_label="Step 03 (Bone + QEM)",
+                quota_label=tier_full_label,
                 data_dir=dd,
                 method_key=b_key,
                 method_label=m_lbl,
                 method_short=m_short,
             )
             step03_map[b_key] = dec
+            _ensure_renders_collected(dd, "data3", dec)
             complexity_audit_rows.append({
                 "model": model,
                 "tier_label": f"Step 03 (Bone + QEM) — {tier_full_label}",
@@ -438,12 +615,15 @@ def generate_ue_comparison_dashboard(
             dec = _decorate_norm_obj(
                 norm_obj,
                 model=model,
+                stage_label="Step 04 (Bone + QEM + SSDR)",
+                quota_label=tier_full_label,
                 data_dir=dd,
                 method_key=b_key,
                 method_label=m_lbl,
                 method_short=m_short,
             )
             step04_map[b_key] = dec
+            _ensure_renders_collected(dd, "data4", dec)
             complexity_audit_rows.append({
                 "model": model,
                 "tier_label": f"Step 04 (Bone + QEM + SSDR) — {tier_full_label}",
@@ -494,6 +674,8 @@ def generate_ue_comparison_dashboard(
     (agg_dir / "paper_table_equal_bone_budget_scaled.tex").write_text(latex_scaled, encoding="utf-8")
     (agg_dir / "paper_table_equal_bone_budget_raw.tex").write_text(latex_raw, encoding="utf-8")
 
+    total_render_images = sum(len(v.get("items") or []) for v in renders_by_data_dir.values())
+
     payload = {
         "meta": {
             "title": title,
@@ -501,10 +683,14 @@ def generate_ue_comparison_dashboard(
             "pool": str(pool),
             "benchmark_count": len(benchmarks_payload),
             "model_scales": MODEL_SCALES,
+            "rendered_entry_count": sum(1 for v in renders_by_data_dir.values() if v.get("items")),
+            "total_render_images": total_render_images,
         },
         "metricsMeta": METRICS_META,
         "complexityAuditRows": complexity_audit_rows,
         "benchmarks": benchmarks_payload,
+        "rendersByDataDir": renders_by_data_dir,
+        "entrySummaryByDataDir": entry_summary_by_data_dir,
         "latex": {
             "scaled": latex_scaled,
             "raw": latex_raw,
@@ -543,10 +729,10 @@ a {{ color: #1C328A; font-weight: 600; }}
 <body>
 <main>
 <h1>{html.escape(title)}</h1>
-<p>All complexity, loose-parts, Step 02 (Bone Reduction), Step 03 (Bone + QEM), and Step 04 (Bone + QEM + SSDR) metrics are sourced from in-pool <code>normalized_metrics_v1.json</code> files.</p>
+<p>Includes <b>{total_render_images} in-pool RGBA rendered images</b> across Step 02, Step 03, and Step 04 with interactive Hover &amp; Multi-Card History comparison.</p>
 <p style="margin: 22px 0;">
-  <a class="btn btn-primary" href="UE_Comparison_Report.html">📊 Open Interactive Equal-Bone-Budget Dashboard</a>
-  <a class="btn btn-teal" href="downloads/{html.escape(zip_name)}" download>📦 Download Full Report ZIP</a>
+  <a class="btn btn-primary" href="UE_Comparison_Report.html">📊 Open Interactive Equal-Bone-Budget Dashboard (with Render Dock)</a>
+  <a class="btn btn-teal" href="downloads/{html.escape(zip_name)}" download>📦 Download Full Report + Renders ZIP</a>
 </p>
 <h2>Direct Data &amp; Paper Table Exports</h2>
 <ul>
@@ -574,21 +760,25 @@ a {{ color: #1C328A; font-weight: 600; }}
         "aggregate/step04_comparison_summary.csv",
         "aggregate/paper_table_equal_bone_budget_scaled.tex",
         "aggregate/paper_table_equal_bone_budget_raw.tex",
+        *bundled_render_files,
     ]
     with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for rel in bundle_files:
-            zf.write(output_dir / rel, arcname=rel)
+            p_abs = output_dir / rel
+            if p_abs.is_file():
+                zf.write(p_abs, arcname=rel)
 
     return {
         "output_dir": str(output_dir),
         "report_html": str(report_html_path),
         "index_html": str(output_dir / "index.html"),
         "zip_path": str(zip_path),
+        "total_render_images": total_render_images,
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate OGD-LBS vs UE5 Equal-Bone-Budget Report.")
+    parser = argparse.ArgumentParser(description="Generate OGD-LBS vs UE5 Equal-Bone-Budget Report with Render Dock.")
     parser.add_argument("--output-dir", type=Path, default=Path("/workspace/ogd_reports/pdrew_ue_comparison_report_latest"))
     parser.add_argument("--serve-daemon", action="store_true")
     parser.add_argument("--port", type=int, default=8080)
@@ -596,10 +786,11 @@ def main() -> None:
 
     res = generate_ue_comparison_dashboard(output_dir=args.output_dir)
     print("=" * 92, flush=True)
-    print("EQUAL-BONE-BUDGET & UE5 ABLATION REPORT GENERATED (SEPARATE STEP 02 / 03 / 04)", flush=True)
-    print(f"REPORT HTML   : {res['report_html']}", flush=True)
-    print(f"INDEX HTML    : {res['index_html']}", flush=True)
-    print(f"DOWNLOAD ZIP  : {res['zip_path']}", flush=True)
+    print("EQUAL-BONE-BUDGET & UE5 ABLATION REPORT GENERATED (WITH MULTI-CARD RENDER DOCK)", flush=True)
+    print(f"REPORT HTML     : {res['report_html']}", flush=True)
+    print(f"INDEX HTML      : {res['index_html']}", flush=True)
+    print(f"DOWNLOAD ZIP    : {res['zip_path']}", flush=True)
+    print(f"BUNDLED RENDERS : {res['total_render_images']} images", flush=True)
     print("=" * 92, flush=True)
 
     if args.serve_daemon:
@@ -609,9 +800,9 @@ def main() -> None:
             port=int(args.port),
         )
         print(f"🌐 HTTP Server Active (PID={srv['pid']}, Container Port={srv['port']})", flush=True)
-        print(f"👉 Host LAN URL (Port 8081->8080): http://10.241.1.178:8081/UE_Comparison_Report.html", flush=True)
+        print("👉 Host LAN URL (Port 8081->8080): http://10.241.1.178:8081/UE_Comparison_Report.html", flush=True)
         print(f"👉 Container Direct URL          : {srv['report_url']}", flush=True)
-        print(f"👉 Download Center               : http://10.241.1.178:8081/index.html", flush=True)
+        print("👉 Download Center               : http://10.241.1.178:8081/index.html", flush=True)
 
 
 if __name__ == "__main__":

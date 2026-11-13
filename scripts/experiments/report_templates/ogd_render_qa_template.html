@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE_HTML__</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --border: #334155;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --pass: #10b981;
+  --warn: #f59e0b;
+  --fail: #ef4444;
+  --selected: #38bdf8;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 20px 24px 80px;
+}
+.header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+}
+.header-bar h1 { margin: 0; font-size: 1.45rem; }
+.kpi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.kpi-pill {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.86rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.kpi-pass { border-color: var(--pass); color: #34d399; }
+.kpi-warn { border-color: var(--warn); color: #fbbf24; }
+.kpi-fail { border-color: var(--fail); color: #f87171; }
+.sticky-bar {
+  position: sticky;
+  top: 10px;
+  z-index: 200;
+  background: rgba(30, 41, 59, 0.96);
+  backdrop-filter: blur(8px);
+  border: 1px solid #475569;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.controls-row label {
+  font-size: 0.84rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+select, input[type="text"] {
+  background: #0f172a;
+  color: var(--text);
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 0.85rem;
+}
+.cmd-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.cmd-box {
+  flex: 1;
+  min-width: 300px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84rem;
+  background: #090d16;
+  color: #38bdf8;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.btn {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.1); }
+.btn-danger { background: #dc2626; }
+.btn-secondary { background: #475569; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 290px), 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--panel);
+  border: 3px solid var(--pass);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.12s, box-shadow 0.12s;
+  position: relative;
+}
+.card.status-WARN { border-color: var(--warn); box-shadow: 0 0 14px rgba(245, 158, 11, 0.25); }
+.card.status-FAIL { border-color: var(--fail); box-shadow: 0 0 18px rgba(239, 68, 68, 0.35); }
+.card.selected-faulty {
+  outline: 3px solid var(--selected);
+  box-shadow: 0 0 0 5px rgba(56, 189, 248, 0.35);
+}
+.thumb-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  cursor: pointer;
+  overflow: hidden;
+}
+.bg-checker {
+  background: repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 50% / 24px 24px;
+}
+.bg-dark { background: #090d16; }
+.bg-white { background: #f8fafc; }
+.thumb-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.id-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+}
+.badge-PASS { background: #059669; }
+.badge-WARN { background: #d97706; }
+.badge-FAIL { background: #dc2626; }
+.entry-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #475569;
+  color: #e2e8f0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.card-body {
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.title-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #fff;
+}
+.sub-line { color: #cbd5e1; font-size: 0.8rem; }
+.qa-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 8px;
+  background: #0f172a;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  font-size: 0.77rem;
+}
+.qa-item span { color: var(--muted); }
+.alert-box {
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid #ef4444;
+  color: #fca5a5;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.card.status-WARN .alert-box {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: #f59e0b;
+  color: #fde68a;
+}
+.card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.card-actions button, .card-actions a {
+  flex: 1;
+  text-align: center;
+  text-decoration: none;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #e2e8f0;
+}
+.card-actions button.flag-btn.active {
+  background: #dc2626;
+  border-color: #ef4444;
+  color: #fff;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  z-index: 500;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.modal-backdrop.open { display: flex; }
+.modal-content {
+  background: var(--panel);
+  border: 1px solid #475569;
+  border-radius: 12px;
+  max-width: 1180px;
+  width: 100%;
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: minmax(320px, 560px) 1fr;
+  gap: 20px;
+}
+.overlay-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #475569;
+}
+.overlay-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+pre {
+  background: #090d16;
+  color: #e2e8f0;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  overflow-x: auto;
+}
+</style>
+</head>
+<body>
+<div class="header-bar">
+  <div>
+    <h1>🔍 __TITLE_HTML__</h1>
+    <div style="color:var(--muted);font-size:0.86rem;margin-top:4px;">
+      Click any thumbnail to toggle its Faulty ID, or click <b>Inspect / Overlay</b> to stack layers &amp; view full reverse-lookup metadata.
+    </div>
+  </div>
+  <div class="kpi-strip" id="kpi-strip"></div>
+</div>
+
+<div class="sticky-bar">
+  <div class="controls-row">
+    <label>Status:
+      <select id="f-status">
+        <option value="ALL">All Thumbnails</option>
+        <option value="FLAGGED">⚠️ Flagged Only (FAIL + NN WARN)</option>
+        <option value="FAIL">❌ Optical FAIL Only</option>
+        <option value="WARN">🟠 Neural WARN Only</option>
+        <option value="PASS">✅ PASS Only</option>
+      </select>
+    </label>
+    <label>Model: <select id="f-model"><option value="ALL">All Models</option></select></label>
+    <label>Stage: <select id="f-stage"><option value="ALL">All Stages</option></select></label>
+    <label>Render Type: <select id="f-rtype"><option value="ALL">All Render Types</option></select></label>
+    <label>Sort By:
+      <select id="f-sort">
+        <option value="status_first">⚠️ Flagged First, then #ID</option>
+        <option value="id_asc">🔢 Thumbnail #ID (1 → N)</option>
+        <option value="nn_asc">🧠 NN Subject Score (Lowest First ↑)</option>
+        <option value="cov_asc">📐 Alpha Coverage % (Lowest First ↑)</option>
+        <option value="offset_desc">🎯 Center Offset (Worst First ↓)</option>
+      </select>
+    </label>
+    <label>BG:
+      <select id="f-bg">
+        <option value="bg-checker">Checkerboard</option>
+        <option value="bg-dark">Dark</option>
+        <option value="bg-white">White</option>
+      </select>
+    </label>
+    <label>Size:
+      <select id="f-size">
+        <option value="285px">Medium</option>
+        <option value="210px">Compact</option>
+        <option value="380px">Large</option>
+      </select>
+    </label>
+    <input type="text" id="f-search" placeholder="Search #ID, r000..., model...">
+  </div>
+  <div class="cmd-row">
+    <span style="font-size:0.84rem;font-weight:700;color:#fca5a5;" id="selected-count">Selected Faulty IDs (0):</span>
+    <div class="cmd-box" id="lookup-cmd">python scripts/experiments/render_qa_inspector.py --lookup</div>
+    <button class="btn" onclick="copyText('lookup-cmd')">📋 Copy Lookup Cmd</button>
+    <button class="btn btn-danger" onclick="copyInvalidateCmd()">🗑️ Copy Invalidate Cmd</button>
+    <button class="btn btn-secondary" onclick="selectFlagged()">⚠️ Select All Warn/Fail</button>
+    <button class="btn btn-secondary" onclick="clearSelection()">✖ Clear</button>
+  </div>
+</div>
+
+<div class="grid" id="thumb-grid"></div>
+
+<div class="modal-backdrop" id="inspect-modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-content" id="modal-body"></div>
+</div>
+
+<script>
+window.QA_INDEX_DATA = __DATA_JSON__;
+const ITEMS = window.QA_INDEX_DATA.items || [];
+const selectedIds = new Set();
+
+function initFilters() {
+  const models = Array.from(new Set(ITEMS.map(x => x.model))).sort();
+  const stages = Array.from(new Set(ITEMS.map(x => x.stage))).sort();
+  const rtypes = Array.from(new Set(ITEMS.map(x => x.render_type))).sort();
+
+  const fill = (id, arr) => {
+    const el = document.getElementById(id);
+    arr.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      el.appendChild(opt);
+    });
+  };
+  fill('f-model', models);
+  fill('f-stage', stages);
+  fill('f-rtype', rtypes);
+
+  ['f-status', 'f-model', 'f-stage', 'f-rtype', 'f-sort', 'f-bg', 'f-size', 'f-search'].forEach(id => {
+    document.getElementById(id).addEventListener('input', renderGrid);
+  });
+
+  const strip = document.getElementById('kpi-strip');
+  const d = window.QA_INDEX_DATA;
+  strip.innerHTML = `
+    <div class="kpi-pill">Total: ${d.total_thumbnails}</div>
+    <div class="kpi-pill kpi-pass">✅ PASS: ${d.pass_count}</div>
+    <div class="kpi-pill kpi-warn">🟠 NN WARN: ${d.warn_count}</div>
+    <div class="kpi-pill kpi-fail">❌ OPTICAL FAIL: ${d.fail_count}</div>
+  `;
+}
+
+function updateCommandBar() {
+  const ids = Array.from(selectedIds).sort((a, b) => a - b);
+  document.getElementById('selected-count').textContent = `Selected Faulty IDs (${ids.length}):`;
+  const suffix = ids.length ? ' ' + ids.join(' ') : '';
+  document.getElementById('lookup-cmd').textContent =
+    `python scripts/experiments/render_qa_inspector.py --lookup${suffix}`;
+}
+
+function copyText(elId) {
+  const txt = document.getElementById(elId).textContent;
+  navigator.clipboard.writeText(txt);
+}
+
+function copyInvalidateCmd() {
+  const ids = Array.from(selectedIds).sort((a, b) => a - b);
+  const suffix = ids.length ? ' ' + ids.join(' ') : '';
+  navigator.clipboard.writeText(`python scripts/experiments/render_qa_inspector.py --invalidate${suffix}`);
+}
+
+function toggleSelect(id) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  updateCommandBar();
+  renderGrid();
+}
+
+function selectFlagged() {
+  ITEMS.forEach(it => {
+    if (it.overall_status !== 'PASS') selectedIds.add(it.thumb_id);
+  });
+  updateCommandBar();
+  renderGrid();
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  updateCommandBar();
+  renderGrid();
+}
+
+function renderGrid() {
+  const stFilter = document.getElementById('f-status').value;
+  const mFilter = document.getElementById('f-model').value;
+  const sFilter = document.getElementById('f-stage').value;
+  const rtFilter = document.getElementById('f-rtype').value;
+  const sortMode = document.getElementById('f-sort').value;
+  const bgClass = document.getElementById('f-bg').value;
+  const cardSize = document.getElementById('f-size').value;
+  const q = document.getElementById('f-search').value.trim().toLowerCase();
+
+  const grid = document.getElementById('thumb-grid');
+  grid.style.setProperty('--card-min', cardSize);
+
+  let filtered = ITEMS.filter(it => {
+    if (stFilter === 'FLAGGED' && it.overall_status === 'PASS') return false;
+    if (stFilter !== 'ALL' && stFilter !== 'FLAGGED' && it.overall_status !== stFilter) return false;
+    if (mFilter !== 'ALL' && it.model !== mFilter) return false;
+    if (sFilter !== 'ALL' && it.stage !== sFilter) return false;
+    if (rtFilter !== 'ALL' && it.render_type !== rtFilter) return false;
+    if (q) {
+      const hay = `${it.thumb_code} ${it.thumb_id} ${it.entry_name} ${it.model} ${it.stage} ${it.render_type} ${it.variant}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const statusRank = { FAIL: 0, WARN: 1, PASS: 2 };
+  filtered.sort((a, b) => {
+    if (sortMode === 'status_first') {
+      const ra = statusRank[a.overall_status] ?? 2;
+      const rb = statusRank[b.overall_status] ?? 2;
+      if (ra !== rb) return ra - rb;
+      return a.thumb_id - b.thumb_id;
+    }
+    if (sortMode === 'nn_asc') {
+      return ((a.fast_nn_qa || {}).subject_score ?? 1) - ((b.fast_nn_qa || {}).subject_score ?? 1);
+    }
+    if (sortMode === 'cov_asc') {
+      return ((a.optical_qa || {}).alpha_coverage_pct ?? 0) - ((b.optical_qa || {}).alpha_coverage_pct ?? 0);
+    }
+    if (sortMode === 'offset_desc') {
+      return ((b.optical_qa || {}).bbox_center_offset ?? 0) - ((a.optical_qa || {}).bbox_center_offset ?? 0);
+    }
+    return a.thumb_id - b.thumb_id;
+  });
+
+  grid.innerHTML = filtered.map(it => {
+    const opt = it.optical_qa || {};
+    const nn = it.fast_nn_qa || {};
+    const isSel = selectedIds.has(it.thumb_id);
+    const reasons = [...(opt.reasons || []), ...(nn.warnings || [])];
+    const alertHtml = reasons.length
+      ? `<div class="alert-box">⚠️ ${reasons.join(' · ')}</div>`
+      : '';
+
+    return `
+      <div class="card status-${it.overall_status} ${isSel ? 'selected-faulty' : ''}">
+        <div class="thumb-wrap ${bgClass}" onclick="toggleSelect(${it.thumb_id})">
+          <img src="${it.rel_png}" loading="lazy" alt="${it.thumb_code}">
+          <div class="id-badge badge-${it.overall_status}">${it.thumb_code} · ${it.overall_status}</div>
+          <div class="entry-badge">${it.entry_name} · ${it.model}</div>
+        </div>
+        <div class="card-body">
+          <div class="title-line">
+            <span>${it.render_type}</span>
+            <span style="color:#38bdf8">${it.frame_token} · ${it.camera_id.split('_')[0]}</span>
+          </div>
+          <div class="sub-line">${it.stage} | quota=${it.variant} | s02=${it.s02_version}, s03=${it.s03_version}</div>
+          <div class="qa-grid">
+            <div class="qa-item"><span>Opt Cov:</span> <b>${(opt.alpha_coverage_pct ?? 0).toFixed(2)}%</b></div>
+            <div class="qa-item"><span>NN Score:</span> <b>${(nn.subject_score ?? 1).toFixed(3)}</b></div>
+            <div class="qa-item"><span>Clipped:</span> <b>${opt.border_clipped_px ?? 0}px</b></div>
+            <div class="qa-item"><span>Main Mass:</span> <b>${((nn.largest_component_mass_ratio ?? 1)*100).toFixed(1)}%</b></div>
+            <div class="qa-item"><span>Offset:</span> <b>${(opt.bbox_center_offset ?? 0).toFixed(3)}</b></div>
+            <div class="qa-item"><span>Comps:</span> <b>${nn.num_significant_components ?? 1}</b></div>
+          </div>
+          ${alertHtml}
+          <div class="card-actions">
+            <button class="flag-btn ${isSel ? 'active' : ''}" onclick="toggleSelect(${it.thumb_id})">
+              ${isSel ? '🚩 Faulty Selected' : '🚩 Flag Faulty'}
+            </button>
+            <button onclick="openInspectModal(${it.thumb_id})">🔍 Inspect / Overlay</button>
+            <a href="${it.rel_png}" download="${it.entry_name}_${it.render_type}_${it.frame_token}.png">📥 PNG</a>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function openInspectModal(thumbId) {
+  const it = ITEMS.find(x => x.thumb_id === thumbId);
+  if (!it) return;
+  const siblings = ITEMS.filter(x =>
+    x.data_dir === it.data_dir &&
+    x.stage === it.stage &&
+    x.frame_index === it.frame_index &&
+    x.camera_id === it.camera_id
+  );
+  const bgClass = document.getElementById('f-bg').value;
+
+  const layersHtml = siblings.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;margin:6px 0;font-size:0.85rem;">
+      <input type="checkbox" checked onchange="document.getElementById('ov-img-${s.thumb_id}').style.display=this.checked?'block':'none'">
+      <b>${s.render_type}</b> (${s.thumb_code})
+      <input type="range" min="0" max="100" value="${s.thumb_id===it.thumb_id?100:75}"
+        oninput="document.getElementById('ov-img-${s.thumb_id}').style.opacity=this.value/100">
+    </label>
+  `).join('');
+
+  const imgsHtml = siblings.map(s => `
+    <img id="ov-img-${s.thumb_id}" src="${s.rel_png}" style="opacity:${s.thumb_id===it.thumb_id?1.0:0.75}">
+  `).join('');
+
+  const body = document.getElementById('modal-body');
+  body.innerHTML = `
+    <div>
+      <div class="overlay-stage ${bgClass}">${imgsHtml}</div>
+      <div style="margin-top:12px;background:#0f172a;padding:10px 12px;border-radius:8px;border:1px solid #334155;">
+        <div style="font-weight:700;margin-bottom:6px;">🥞 Same-Camera Layer Overlay (${siblings.length} available):</div>
+        ${layersHtml}
+      </div>
+    </div>
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h2 style="margin:0;">${it.thumb_code} — ${it.entry_name} (${it.model})</h2>
+        <button class="btn btn-secondary" onclick="closeModal()">✖ Close</button>
+      </div>
+      <p style="color:var(--muted);font-size:0.86rem;">
+        Stage: <b>${it.stage}</b> | Render Type: <b>${it.render_type}</b> | Frame: <b>${it.frame_index} (${it.frame_token})</b> | Camera: <b>${it.camera_id}</b>
+      </p>
+      <h4>1. Single-Entry Re-render Command</h4>
+      <pre>${it.rerun_single_command}</pre>
+      <h4>2. Reverse-Lookup &amp; Optical / Neural QA Metadata</h4>
+      <pre>${JSON.stringify({
+        thumb_id: it.thumb_id,
+        overall_status: it.overall_status,
+        data_dir: it.data_dir,
+        stage: it.stage,
+        model: it.model,
+        variant: it.variant,
+        s02_version: it.s02_version,
+        s03_version: it.s03_version,
+        output_subdir: it.output_subdir,
+        optical_qa: it.optical_qa,
+        fast_nn_qa: it.fast_nn_qa,
+      }, null, 2)}</pre>
+    </div>
+  `;
+  document.getElementById('inspect-modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('inspect-modal').classList.remove('open');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initFilters();
+  updateCommandBar();
+  renderGrid();
+});
+</script>
+</body>
+</html>
