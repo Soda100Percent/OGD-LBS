@@ -11,11 +11,17 @@ and <mesh>.pkl), producing a uniform JSON schema under a configurable filename.
 """
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[1]
@@ -519,7 +525,50 @@ def compute_normalized_stage_metrics(
             f_m = faces_by_mesh[idx_m]
             p_recon = p_recon_cb[:, v_indices, :]
             mh_pre = MeshHealthPrecompute(rest_v=v_m, faces=f_m, weight_scheme="uniform")
-            mh_res = mh_pre.evaluate(recon_seq=p_recon, gt_seq=gt_m, level=1, return_maps=True)
+            # Disk-backed GT health cache across processes (keyed by mesh geometry + GT sequence digest)
+            gt_Cache_dir = Path("/tmp/ogd_lbs_gt_health_cache")
+            gt_Cache_dir.mkdir(parents=True, exist_ok=True)
+            h_hasher = hashlib.sha1()
+            h_hasher.update(f"{v_m.shape}_{f_m.shape}_{gt_m.shape}".encode("utf-8"))
+            h_hasher.update(np.ascontiguousarray(v_m[::max(1, len(v_m)//64)]).tobytes())
+            h_hasher.update(np.ascontiguousarray(gt_m[0, ::max(1, gt_m.shape[1]//64)]).tobytes())
+            h_hasher.update(np.ascontiguousarray(gt_m[-1, ::max(1, gt_m.shape[1]//64)]).tobytes())
+            gt_cache_file = gt_Cache_dir / f"gt_mh_{h_hasher.hexdigest()}.json"
+            if gt_cache_file.is_file():
+                try:
+                    cached_gt = json.loads(gt_cache_file.read_text(encoding="utf-8"))
+                    cached_gt["arap_spokes"]["global_energy_seq"] = np.asarray(
+                        cached_gt["arap_spokes"]["global_energy_seq"], dtype=np.float64
+                    )
+                    mh_res_recon = mh_pre.evaluate(recon_seq=p_recon, gt_seq=None, level=1, return_maps=True)["recon"]
+                    from ogd_lbs.ssdr.mesh_health import evaluate_normal_health, compute_relative_health_metrics
+                    mh_res_recon["normal_vs_gt"] = evaluate_normal_health(
+                        reference_seq=gt_m, query_seq=p_recon, faces=f_m, eps=mh_pre.eps, return_maps=False
+                    )
+                    mh_res = {
+                        "recon": mh_res_recon,
+                        "gt": cached_gt,
+                        "relative": compute_relative_health_metrics(mh_res_recon, cached_gt, eps=mh_pre.eps),
+                    }
+                except Exception:
+                    mh_res = mh_pre.evaluate(recon_seq=p_recon, gt_seq=gt_m, level=1, return_maps=True)
+            else:
+                mh_res = mh_pre.evaluate(recon_seq=p_recon, gt_seq=gt_m, level=1, return_maps=True)
+                try:
+                    gt_save = {
+                        "edge": {k: v for k, v in mh_res["gt"]["edge"].items() if isinstance(v, (int, float))},
+                        "area": {k: v for k, v in mh_res["gt"]["area"].items() if isinstance(v, (int, float))},
+                        "normal_vs_rest": {k: v for k, v in mh_res["gt"]["normal_vs_rest"].items() if isinstance(v, (int, float))},
+                        "arap_spokes": {
+                            **{k: v for k, v in mh_res["gt"]["arap_spokes"].items() if isinstance(v, (int, float))},
+                            "global_energy_seq": [float(x) for x in mh_res["gt"]["arap_spokes"]["global_energy_seq"].tolist()],
+                        },
+                    }
+                    tmp_cf = gt_cache_file.with_suffix(f".tmp.{os.getpid()}")
+                    tmp_cf.write_text(json.dumps(gt_save), encoding="utf-8")
+                    os.replace(tmp_cf, gt_cache_file)
+                except Exception:
+                    pass
             rel = mh_res.get("relative", {})
             arap_ratios.append(float(rel.get("arap_global_mean_ratio", 0.0)))
             edge_excesses.append(float(rel.get("edge_log_abs_p99_excess", 0.0)))
