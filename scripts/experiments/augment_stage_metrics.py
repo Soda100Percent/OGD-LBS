@@ -225,12 +225,16 @@ def _reconstruct_lbs_sequence(
     vbw: np.ndarray,
 ) -> np.ndarray:
     n_p = int(bt.shape[0])
+    n_b = int(bt.shape[1])
     n_v = int(v.shape[0])
-    p_r = np.zeros((n_p, n_v, 3), dtype=np.float64)
+    rel_mats = np.einsum("pbij,bjk->pbik", bt, inv_rbt)
+    rel_3x4 = np.ascontiguousarray(rel_mats[:, :, :3, :].reshape(n_p, n_b, 12))
+    vbw_c = np.ascontiguousarray(vbw, dtype=np.float64)
+    v_hom = np.hstack([v, np.ones((n_v, 1), dtype=np.float64)])
+    p_r = np.empty((n_p, n_v, 3), dtype=np.float64)
     for p_id in range(n_p):
-        c = skinning_t(v, bt, inv_rbt, p_id)
-        c = skinning_w(c, vbw)
-        p_r[p_id] = skinning_s(c)
+        blended_3x4 = (vbw_c @ rel_3x4[p_id]).reshape(n_v, 3, 4)
+        p_r[p_id] = np.einsum("vij,vj->vi", blended_3x4, v_hom)
     return p_r
 
 
@@ -482,9 +486,11 @@ def compute_normalized_stage_metrics(
         npz_path = pkl_dir / "metrics_history_per_frame.npz"
         frame_stats_out = _load_frame_stats_from_npz(npz_path)
     else:
-        l2_seq = recon_err_per_frame(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
+        from ogd_lbs.ssdr.reconstruction_err import calc_hausdorff
+        p_recon_cb = _reconstruct_lbs_sequence(v_cb, bt, inv_rbt, vbw_cb)
+        l2_seq = np.mean(np.linalg.norm(ba_v_cb - p_recon_cb, axis=2), axis=1)
         l2_val = float(np.mean(l2_seq)) if l2_seq.size else 0.0
-        h_seq = recon_err_hausdorff_per_frame(v_cb, ba_v_cb, bt, inv_rbt, vbw_cb)
+        h_seq = np.asarray([calc_hausdorff(ba_v_cb[p_i], p_recon_cb[p_i]) for p_i in range(n_p)], dtype=np.float64)
         h_mean = float(np.mean(h_seq)) if h_seq.size else 0.0
         h_max = float(np.max(h_seq)) if h_seq.size else 0.0
 
@@ -510,9 +516,8 @@ def compute_normalized_stage_metrics(
         for idx_m, v_indices in enumerate(v_slices):
             v_m = v_cb[v_indices, :]
             gt_m = ba_v_cb[:, v_indices, :]
-            vbw_m = vbw_cb[v_indices, :]
             f_m = faces_by_mesh[idx_m]
-            p_recon = _reconstruct_lbs_sequence(v_m, bt, inv_rbt, vbw_m)
+            p_recon = p_recon_cb[:, v_indices, :]
             mh_pre = MeshHealthPrecompute(rest_v=v_m, faces=f_m, weight_scheme="uniform")
             mh_res = mh_pre.evaluate(recon_seq=p_recon, gt_seq=gt_m, level=1, return_maps=True)
             rel = mh_res.get("relative", {})

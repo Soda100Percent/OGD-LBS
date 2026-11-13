@@ -501,8 +501,6 @@ def _best_rotation_from_covariance(S: Array, eps: float = 1e-12) -> Array:
     """
     Given S = sum rest_edge * pose_edge^T,
     solve min_R sum ||pose_edge - R rest_edge||^2.
-
-    If S = U Sigma V^T, then R = V U^T.
     """
     if not np.isfinite(S).all() or np.linalg.norm(S) < eps:
         return np.eye(3, dtype=np.float64)
@@ -513,16 +511,95 @@ def _best_rotation_from_covariance(S: Array, eps: float = 1e-12) -> Array:
         return np.eye(3, dtype=np.float64)
 
     R = Vt.T @ U.T
-
-    # Reflection fix: enforce det(R) > 0.
     if np.linalg.det(R) < 0:
         Vt[-1, :] *= -1.0
         R = Vt.T @ U.T
 
     if not np.isfinite(R).all():
         return np.eye(3, dtype=np.float64)
-
     return R
+
+
+@dataclass
+class _PackedARAPTopology:
+    v_count: int
+    active_vertices: Array
+    src_active_idx: Array
+    src_global_idx: Array
+    dst_global_idx: Array
+    edge_weights: Array
+    rest_edges: Array
+    weighted_rest_edges: Array
+    denom: Array
+    denom_active_sum: float
+    agg_mat: Any
+
+
+def _pack_arap_topology(
+    rest_v: Array,
+    neighbors: list[Array],
+    weights: list[Array],
+    eps: float = 1e-10,
+) -> _PackedARAPTopology:
+    from scipy.sparse import csr_matrix
+
+    v_count = int(rest_v.shape[0])
+    counts = np.array([int(js.size) for js in neighbors], dtype=np.int64)
+    active_mask = counts > 0
+    active_vertices = np.flatnonzero(active_mask).astype(np.int64)
+    n_active = int(active_vertices.size)
+
+    if n_active == 0:
+        empty_i = np.zeros((0,), dtype=np.int64)
+        empty_f = np.zeros((0,), dtype=np.float64)
+        empty_e = np.zeros((0, 3), dtype=np.float64)
+        return _PackedARAPTopology(
+            v_count=v_count,
+            active_vertices=active_vertices,
+            src_active_idx=empty_i,
+            src_global_idx=empty_i,
+            dst_global_idx=empty_i,
+            edge_weights=empty_f,
+            rest_edges=empty_e,
+            weighted_rest_edges=empty_e,
+            denom=np.full((v_count,), float(eps), dtype=np.float64),
+            denom_active_sum=0.0,
+            agg_mat=csr_matrix((0, 0), dtype=np.float64),
+        )
+
+    active_counts = counts[active_mask]
+    src_active_idx = np.repeat(np.arange(n_active, dtype=np.int64), active_counts)
+    src_global_idx = np.repeat(active_vertices, active_counts)
+    dst_global_idx = np.concatenate([neighbors[i] for i in active_vertices]).astype(np.int64, copy=False)
+    edge_weights = np.concatenate([weights[i] for i in active_vertices]).astype(np.float64, copy=False)
+
+    rest_edges = rest_v[src_global_idx] - rest_v[dst_global_idx]
+    weighted_rest_edges = edge_weights[:, np.newaxis] * rest_edges
+
+    n_half_edges = int(src_active_idx.size)
+    agg_mat = csr_matrix(
+        (np.ones(n_half_edges, dtype=np.float64), (src_active_idx, np.arange(n_half_edges, dtype=np.int64))),
+        shape=(n_active, n_half_edges),
+    )
+
+    edge_len_sq = edge_weights * np.sum(rest_edges * rest_edges, axis=1)
+    denom_active = np.maximum(np.asarray(agg_mat @ edge_len_sq, dtype=np.float64), float(eps))
+    denom = np.full((v_count,), float(eps), dtype=np.float64)
+    denom[active_vertices] = denom_active
+
+    return _PackedARAPTopology(
+        v_count=v_count,
+        active_vertices=active_vertices,
+        src_active_idx=src_active_idx,
+        src_global_idx=src_global_idx,
+        dst_global_idx=dst_global_idx,
+        edge_weights=edge_weights,
+        rest_edges=rest_edges,
+        weighted_rest_edges=weighted_rest_edges,
+        denom=denom,
+        denom_active_sum=float(np.sum(denom_active)),
+        agg_mat=agg_mat,
+    )
 
 
 def precompute_arap_denominators(
@@ -533,27 +610,57 @@ def precompute_arap_denominators(
 ) -> Array:
     """
     Per-vertex ARAP normalization denominator:
-
         denom_i = sum_j w_ij * ||u_i - u_j||^2
     """
     rest_v = _as_float_array(rest_v, "rest_v")
-    v_count = rest_v.shape[0]
+    packed = _pack_arap_topology(rest_v, neighbors, weights, eps=eps)
+    return packed.denom
 
-    denom = np.zeros((v_count,), dtype=np.float64)
 
-    for i in range(v_count):
-        js = neighbors[i]
-        ws = weights[i]
+def _evaluate_arap_spokes_frame_packed(
+    pose_v: Array,
+    packed: _PackedARAPTopology,
+    eps: float = 1e-10,
+) -> tuple[Array, float]:
+    vertex_energy = np.zeros((packed.v_count,), dtype=np.float64)
+    n_active = int(packed.active_vertices.size)
+    if n_active == 0:
+        return vertex_energy, 0.0
 
-        if js.size == 0:
-            denom[i] = eps
-            continue
+    pose_edges = pose_v[packed.src_global_idx] - pose_v[packed.dst_global_idx]
+    edge_outer = (
+        packed.weighted_rest_edges[:, :, np.newaxis] * pose_edges[:, np.newaxis, :]
+    ).reshape(-1, 9)
+    S_all = np.asarray(packed.agg_mat @ edge_outer, dtype=np.float64).reshape(n_active, 3, 3)
 
-        rest_edges = rest_v[i][np.newaxis, :] - rest_v[js]
-        denom_i = np.sum(ws * np.sum(rest_edges * rest_edges, axis=1))
-        denom[i] = max(float(denom_i), eps)
+    norms = np.linalg.norm(S_all, axis=(1, 2))
+    valid_s = norms >= float(eps)
 
-    return denom
+    R_all = np.broadcast_to(np.eye(3, dtype=np.float64), (n_active, 3, 3)).copy()
+    if np.any(valid_s):
+        S_valid = S_all[valid_s]
+        try:
+            U, _, Vt = np.linalg.svd(S_valid)
+            R_v = np.matmul(Vt.transpose(0, 2, 1), U.transpose(0, 2, 1))
+            neg_det = np.linalg.det(R_v) < 0.0
+            if np.any(neg_det):
+                Vt_fix = Vt[neg_det].copy()
+                Vt_fix[:, -1, :] *= -1.0
+                R_v[neg_det] = np.matmul(Vt_fix.transpose(0, 2, 1), U[neg_det].transpose(0, 2, 1))
+            R_all[valid_s] = R_v
+        except np.linalg.LinAlgError:
+            for idx_local in np.flatnonzero(valid_s):
+                R_all[idx_local] = _best_rotation_from_covariance(S_all[idx_local], eps=eps)
+
+    rotated_rest = np.einsum("mab,mb->ma", R_all[packed.src_active_idx], packed.rest_edges)
+    residual = pose_edges - rotated_rest
+    edge_raw = packed.edge_weights * np.sum(residual * residual, axis=1)
+    raw_active = np.asarray(packed.agg_mat @ edge_raw, dtype=np.float64)
+
+    denom_active = np.maximum(packed.denom[packed.active_vertices], float(eps))
+    vertex_energy[packed.active_vertices] = raw_active / denom_active
+    global_energy = float(np.sum(raw_active)) / max(packed.denom_active_sum, float(eps))
+    return vertex_energy, global_energy
 
 
 def evaluate_arap_spokes_frame(
@@ -563,59 +670,13 @@ def evaluate_arap_spokes_frame(
     weights: list[Array],
     denom: Array,
     eps: float = 1e-10,
+    *,
+    _packed: _PackedARAPTopology | None = None,
 ) -> tuple[Array, float]:
-    """
-    Evaluate normalized vertex ARAP spokes energy for one frame.
-
-    Energy per vertex:
-        E_i = sum_j w_ij ||(x_i - x_j) - R_i (u_i - u_j)||^2
-
-    Normalized:
-        E_i / denom_i
-
-    Returns:
-        vertex_energy: V float array
-        global_energy: scalar, sum raw energy / sum denom
-    """
     rest_v = _as_float_array(rest_v, "rest_v")
     pose_v = _as_float_array(pose_v, "pose_v")
-
-    v_count = rest_v.shape[0]
-    vertex_energy = np.zeros((v_count,), dtype=np.float64)
-
-    raw_total = 0.0
-    denom_total = 0.0
-
-    for i in range(v_count):
-        js = neighbors[i]
-        ws = weights[i]
-
-        if js.size == 0:
-            vertex_energy[i] = 0.0
-            continue
-
-        rest_edges = rest_v[i][np.newaxis, :] - rest_v[js]
-        pose_edges = pose_v[i][np.newaxis, :] - pose_v[js]
-
-        S = np.zeros((3, 3), dtype=np.float64)
-        for e_id in range(js.size):
-            S += ws[e_id] * np.outer(rest_edges[e_id], pose_edges[e_id])
-
-        R = _best_rotation_from_covariance(S, eps=eps)
-
-        rotated_rest_edges = (R @ rest_edges.T).T
-        residual = pose_edges - rotated_rest_edges
-
-        raw_i = float(np.sum(ws * np.sum(residual * residual, axis=1)))
-        denom_i = max(float(denom[i]), eps)
-
-        vertex_energy[i] = raw_i / denom_i
-
-        raw_total += raw_i
-        denom_total += denom_i
-
-    global_energy = raw_total / max(denom_total, eps)
-    return vertex_energy, float(global_energy)
+    packed = _packed if _packed is not None else _pack_arap_topology(rest_v, neighbors, weights, eps=eps)
+    return _evaluate_arap_spokes_frame_packed(pose_v, packed, eps=eps)
 
 
 def evaluate_arap_spokes_sequence(
@@ -626,32 +687,20 @@ def evaluate_arap_spokes_sequence(
     denom: Array,
     eps: float = 1e-10,
     return_maps: bool = False,
+    *,
+    _packed: _PackedARAPTopology | None = None,
 ) -> dict[str, Any]:
-    """
-    Evaluate vertex ARAP spokes energy for a sequence.
-
-    Args:
-        rest_v: V x 3
-        seq_v: P x V x 3 or V x 3
-        neighbors, weights: one-ring topology
-        denom: per-vertex normalization denominator
-
-    Returns:
-        scalar stats and optional vertex_energy_seq.
-    """
     rest_v = _as_float_array(rest_v, "rest_v")
     seq_v = _as_sequence(seq_v, "seq_v")
+    packed = _packed if _packed is not None else _pack_arap_topology(rest_v, neighbors, weights, eps=eps)
 
     vertex_energy_seq = []
     global_energy_seq = []
 
     for p_id in range(seq_v.shape[0]):
-        vertex_energy, global_energy = evaluate_arap_spokes_frame(
-            rest_v=rest_v,
+        vertex_energy, global_energy = _evaluate_arap_spokes_frame_packed(
             pose_v=seq_v[p_id],
-            neighbors=neighbors,
-            weights=weights,
-            denom=denom,
+            packed=packed,
             eps=eps,
         )
         vertex_energy_seq.append(vertex_energy)
@@ -680,21 +729,6 @@ def evaluate_arap_spokes_sequence(
 
 @dataclass
 class MeshHealthPrecompute:
-    """
-    Precompute topology and reference quantities for mesh health evaluation.
-
-    Typical usage:
-
-        health = MeshHealthPrecompute(rest_v, faces, weight_scheme="uniform")
-        result = health.evaluate(recon_seq, gt_seq=ba_v, level=1)
-
-    Levels:
-        level = 0:
-            edge, area, normal
-        level = 1:
-            level 0 + ARAP spokes
-    """
-
     rest_v: Array
     faces: Array
     weight_scheme: str = "uniform"
@@ -724,12 +758,15 @@ class MeshHealthPrecompute:
             eps=self.eps,
         )
 
-        self.arap_denom = precompute_arap_denominators(
+        self._packed_arap = _pack_arap_topology(
             rest_v=self.rest_v,
             neighbors=self.neighbors,
             weights=self.weights,
             eps=self.eps,
         )
+        self.arap_denom = self._packed_arap.denom
+        self._cached_gt_key: tuple[int, int, float, float] | None = None
+        self._cached_gt_result: dict[str, Any] | None = None
 
     def evaluate(
         self,
@@ -738,29 +775,6 @@ class MeshHealthPrecompute:
         level: int = 0,
         return_maps: bool = False,
     ) -> dict[str, Any]:
-        """
-        Evaluate mesh health.
-
-        Args:
-            recon_seq:
-                SSDR reconstructed vertices, P x V x 3 or V x 3.
-            gt_seq:
-                Optional baked animation vertices, P x V x 3.
-                If provided, metrics will include GT baseline and relative comparison.
-            level:
-                0: edge + area + normal
-                1: level 0 + ARAP spokes
-            return_maps:
-                If True, include large numpy arrays for heatmap export.
-                These arrays are not JSON-serializable directly.
-
-        Returns:
-            dict with:
-                config
-                recon
-                gt, optional
-                relative, optional
-        """
         recon_seq = _as_sequence(recon_seq, "recon_seq")
 
         if recon_seq.shape[1] != self.rest_v.shape[0]:
@@ -793,7 +807,6 @@ class MeshHealthPrecompute:
             "recon": {},
         }
 
-        # Level 0: edge + area.
         result["recon"]["edge"] = evaluate_edge_health(
             rest_v=self.rest_v,
             seq_v=recon_seq,
@@ -810,9 +823,6 @@ class MeshHealthPrecompute:
             return_maps=return_maps,
         )
 
-        # Normal health:
-        # If GT exists, compare recon normals to GT normals.
-        # Otherwise compare recon normals to rest normals.
         if gt_seq_norm is not None:
             result["recon"]["normal_vs_gt"] = evaluate_normal_health(
                 reference_seq=gt_seq_norm,
@@ -830,35 +840,6 @@ class MeshHealthPrecompute:
                 return_maps=return_maps,
             )
 
-        # Optional GT baseline.
-        if gt_seq_norm is not None:
-            result["gt"] = {}
-
-            result["gt"]["edge"] = evaluate_edge_health(
-                rest_v=self.rest_v,
-                seq_v=gt_seq_norm,
-                edges=self.edges,
-                eps=self.eps,
-                return_maps=return_maps,
-            )
-
-            result["gt"]["area"] = evaluate_area_health(
-                rest_v=self.rest_v,
-                seq_v=gt_seq_norm,
-                faces=self.faces,
-                eps=self.eps,
-                return_maps=return_maps,
-            )
-
-            result["gt"]["normal_vs_rest"] = evaluate_normal_health(
-                reference_seq=self.rest_v,
-                query_seq=gt_seq_norm,
-                faces=self.faces,
-                eps=self.eps,
-                return_maps=return_maps,
-            )
-
-        # Level 1: ARAP spokes.
         if level >= 1:
             result["recon"]["arap_spokes"] = evaluate_arap_spokes_sequence(
                 rest_v=self.rest_v,
@@ -868,20 +849,57 @@ class MeshHealthPrecompute:
                 denom=self.arap_denom,
                 eps=self.eps,
                 return_maps=return_maps,
+                _packed=self._packed_arap,
             )
 
-            if gt_seq_norm is not None:
-                result["gt"]["arap_spokes"] = evaluate_arap_spokes_sequence(
+        if gt_seq_norm is not None:
+            gt_key = (
+                int(gt_seq_norm.shape[0]),
+                int(level),
+                float(gt_seq_norm[0, 0, 0]) if gt_seq_norm.size else 0.0,
+                float(gt_seq_norm[-1, -1, -1]) if gt_seq_norm.size else 0.0,
+            )
+            if (not return_maps) and self._cached_gt_key == gt_key and self._cached_gt_result is not None:
+                result["gt"] = self._cached_gt_result
+            else:
+                gt_dict: dict[str, Any] = {}
+                gt_dict["edge"] = evaluate_edge_health(
                     rest_v=self.rest_v,
                     seq_v=gt_seq_norm,
-                    neighbors=self.neighbors,
-                    weights=self.weights,
-                    denom=self.arap_denom,
+                    edges=self.edges,
                     eps=self.eps,
                     return_maps=return_maps,
                 )
+                gt_dict["area"] = evaluate_area_health(
+                    rest_v=self.rest_v,
+                    seq_v=gt_seq_norm,
+                    faces=self.faces,
+                    eps=self.eps,
+                    return_maps=return_maps,
+                )
+                gt_dict["normal_vs_rest"] = evaluate_normal_health(
+                    reference_seq=self.rest_v,
+                    query_seq=gt_seq_norm,
+                    faces=self.faces,
+                    eps=self.eps,
+                    return_maps=return_maps,
+                )
+                if level >= 1:
+                    gt_dict["arap_spokes"] = evaluate_arap_spokes_sequence(
+                        rest_v=self.rest_v,
+                        seq_v=gt_seq_norm,
+                        neighbors=self.neighbors,
+                        weights=self.weights,
+                        denom=self.arap_denom,
+                        eps=self.eps,
+                        return_maps=return_maps,
+                        _packed=self._packed_arap,
+                    )
+                result["gt"] = gt_dict
+                if not return_maps:
+                    self._cached_gt_key = gt_key
+                    self._cached_gt_result = gt_dict
 
-        if gt_seq_norm is not None:
             result["relative"] = compute_relative_health_metrics(result["recon"], result["gt"], eps=self.eps)
 
         return result
