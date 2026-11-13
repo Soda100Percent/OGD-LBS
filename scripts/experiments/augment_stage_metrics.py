@@ -305,6 +305,221 @@ def _extract_step04_summary_metrics(summary_dict: dict[str, Any]) -> dict[str, f
     return {dst_k: float(fm[src_k]) for dst_k, src_k in required_map.items()}
 
 
+
+def _compute_blend_or_raw_handoff_metrics(
+    s_dir: Path,
+    *,
+    inferred_stage: str,
+    metrics_name: str,
+) -> dict[str, Any]:
+    blend_files = sorted(s_dir.glob("*.blend"))
+    if blend_files:
+        import bpy
+        blend_path = blend_files[0]
+        bpy.ops.wm.open_mainfile(filepath=str(blend_path))
+        arms = [o for o in bpy.data.objects if o.type == "ARMATURE"]
+        main_arm = max(arms, key=lambda a: len(a.data.bones))
+        bone_names = [b.name for b in main_arm.data.bones]
+        bone_set = set(bone_names)
+        bone_to_idx = {b: i for i, b in enumerate(bone_names)}
+
+        skinned_meshes = []
+        for obj in sorted(bpy.data.objects, key=lambda o: o.name):
+            if obj.type != "MESH" or len(obj.data.vertices) == 0:
+                continue
+            has_arm = (obj.parent == main_arm) or any(
+                m.type == "ARMATURE" and m.object == main_arm for m in obj.modifiers
+            ) or any(vg.name in bone_set for vg in obj.vertex_groups)
+            if has_arm:
+                skinned_meshes.append(obj)
+
+        total_v = 0
+        total_f = 0
+        total_lp = 0
+        total_lp_w = 0
+        total_iso = 0
+        weighted_largest = 0.0
+        all_nnz = []
+        active_bones_union: set[int] = set()
+        per_mesh = []
+
+        for m_obj in skinned_meshes:
+            m_data = m_obj.data
+            m_data.calc_loop_triangles()
+            verts = np.array([m_obj.matrix_world @ v.co for v in m_data.vertices], dtype=np.float64)
+            tris = np.array(
+                [[int(t.vertices[0]), int(t.vertices[1]), int(t.vertices[2])] for t in m_data.loop_triangles],
+                dtype=np.int64,
+            )
+            lp = compute_mesh_loose_parts_stats(verts, tris)
+            vgroups = m_obj.vertex_groups
+            vbw = np.zeros((len(m_data.vertices), len(bone_names)), dtype=np.float64)
+            for v in m_data.vertices:
+                vi = int(v.index)
+                for g in v.groups:
+                    gi = int(g.group)
+                    if 0 <= gi < len(vgroups):
+                        bi = bone_to_idx.get(vgroups[gi].name)
+                        if bi is not None and g.weight > 1e-8:
+                            vbw[vi, bi] += float(g.weight)
+                            active_bones_union.add(bi)
+
+            nnz = np.count_nonzero(vbw > 1e-8, axis=1)
+            all_nnz.append(nnz)
+            nv, nf = int(verts.shape[0]), int(tris.shape[0])
+            total_v += nv
+            total_f += nf
+            total_lp += lp["num_loose_parts"]
+            total_lp_w += lp["num_loose_parts_welded"]
+            total_iso += lp["num_isolated_vertices"]
+            weighted_largest += lp["largest_component_face_ratio"] * float(nf)
+            per_mesh.append({
+                "name": m_obj.name,
+                "num_vertices": nv,
+                "num_triangles": nf,
+                "num_bones_active": int(np.count_nonzero(np.any(vbw > 1e-8, axis=0))),
+                "max_bones_per_vertex": int(np.max(nnz)) if nnz.size else 0,
+                "mean_bones_per_vertex": float(np.mean(nnz)) if nnz.size else 0.0,
+                **lp,
+            })
+
+        nnz_concat = np.concatenate(all_nnz) if all_nnz else np.zeros((0,), dtype=np.int64)
+        zero_metrics = {k: 0.0 for k in REQUIRED_METRIC_KEYS}
+        return {
+            "schema": NORMALIZED_METRICS_SCHEMA,
+            "metrics_name": str(metrics_name),
+            "stage": str(inferred_stage),
+            "stage_subdir": s_dir.name,
+            "method_version": "v1",
+            "generated_at_epoch": time.time(),
+            "complexity": {
+                "bone_quota_variant": "raw_full_skeleton",
+                "num_vertices": total_v,
+                "num_triangles": total_f,
+                "num_bones_total": len(bone_names),
+                "num_bones_active": len(active_bones_union),
+                "max_bones_per_vertex": int(np.max(nnz_concat)) if nnz_concat.size else 0,
+                "mean_bones_per_vertex": float(np.mean(nnz_concat)) if nnz_concat.size else 0.0,
+                "num_loose_parts": total_lp,
+                "num_loose_parts_welded": total_lp_w,
+                "num_isolated_vertices": total_iso,
+                "largest_component_face_ratio": (weighted_largest / float(total_f)) if total_f > 0 else 0.0,
+                "s_max_limit": None,
+                "num_frames": 0,
+                "num_meshes": len(per_mesh),
+            },
+            "metrics": zero_metrics,
+            "frame_stats": {},
+            "test_metrics": None,
+            "per_mesh": per_mesh,
+            "provenance": {
+                "reused_from_summary": [],
+                "computed_from_outputs": list(REQUIRED_COMPLEXITY_KEYS),
+            },
+        }
+
+    # Otherwise legacy Fitbox JSON/PKL directory (e.g. Vroid data_prep_00)
+    skel_file = next((s_dir / fn for fn in ("skeleton_hierarchy_data.pkl", "skeleton_hierarchy_data.json") if (s_dir / fn).is_file()), None)
+    anim_file = next((s_dir / fn for fn in ("animation_data.pkl", "animation_data.json") if (s_dir / fn).is_file()), None)
+    if skel_file is None or anim_file is None:
+        raise FileNotFoundError(f"Neither .blend nor skeleton/animation files found in {s_dir}")
+
+    skel_obj = load_data(skel_file)
+    anim_obj = load_data(anim_file)
+    full_bones = [str(x) for x in skel_obj.get(KEY_BONE_NAMES, anim_obj.get(KEY_BONE_NAMES, []))]
+    n_p = int(np.asarray(anim_obj[KEY_ANIMATION_POSES]).shape[0])
+
+    candidates = [
+        p for p in sorted(list(s_dir.glob("*.pkl")) + list(s_dir.glob("*.json")), key=lambda x: x.name)
+        if p.stem not in NON_MESH_STEMS
+    ]
+    seen_stems: set[str] = set()
+    mesh_files: list[Path] = []
+    for c in candidates:
+        if c.stem not in seen_stems:
+            seen_stems.add(c.stem)
+            mesh_files.append(c)
+
+    total_v = 0
+    total_f = 0
+    total_lp = 0
+    total_lp_w = 0
+    total_iso = 0
+    weighted_largest = 0.0
+    all_nnz = []
+    active_bones_union = set()
+    per_mesh = []
+
+    for mf in mesh_files:
+        m_obj = load_data(mf)
+        if not isinstance(m_obj, dict) or KEY_VERTICES not in m_obj:
+            continue
+        verts = np.asarray(m_obj[KEY_VERTICES], dtype=np.float64)
+        tris = _triangulate_faces_array(m_obj[KEY_FACES])
+        lp = compute_mesh_loose_parts_stats(verts, tris)
+        vbw_raw = np.asarray(m_obj[KEY_VERTEX_BONE_WEIGHTS], dtype=np.float64)
+        m_bones = [str(x) for x in m_obj.get("bone_names", full_bones)]
+        col_indices = [m_bones.index(b) for b in full_bones if b in m_bones]
+        vbw = vbw_raw[:, col_indices]
+
+        for b_i in np.flatnonzero(np.any(vbw > 1e-8, axis=0)).tolist():
+            active_bones_union.add(int(b_i))
+        nnz = np.count_nonzero(vbw > 1e-8, axis=1)
+        all_nnz.append(nnz)
+
+        nv, nf = int(verts.shape[0]), int(tris.shape[0])
+        total_v += nv
+        total_f += nf
+        total_lp += lp["num_loose_parts"]
+        total_lp_w += lp["num_loose_parts_welded"]
+        total_iso += lp["num_isolated_vertices"]
+        weighted_largest += lp["largest_component_face_ratio"] * float(nf)
+        per_mesh.append({
+            "name": str(m_obj.get("name", mf.stem)),
+            "num_vertices": nv,
+            "num_triangles": nf,
+            "num_bones_active": int(np.count_nonzero(np.any(vbw > 1e-8, axis=0))),
+            "max_bones_per_vertex": int(np.max(nnz)) if nnz.size else 0,
+            "mean_bones_per_vertex": float(np.mean(nnz)) if nnz.size else 0.0,
+            **lp,
+        })
+
+    nnz_concat = np.concatenate(all_nnz) if all_nnz else np.zeros((0,), dtype=np.int64)
+    zero_metrics = {k: 0.0 for k in REQUIRED_METRIC_KEYS}
+    return {
+        "schema": NORMALIZED_METRICS_SCHEMA,
+        "metrics_name": str(metrics_name),
+        "stage": str(inferred_stage),
+        "stage_subdir": s_dir.name,
+        "method_version": "v1",
+        "generated_at_epoch": time.time(),
+        "complexity": {
+            "bone_quota_variant": "raw_full_skeleton",
+            "num_vertices": total_v,
+            "num_triangles": total_f,
+            "num_bones_total": len(full_bones),
+            "num_bones_active": len(active_bones_union),
+            "max_bones_per_vertex": int(np.max(nnz_concat)) if nnz_concat.size else 0,
+            "mean_bones_per_vertex": float(np.mean(nnz_concat)) if nnz_concat.size else 0.0,
+            "num_loose_parts": total_lp,
+            "num_loose_parts_welded": total_lp_w,
+            "num_isolated_vertices": total_iso,
+            "largest_component_face_ratio": (weighted_largest / float(total_f)) if total_f > 0 else 0.0,
+            "s_max_limit": None,
+            "num_frames": n_p,
+            "num_meshes": len(per_mesh),
+        },
+        "metrics": zero_metrics,
+        "frame_stats": {},
+        "test_metrics": None,
+        "per_mesh": per_mesh,
+        "provenance": {
+            "reused_from_summary": [],
+            "computed_from_outputs": list(REQUIRED_COMPLEXITY_KEYS),
+        },
+    }
+
+
 def compute_normalized_stage_metrics(
     stage_dir: str | Path,
     *,
@@ -336,6 +551,11 @@ def compute_normalized_stage_metrics(
     dim_vals = case_params.get("dimension_values") or {}
 
     pkl_dir = (s_dir / "opt_out") if (s_dir / "opt_out").is_dir() else s_dir
+
+    if subdir_name in {"data_prep_00", "data0_json", "data0", "data1"}:
+        return _compute_blend_or_raw_handoff_metrics(
+            s_dir, inferred_stage=inferred_stage, metrics_name=metrics_name
+        )
 
     skel_path = pkl_dir / "skeleton_hierarchy_data.pkl"
     anim_path = pkl_dir / "animation_data.pkl"
