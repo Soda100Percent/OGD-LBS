@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE_HTML__</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2/dist/jspdf.umd.min.js"></script>
+<style>
+:root {
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --muted: #475569;
+  --primary: #1C328A;
+  --teal: #0f766e;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 0 0 60px;
+  line-height: 1.5;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 950;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+}
+.topbar-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--primary);
+}
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  background: #f8fafc;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.ctrl-group select {
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 0.86rem;
+  background: #fff;
+}
+.btn {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-teal { background: var(--teal); color: #fff; }
+.btn-outline { background: #fff; color: var(--text); border-color: #cbd5e1; }
+.container {
+  max-width: 1560px;
+  margin: 24px auto;
+  padding: 0 20px;
+}
+.section-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px;
+  margin-bottom: 24px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+.section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 2px solid #f1f5f9;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+.section-header h2 {
+  margin: 0;
+  font-size: 1.22rem;
+  color: #1e293b;
+}
+.note-box {
+  background: #f8fafc;
+  border-left: 4px solid var(--primary);
+  padding: 10px 14px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  border-radius: 4px;
+  margin-bottom: 16px;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: right;
+}
+th:first-child, td:first-child,
+th:nth-child(2), td:nth-child(2),
+th:nth-child(3), td:nth-child(3) {
+  text-align: left;
+}
+th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #1e293b;
+}
+tr:nth-child(even) { background: #fcfcfd; }
+tr:hover { background: #f1f5f9; }
+.row-ours {
+  background: #eff6ff !important;
+  font-weight: 600;
+}
+.row-input {
+  background: #fefce8 !important;
+  color: #713f12;
+}
+.best-cell {
+  font-weight: 700;
+  color: #0f766e;
+  background: #f0fdf4 !important;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+.badge-ours { background: #dbeafe; color: #1e40af; }
+.badge-ue { background: #ffedd5; color: #9a3412; }
+.badge-hybrid { background: #f3e8ff; color: #6b21a8; }
+.badge-input { background: #fef3c7; color: #92400e; }
+.charts-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+@media (max-width: 1100px) {
+  .charts-grid-2 { grid-template-columns: 1fr; }
+}
+.chart-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+  min-width: 0;
+  overflow: hidden;
+}
+.chart-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.chart-card-header h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #1e293b;
+}
+.export-btns {
+  display: flex;
+  gap: 4px;
+}
+.btn-xs {
+  padding: 2px 7px;
+  font-size: 0.75rem;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.chart-box {
+  width: 100%;
+  height: 440px;
+  overflow: hidden;
+}
+.chart-box-tall {
+  width: 100%;
+  height: 500px;
+  overflow: hidden;
+}
+pre.latex-box {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 14px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  overflow-x: auto;
+  max-height: 360px;
+}
+.sub-val {
+  display: block;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-title">📊 __TITLE_HTML__</div>
+  <div class="controls-row">
+    <div class="ctrl-group">
+      <label for="sel-scale"><strong>Distance Scale:</strong></label>
+      <select id="sel-scale">
+        <option value="scaled" selected>Model-Scaled (Griffin×0.3, Winter×10, Vroid×1)</option>
+        <option value="raw">Raw Unscaled</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <label for="sel-axis"><strong>Chart Y-Axis:</strong></label>
+      <select id="sel-axis">
+        <option value="auto" selected>Auto Pseudo-Log (Large Dynamic Range)</option>
+        <option value="linear">Linear</option>
+      </select>
+    </div>
+    <a class="btn btn-teal" href="downloads/ogd_lbs_ue5_equal_bone_budget_report_bundle.zip" download>📦 Download ZIP</a>
+    <a class="btn btn-outline" href="index.html">🗂️ Export Center</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- MODULE 1: INPUT & EQUAL BONE BUDGET COMPLEXITY AUDIT -->
+  <section class="section-card">
+    <div class="section-header">
+      <h2>1️⃣ Module 1: Original Input (Raw .blend &amp; Data1) vs. Multi-Stage Complexity &amp; Loose-Parts Audit</h2>
+      <div>
+        <a class="btn btn-outline" href="aggregate/complexity_audit_table.csv" download>📥 Download Complexity CSV</a>
+      </div>
+    </div>
+    <div class="note-box">
+      <strong>Full Pipeline Complexity &amp; Equal-Budget Audit:</strong>
+      Records exact <strong>Meshes ($M$)</strong>, <strong>Vertices ($V$)</strong>, <strong>Triangles ($F$)</strong>,
+      <strong>Total Bones ($B$)</strong>, <strong>Active Bones</strong>, <strong>Max Bones/Vertex ($K_{\max}$)</strong>,
+      and headless <strong>Loose Parts (Topological vs. Welded)</strong> across:
+      <strong>Original Input</strong> $\rightarrow$ <strong>Step 02 (Bone Reduction)</strong> $\rightarrow$ <strong>Step 03 (Bone + QEM)</strong> $\rightarrow$ <strong>Step 04 (Bone + QEM + SSDR)</strong>.
+    </div>
+    <div class="table-wrap" id="table-complexity-audit"></div>
+  </section>
+
+  <!-- MODULE 2: STEP 02 (BONE REDUCTION) -->
+  <section class="section-card">
+    <div class="section-header">
+      <h2>2️⃣ Module 2: Step 02 (Bone Reduction) — High-Poly Skinning Comparison</h2>
+      <div>
+        <a class="btn btn-outline" href="aggregate/step02_comparison_summary.csv" download>📥 Download Step 02 CSV</a>
+      </div>
+    </div>
+    <div class="note-box">
+      <strong>Step 02 (Bone Reduction):</strong>
+      Compares <strong>Ours Bone Reduction ★</strong> against <strong>UE5 Bone Reduction</strong> directly on the high-poly mesh (identical $V, F, B$) before QEM decimation and SSDR optimization.
+    </div>
+    <div class="table-wrap" id="table-step02-comparison" style="margin-bottom: 20px;"></div>
+    <div class="charts-grid-2" id="charts-step02-grid"></div>
+  </section>
+
+  <!-- MODULE 3: STEP 03 (BONE + QEM) -->
+  <section class="section-card">
+    <div class="section-header">
+      <h2>3️⃣ Module 3: Step 03 (Bone + QEM) — Low-Poly Comparison Before SSDR Optimization</h2>
+      <div>
+        <a class="btn btn-outline" href="aggregate/step03_comparison_summary.csv" download>📥 Download Step 03 CSV</a>
+      </div>
+    </div>
+    <div class="note-box">
+      <strong>Step 03 (Bone + QEM):</strong>
+      Compares the 4 combinations of <strong>Bone Reduction (Ours vs. UE5) × QEM Decimation (Ours vs. UE5)</strong> on the decimated low-poly mesh prior to Stage 04 SSDR optimization:
+      <strong>Ours Bone + Ours QEM ★</strong>, <strong>UE5 Bone + Ours QEM</strong>, <strong>Ours Bone + UE5 QEM</strong>, and <strong>UE5 Bone + UE5 QEM</strong>.
+    </div>
+    <div class="table-wrap" id="table-step03-comparison" style="margin-bottom: 20px;"></div>
+    <div class="charts-grid-2" id="charts-step03-grid"></div>
+  </section>
+
+  <!-- MODULE 4: STEP 04 (BONE + QEM + SSDR) -->
+  <section class="section-card">
+    <div class="section-header">
+      <h2>4️⃣ Module 4: Step 04 (Bone + QEM + SSDR) — Final Optimized Comparison Across Equal Bone Quotas</h2>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-outline" onclick="toggleLatexBox()">📄 View / Copy Paper LaTeX Table</button>
+        <a class="btn btn-outline" href="aggregate/step04_comparison_summary.csv" download>📥 Download Step 04 CSV</a>
+      </div>
+    </div>
+    <div class="note-box">
+      <strong>Step 04 (Bone + QEM + SSDR):</strong>
+      Compares all 4 branches after joint weight and bone-transform optimization under identical bone budgets ($B$) and per-vertex sparsity ($K_{\max} \le 4$):
+      <strong>Ours Bone + Ours QEM + SSDR ★</strong>, <strong>UE5 Bone + Ours QEM + SSDR</strong>, <strong>Ours Bone + UE5 QEM + SSDR</strong>, and <strong>UE5 Bone + UE5 QEM + SSDR</strong>.
+    </div>
+    <div id="latex-panel" style="display:none; margin-bottom:18px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <strong>Paper LaTeX Source (<span id="latex-scale-label">Model-Scaled</span>):</strong>
+        <button class="btn btn-primary" onclick="copyLatexSource()">📋 Copy LaTeX</button>
+      </div>
+      <pre class="latex-box" id="latex-source-box"></pre>
+    </div>
+    <div class="table-wrap" id="table-step04-comparison" style="margin-bottom: 20px;"></div>
+    <div class="charts-grid-2" id="charts-step04-grid"></div>
+  </section>
+
+  <!-- MODULE 5: PARETO TRADE-OFF & 3-STAGE PROGRESSION -->
+  <section class="section-card">
+    <div class="section-header">
+      <h2>5️⃣ Module 5: Multi-Metric Trade-off Pareto Scatter &amp; 3-Stage Progression (Step 02 → Step 03 → Step 04)</h2>
+      <div class="controls-row">
+        <div class="ctrl-group">
+          <label for="sel-pareto-stage"><strong>Pareto Stage:</strong></label>
+          <select id="sel-pareto-stage">
+            <option value="step04" selected>Step 04 (Bone + QEM + SSDR)</option>
+            <option value="step03">Step 03 (Bone + QEM)</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label for="sel-pareto-x"><strong>X-Axis:</strong></label>
+          <select id="sel-pareto-x"></select>
+        </div>
+        <div class="ctrl-group">
+          <label for="sel-pareto-y"><strong>Y-Axis:</strong></label>
+          <select id="sel-pareto-y"></select>
+        </div>
+      </div>
+    </div>
+    <div class="charts-grid-2">
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <h3 id="pareto-chart-title">Multi-Metric Pareto Trade-off (Lower-Left = Better)</h3>
+          <div class="export-btns">
+            <button class="btn-xs" onclick="exportChartDom('chart-pareto-box', 'svg', 'ue_cmp_pareto')">SVG</button>
+            <button class="btn-xs" onclick="exportChartDom('chart-pareto-box', 'png', 'ue_cmp_pareto')">PNG</button>
+            <button class="btn-xs" onclick="exportChartDom('chart-pareto-box', 'pdf', 'ue_cmp_pareto')">PDF</button>
+          </div>
+        </div>
+        <div id="chart-pareto-box" class="chart-box-tall"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-card-header">
+          <h3>Stage Progression: Step 02 (Bone) → Step 03 (Bone+QEM) → Step 04 (Bone+QEM+SSDR)</h3>
+          <div class="export-btns">
+            <button class="btn-xs" onclick="exportChartDom('chart-progression-box', 'svg', 'stage_progression')">SVG</button>
+            <button class="btn-xs" onclick="exportChartDom('chart-progression-box', 'png', 'stage_progression')">PNG</button>
+            <button class="btn-xs" onclick="exportChartDom('chart-progression-box', 'pdf', 'stage_progression')">PDF</button>
+          </div>
+        </div>
+        <div id="chart-progression-box" class="chart-box-tall"></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+window.REPORT_PAYLOAD = __DATA_JSON__;
+
+const METHOD_COLORS = {
+  "s02_v1": "#1C328A",
+  "s02_ue": "#d97706",
+  "s03_v1_v1": "#1C328A",
+  "s03_ue_v1": "#0284c7",
+  "s03_v1_ue": "#7c3aed",
+  "s03_ue_ue": "#d97706",
+  "s04_v1_v1": "#1C328A",
+  "s04_ue_v1": "#0284c7",
+  "s04_v1_ue": "#7c3aed",
+  "s04_ue_ue": "#d97706"
+};
+
+const chartInstances = [];
+
+function esc(v) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmtNum(v, digits = 4) {
+  if (v === null || v === undefined || v === "" || !Number.isFinite(Number(v))) return "-";
+  const n = Number(v);
+  if (Math.abs(n) === 0) return "0";
+  if (Math.abs(n) >= 1e5 || (Math.abs(n) > 0 && Math.abs(n) < 1e-3)) return n.toExponential(3);
+  return Number(n.toPrecision(digits)).toString();
+}
+
+function fmtInt(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "-";
+  return Math.round(Number(v)).toLocaleString("en-US");
+}
+
+function getScaleMode() {
+  return document.getElementById("sel-scale").value;
+}
+
+function getAxisMode() {
+  return document.getElementById("sel-axis").value;
+}
+
+function toggleLatexBox() {
+  const el = document.getElementById("latex-panel");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+function copyLatexSource() {
+  const txt = document.getElementById("latex-source-box").innerText;
+  navigator.clipboard.writeText(txt);
+}
+
+function renderComplexityAuditTable() {
+  const P = window.REPORT_PAYLOAD;
+  const rows = P.complexityAuditRows || [];
+  let html = `<table>
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>Stage / Quota Tier</th>
+        <th>Method</th>
+        <th>Meshes (M)</th>
+        <th>Vertices (V)</th>
+        <th>Triangles (F)</th>
+        <th>Total Bones (B)</th>
+        <th>Active Bones</th>
+        <th>Max Bones/Vert (K)</th>
+        <th>Mean Bones/Vert</th>
+        <th>Loose Parts (Topo)</th>
+        <th>Loose Parts (Welded)</th>
+        <th>Main Comp. Face %</th>
+        <th>Pool Dir</th>
+      </tr>
+    </thead>
+    <tbody>`;
+
+  rows.forEach(r => {
+    const c = r.complexity || {};
+    const rowCls = r.is_input ? "row-input" : (r.is_ours_full ? "row-ours" : "");
+    const badgeCls = r.is_input ? "badge-input" : (r.is_ours ? "badge-ours" : (r.is_hybrid ? "badge-hybrid" : "badge-ue"));
+    const mainPct = c.largest_component_face_ratio != null ? (Number(c.largest_component_face_ratio) * 100).toFixed(1) + "%" : "-";
+    html += `<tr class="${rowCls}">
+      <td><strong>${esc(r.model)}</strong></td>
+      <td>${esc(r.tier_label)}</td>
+      <td><span class="badge ${badgeCls}">${esc(r.method_label)}</span></td>
+      <td>${fmtInt(c.num_meshes)}</td>
+      <td>${fmtInt(c.num_vertices)}</td>
+      <td>${fmtInt(c.num_triangles)}</td>
+      <td><strong>${fmtInt(c.num_bones_total)}</strong></td>
+      <td>${fmtInt(c.num_bones_active)}</td>
+      <td><strong>${fmtInt(c.max_bones_per_vertex)}</strong></td>
+      <td>${fmtNum(c.mean_bones_per_vertex, 3)}</td>
+      <td><strong>${fmtInt(c.num_loose_parts)}</strong></td>
+      <td>${fmtInt(c.num_loose_parts_welded)}</td>
+      <td>${mainPct}</td>
+      <td><code>${esc(r.data_dir || "-")}</code></td>
+    </tr>`;
+  });
+
+  html += `</tbody></table>`;
+  document.getElementById("table-complexity-audit").innerHTML = html;
+}
+
+function renderStageSection(sectionKind, methodOrder, tableDomId, gridDomId, stageTitlePrefix) {
+  const P = window.REPORT_PAYLOAD;
+  const scaleMode = getScaleMode();
+  const mField = scaleMode === "scaled" ? "metrics_scaled" : "metrics_raw";
+  const fField = scaleMode === "scaled" ? "frame_stats_scaled" : "frame_stats_raw";
+  const benchmarks = P.benchmarks || [];
+  const metricsMeta = P.metricsMeta || [];
+
+  const isStep02 = sectionKind === "step02";
+  const chartMetrics = isStep02
+    ? metricsMeta.filter(m => ["l2_err", "hausdorff_mean", "hausdorff_max", "arap_ratio", "edge_excess", "normal_flip"].includes(m.key))
+    : metricsMeta;
+
+  let html = `<table>
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>Bone Quota Tier (Bones B)</th>
+        <th>${esc(stageTitlePrefix)} Method</th>
+        <th>Vertices / Tris</th>
+        <th>Bones (B / K_max)</th>
+        <th>Loose (Topo/Weld)</th>`;
+  chartMetrics.forEach(m => {
+    html += `<th>${esc(m.short)}${m.scaled && scaleMode === "scaled" ? " (Scaled)" : ""}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  const oursKey = methodOrder[0];
+
+  benchmarks.forEach(bm => {
+    const stageMap = bm[sectionKind] || {};
+    const items = methodOrder.map(k => stageMap[k]).filter(Boolean);
+    const bestByMetric = {};
+    chartMetrics.forEach(m => {
+      const vals = items.map(it => it[mField][m.key]).filter(v => v != null && Number.isFinite(v));
+      if (vals.length) bestByMetric[m.key] = Math.min(...vals);
+    });
+    const baseItem = stageMap[oursKey];
+
+    items.forEach((it, idx) => {
+      const c = it.complexity;
+      const isOurs = it.method_key === oursKey;
+      const isPureUe = it.method_key.endsWith("ue_ue") || it.method_key === "s02_ue";
+      const badgeCls = isOurs ? "badge-ours" : (isPureUe ? "badge-ue" : "badge-hybrid");
+
+      html += `<tr class="${isOurs ? 'row-ours' : ''}">
+        <td>${idx === 0 ? '<strong>' + esc(bm.model) + '</strong>' : ''}</td>
+        <td>${idx === 0 ? esc(bm.quota_display) + ' (<strong>B=' + c.num_bones_total + '</strong>)' : ''}</td>
+        <td><span class="badge ${badgeCls}">${esc(it.method_label)}</span></td>
+        <td>${fmtInt(c.num_vertices)} / ${fmtInt(c.num_triangles)}</td>
+        <td><strong>${fmtInt(c.num_bones_total)}</strong> / ${fmtInt(c.max_bones_per_vertex)}</td>
+        <td>${fmtInt(c.num_loose_parts)} / ${fmtInt(c.num_loose_parts_welded)}</td>`;
+
+      chartMetrics.forEach(m => {
+        const val = it[mField][m.key];
+        const baseVal = baseItem ? baseItem[mField][m.key] : null;
+        const isBest = val != null && bestByMetric[m.key] != null && Math.abs(val - bestByMetric[m.key]) <= 1e-12;
+        let subHtml = "";
+        if (!isOurs && val != null && baseVal != null && Math.abs(baseVal) > 1e-12) {
+          const pct = ((val - baseVal) / baseVal) * 100.0;
+          const sign = pct >= 0 ? "+" : "";
+          const color = pct > 0 ? "#dc2626" : "#0f766e";
+          subHtml = `<span class="sub-val" style="color:${color};font-weight:600;">(${sign}${pct.toFixed(1)}% vs Ours★)</span>`;
+        } else {
+          const fst = (it[fField] || {})[m.fstat_key];
+          if (fst) {
+            subHtml = `<span class="sub-val">[${fmtNum(fst.min, 3)}, ${fmtNum(fst.max, 3)}] ±${fmtNum(fst.std, 2)}</span>`;
+          }
+        }
+        html += `<td class="${isBest ? 'best-cell' : ''}">${fmtNum(val, 4)}${subHtml}</td>`;
+      });
+      html += `</tr>`;
+    });
+  });
+
+  html += `</tbody></table>`;
+  document.getElementById(tableDomId).innerHTML = html;
+
+  const grid = document.getElementById(gridDomId);
+  grid.innerHTML = "";
+
+  chartMetrics.forEach(m => {
+    const domId = `chart-${sectionKind}-${m.key}`;
+    const card = document.createElement("div");
+    card.className = "chart-card";
+    card.innerHTML = `
+      <div class="chart-card-header">
+        <h3>${esc(stageTitlePrefix)}: ${esc(m.label)} ${m.scaled && scaleMode === "scaled" ? "(Model-Scaled)" : "(Raw)"}</h3>
+        <div class="export-btns">
+          <button class="btn-xs" onclick="exportChartDom('${domId}', 'svg', '${domId}')">SVG</button>
+          <button class="btn-xs" onclick="exportChartDom('${domId}', 'png', '${domId}')">PNG</button>
+          <button class="btn-xs" onclick="exportChartDom('${domId}', 'pdf', '${domId}')">PDF</button>
+        </div>
+      </div>
+      <div id="${domId}" class="chart-box"></div>`;
+    grid.appendChild(card);
+
+    renderGroupedBarChart(domId, benchmarks, m, scaleMode, sectionKind, methodOrder);
+  });
+}
+
+function renderGroupedBarChart(domId, benchmarks, metricMeta, scaleMode, sectionKind, methodKeys) {
+  const dom = document.getElementById(domId);
+  if (!dom) return;
+  const chart = echarts.init(dom, null, { renderer: "svg" });
+  chartInstances.push(chart);
+
+  const mField = scaleMode === "scaled" ? "metrics_scaled" : "metrics_raw";
+  const fField = scaleMode === "scaled" ? "frame_stats_scaled" : "frame_stats_raw";
+  const mk = metricMeta.key;
+  const fk = metricMeta.fstat_key;
+
+  const categories = benchmarks.map(b => `${b.model}\n[${b.quota_short}: ${b.bones_count}B]`);
+
+  const allPositiveVals = [];
+  benchmarks.forEach(bm => {
+    const container = bm[sectionKind] || {};
+    methodKeys.forEach(k => {
+      const it = container[k];
+      if (!it) return;
+      const v = it[mField][mk];
+      if (v != null && v > 0) allPositiveVals.push(v);
+    });
+  });
+
+  let usePseudoLog = false;
+  let cThresh = 1e-4;
+  if (getAxisMode() === "auto" && allPositiveVals.length >= 2) {
+    const minP = Math.min(...allPositiveVals);
+    const maxP = Math.max(...allPositiveVals);
+    if (maxP / Math.max(minP, 1e-12) >= 35.0) {
+      usePseudoLog = true;
+      const sorted = [...allPositiveVals].sort((a, b) => a - b);
+      cThresh = Math.max(sorted[Math.floor(sorted.length * 0.15)], 1e-8);
+    }
+  }
+
+  const fwd = (v) => {
+    if (v == null || !Number.isFinite(v)) return null;
+    return usePseudoLog ? Math.log10(1 + Math.max(0, v) / cThresh) : v;
+  };
+  const inv = (y) => {
+    if (y == null || !Number.isFinite(y)) return null;
+    return usePseudoLog ? cThresh * (Math.pow(10, y) - 1) : y;
+  };
+
+  const series = methodKeys.map(mKey => {
+    let sampleLabel = mKey;
+    const dataArr = benchmarks.map(bm => {
+      const container = bm[sectionKind] || {};
+      const it = container[mKey];
+      if (!it) return { value: null };
+      sampleLabel = it.method_short || it.method_label;
+      const rawV = it[mField][mk];
+      const fst = (it[fField] || {})[fk];
+      return {
+        value: fwd(rawV),
+        rawVal: rawV,
+        fstat: fst,
+        bmLabel: `${bm.model} (${bm.quota_display}, B=${bm.bones_count})`,
+        methodLabel: it.method_label
+      };
+    });
+
+    return {
+      name: sampleLabel,
+      type: "bar",
+      barMaxWidth: 24,
+      itemStyle: {
+        color: METHOD_COLORS[mKey] || "#475569",
+        borderRadius: [3, 3, 0, 0]
+      },
+      data: dataArr
+    };
+  });
+
+  chart.setOption({
+    animation: false,
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      formatter: (params) => {
+        if (!params || !params.length) return "";
+        const head = params[0].data.bmLabel || params[0].name;
+        let lines = [`<strong>${esc(head)}</strong>`];
+        params.forEach(p => {
+          const d = p.data || {};
+          const fLine = d.fstat ? ` <span style="color:#64748b;">(min=${fmtNum(d.fstat.min,3)}, max=${fmtNum(d.fstat.max,3)}, std=${fmtNum(d.fstat.std,2)})</span>` : "";
+          lines.push(`${p.marker} ${esc(p.seriesName)}: <strong>${fmtNum(d.rawVal, 4)}</strong>${fLine}`);
+        });
+        return lines.join("<br/>");
+      }
+    },
+    legend: {
+      type: "plain",
+      top: 4,
+      left: "center",
+      itemGap: 14,
+      itemWidth: 16,
+      itemHeight: 11,
+      textStyle: { fontSize: 11.5 }
+    },
+    grid: {
+      top: sectionKind === "step02" ? 54 : 84,
+      left: 76,
+      right: 22,
+      bottom: 76
+    },
+    xAxis: {
+      type: "category",
+      data: categories,
+      axisLabel: { interval: 0, fontSize: 10.5, rotate: 16, margin: 10 }
+    },
+    yAxis: {
+      type: "value",
+      name: usePseudoLog ? `${metricMeta.short} (pseudo-log)` : metricMeta.short,
+      nameLocation: "middle",
+      nameGap: 56,
+      nameTextStyle: { fontWeight: "bold", fontSize: 11.5 },
+      axisLabel: {
+        formatter: (v) => fmtNum(inv(v), 3)
+      }
+    },
+    series: series
+  }, true);
+}
+
+function initParetoSelectors() {
+  const P = window.REPORT_PAYLOAD;
+  const metricsMeta = P.metricsMeta || [];
+  const selX = document.getElementById("sel-pareto-x");
+  const selY = document.getElementById("sel-pareto-y");
+  selX.innerHTML = "";
+  selY.innerHTML = "";
+
+  metricsMeta.forEach((m) => {
+    const optX = document.createElement("option");
+    optX.value = m.key;
+    optX.textContent = m.label;
+    if (m.key === "l2_err") optX.selected = true;
+    selX.appendChild(optX);
+
+    const optY = document.createElement("option");
+    optY.value = m.key;
+    optY.textContent = m.label;
+    if (m.key === "arap_ratio") optY.selected = true;
+    selY.appendChild(optY);
+  });
+}
+
+function renderParetoAndProgression() {
+  const P = window.REPORT_PAYLOAD;
+  const scaleMode = getScaleMode();
+  const paretoStage = document.getElementById("sel-pareto-stage").value || "step04";
+  const mField = scaleMode === "scaled" ? "metrics_scaled" : "metrics_raw";
+  const benchmarks = P.benchmarks || [];
+  const metricsMeta = P.metricsMeta || [];
+  const metaByKey = Object.fromEntries(metricsMeta.map(m => [m.key, m]));
+
+  const xKey = document.getElementById("sel-pareto-x").value || "l2_err";
+  const yKey = document.getElementById("sel-pareto-y").value || "arap_ratio";
+  const xMeta = metaByKey[xKey] || { short: xKey };
+  const yMeta = metaByKey[yKey] || { short: yKey };
+
+  // 1. Pareto Scatter
+  const domP = document.getElementById("chart-pareto-box");
+  const chartP = echarts.init(domP, null, { renderer: "svg" });
+  chartInstances.push(chartP);
+
+  const methodOrder = paretoStage === "step03"
+    ? ["s03_v1_v1", "s03_ue_v1", "s03_v1_ue", "s03_ue_ue"]
+    : ["s04_v1_v1", "s04_ue_v1", "s04_v1_ue", "s04_ue_ue"];
+
+  const pSeries = methodOrder.map((mKey, mIdx) => {
+    let sName = mKey;
+    const pts = [];
+    benchmarks.forEach(bm => {
+      const it = (bm[paretoStage] || {})[mKey];
+      if (!it) return;
+      sName = it.method_short || it.method_label;
+      const xv = it[mField][xKey];
+      const yv = it[mField][yKey];
+      if (xv != null && yv != null) {
+        pts.push({
+          value: [xv, yv],
+          bmLabel: `${bm.model} [${bm.quota_display}, B=${bm.bones_count}]`,
+          methodLabel: it.method_label
+        });
+      }
+    });
+    return {
+      name: sName,
+      type: "scatter",
+      symbolSize: mIdx === 0 ? 16 : 12,
+      symbol: mIdx === 0 ? "diamond" : "circle",
+      itemStyle: { color: METHOD_COLORS[mKey] || "#475569", opacity: 0.9 },
+      data: pts
+    };
+  });
+
+  chartP.setOption({
+    animation: false,
+    tooltip: {
+      trigger: "item",
+      formatter: (p) => {
+        const d = p.data || {};
+        return `<strong>${esc(d.bmLabel)}</strong><br/>`
+          + `${esc(d.methodLabel)}<br/>`
+          + `${esc(xMeta.short)}: <strong>${fmtNum(d.value[0], 4)}</strong><br/>`
+          + `${esc(yMeta.short)}: <strong>${fmtNum(d.value[1], 4)}</strong>`;
+      }
+    },
+    legend: { type: "plain", top: 4, left: "center", itemGap: 12, textStyle: { fontSize: 11.5 } },
+    grid: { top: 82, left: 76, right: 28, bottom: 58 },
+    xAxis: { type: "value", name: xMeta.short, nameLocation: "middle", nameGap: 32, scale: true },
+    yAxis: { type: "value", name: yMeta.short, nameLocation: "middle", nameGap: 54, scale: true },
+    series: pSeries
+  }, true);
+
+  // 2. 3-Stage Progression Chart (Step 02 -> Step 03 -> Step 04)
+  const domProg = document.getElementById("chart-progression-box");
+  const chartProg = echarts.init(domProg, null, { renderer: "svg" });
+  chartInstances.push(chartProg);
+
+  const cats = benchmarks.map(b => `${b.model}\n[${b.quota_short}: ${b.bones_count}B]`);
+  const progSpecs = [
+    { label: "Step 02 (Bone Reduction): Ours", color: "#93c5fd", getter: bm => bm.step02.s02_v1 },
+    { label: "Step 02 (Bone Reduction): UE5", color: "#fdba74", getter: bm => bm.step02.s02_ue },
+    { label: "Step 03 (Bone + QEM): Ours", color: "#3b82f6", getter: bm => bm.step03.s03_v1_v1 },
+    { label: "Step 03 (Bone + QEM): UE5", color: "#f97316", getter: bm => bm.step03.s03_ue_ue },
+    { label: "Step 04 (Bone + QEM + SSDR): Ours ★", color: "#1C328A", getter: bm => bm.step04.s04_v1_v1 },
+    { label: "Step 04 (Bone + QEM + SSDR): UE5", color: "#b45309", getter: bm => bm.step04.s04_ue_ue }
+  ];
+
+  const progSeries = progSpecs.map(sp => ({
+    name: sp.label,
+    type: "bar",
+    barMaxWidth: 16,
+    itemStyle: { color: sp.color, borderRadius: [2, 2, 0, 0] },
+    data: benchmarks.map(bm => {
+      const it = sp.getter(bm);
+      return it ? it[mField]["l2_err"] : null;
+    })
+  }));
+
+  chartProg.setOption({
+    animation: false,
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    legend: { type: "plain", top: 4, left: "center", itemGap: 10, textStyle: { fontSize: 11 } },
+    grid: { top: 88, left: 76, right: 22, bottom: 76 },
+    xAxis: { type: "category", data: cats, axisLabel: { interval: 0, fontSize: 10.5, rotate: 16, margin: 10 } },
+    yAxis: { type: "value", name: `VD / L2 Error (${scaleMode})`, nameLocation: "middle", nameGap: 56, nameTextStyle: { fontWeight: "bold", fontSize: 11.5 } },
+    series: progSeries
+  }, true);
+}
+
+window.exportChartDom = function(domId, format, filename) {
+  const dom = document.getElementById(domId);
+  const svgNode = dom ? dom.querySelector("svg") : null;
+  if (!svgNode) return;
+  let svgContent = svgNode.outerHTML;
+  if (!svgContent.includes('xmlns="http://www.w3.org/2000/svg"')) {
+    svgContent = svgContent.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+  }
+  if (format === "svg") {
+    const blob = new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename + ".svg";
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+  const bbox = svgNode.getBoundingClientRect();
+  const width = parseFloat(svgNode.getAttribute("width")) || bbox.width || 900;
+  const height = parseFloat(svgNode.getAttribute("height")) || bbox.height || 450;
+  const canvas = document.createElement("canvas");
+  const scale = 2;
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" }));
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    if (format === "png") {
+      canvas.toBlob(blob => {
+        const u = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = u;
+        a.download = filename + ".png";
+        a.click();
+        URL.revokeObjectURL(u);
+      }, "image/png");
+    } else if (format === "pdf" && window.jspdf && window.jspdf.jsPDF) {
+      const imgData = canvas.toDataURL("image/jpeg", 0.98);
+      const doc = new window.jspdf.jsPDF({ orientation: width >= height ? "l" : "p", unit: "pt", format: [width, height] });
+      doc.addImage(imgData, "JPEG", 0, 0, width, height);
+      doc.save(filename + ".pdf");
+    }
+  };
+  img.src = url;
+};
+
+function renderAll() {
+  chartInstances.splice(0, chartInstances.length).forEach(c => {
+    try { c.dispose(); } catch (_) {}
+  });
+  const P = window.REPORT_PAYLOAD;
+  const scaleMode = getScaleMode();
+  document.getElementById("latex-scale-label").innerText = scaleMode === "scaled" ? "Model-Scaled" : "Raw Unscaled";
+  document.getElementById("latex-source-box").innerText = (P.latex && P.latex[scaleMode]) || "";
+
+  renderComplexityAuditTable();
+  renderStageSection("step02", ["s02_v1", "s02_ue"], "table-step02-comparison", "charts-step02-grid", "Step 02 (Bone Reduction)");
+  renderStageSection("step03", ["s03_v1_v1", "s03_ue_v1", "s03_v1_ue", "s03_ue_ue"], "table-step03-comparison", "charts-step03-grid", "Step 03 (Bone + QEM)");
+  renderStageSection("step04", ["s04_v1_v1", "s04_ue_v1", "s04_v1_ue", "s04_ue_ue"], "table-step04-comparison", "charts-step04-grid", "Step 04 (Bone + QEM + SSDR)");
+  renderParetoAndProgression();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  initParetoSelectors();
+  ["sel-scale", "sel-axis", "sel-pareto-stage", "sel-pareto-x", "sel-pareto-y"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", renderAll);
+  });
+  window.addEventListener("resize", () => {
+    chartInstances.forEach(c => { try { c.resize(); } catch (_) {} });
+  });
+  renderAll();
+});
+</script>
+</body>
+</html>
