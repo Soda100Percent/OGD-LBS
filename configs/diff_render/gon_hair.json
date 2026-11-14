@@ -1,0 +1,17 @@
+{
+    "batch": 48,
+    "learning_rate": 0.0003,
+    "train_res": 512,
+    "texture_res": [256, 256],
+    "layers": 1,
+    "loss": "mse",
+    "light_power": 1.5,
+    "min_roughness": 0.25,
+    "relative_laplacian": true,
+    "laplacian_factor": 100.0,
+
+    "use_color_palette": true,
+    "n_kd_palette": 5,
+    "use_submesh_sampling": true,
+    "fixed_submeshes": []
+}

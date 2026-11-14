@@ -1,0 +1,132 @@
+{
+    "datasets": [
+        {
+            "input_dir": "/workspace/data/diff_render_pipeline/dataset18/geom_opt2",
+            "base_output_dir": "/workspace/diff_render_out_tmp/ablation_study_002"
+        }
+    ],
+    "params": {
+
+
+        "opt_submesh_bsdf": [
+            [
+                ["body", "ambient_1sided"],
+                ["face", "ambient_1sided"],
+                ["hair_bangs_l", "ambient_1sided"],
+                ["hair_bangs", "ambient_1sided"],
+                ["hair_bangs_r", "ambient_1sided"],
+                ["hair_base", "ambient_1sided"],
+                ["hair_sideburns_l", "ambient_1sided"],
+                ["hair_sideburns_r", "ambient_1sided"],
+                ["hair_tail_l", "ambient_1sided"],
+                ["hair_tail_r", "ambient_1sided"],
+                ["hair_top_l", "ambient_1sided"],
+                ["hair_top_r", "ambient_1sided"],
+                ["shoes_p2", "ambient_1sided"],
+                ["dress", "ambient_1sided"],
+                ["top", "ambient_1sided"],
+                ["eye_brow", "ambient_2sided"],
+                ["eye_highlight", "ambient_2sided"],
+                ["eye_lash", "ambient_2sided"],
+                ["eye_pupile", "ambient_2sided"],
+                ["eye_white", "ambient_2sided"],
+                ["shoes_p1", "ambient_2sided"]
+            ]
+        ],
+        "ref_submesh_bsdf": [
+            [
+                ["body", "ambient_1sided"],
+                ["face", "ambient_1sided"],
+                ["hair_bangs_l", "ambient_1sided"],
+                ["hair_bangs", "ambient_1sided"],
+                ["hair_bangs_r", "ambient_1sided"],
+                ["hair_base", "ambient_1sided"],
+                ["hair_sideburns_l", "ambient_1sided"],
+                ["hair_sideburns_r", "ambient_1sided"],
+                ["hair_tail_l", "ambient_1sided"],
+                ["hair_tail_r", "ambient_1sided"],
+                ["hair_top_l", "ambient_1sided"],
+                ["hair_top_r", "ambient_1sided"],
+                ["shoes_p2", "ambient_1sided"],
+                ["dress", "ambient_2sided"],
+                ["top", "ambient_2sided"],
+                ["eye_brow", "ambient_2sided"],
+                ["eye_highlight", "ambient_2sided"],
+                ["eye_lash", "ambient_2sided"],
+                ["eye_pupile", "ambient_2sided"],
+                ["eye_white", "ambient_2sided"],
+                ["shoes_p1", "ambient_2sided"]
+            ]
+        ],
+        "tex_opt_bsdf_override": ["ambient_2sided"],
+        "ignore_suffixes": [["_merged"]],
+        "test_frame_range": [[0.95, 1.0]],
+
+        "train_res": [512],
+        "texture_res": [[1024, 1024]],
+        "batch": [40],
+
+        "geom_opt_iter": [10000],
+        "geom_opt_layers": [3],
+        "geom_opt_lr": [0.03],
+
+        "tex_opt_iter": [20000],
+        "tex_opt_layers": [4],
+        "tex_opt_lr": [0.03],
+
+        "body_alpha_opt_iter": [5000],
+        "body_alpha_opt_lr": [0.06],
+
+        "force_auto_uv": [true],
+        "auto_uv_method": ["xatlas"],
+
+        "cam_zoom_max": [0.0],
+        "cam_jitter_pixels": [1.0],
+        "cam_focus_offset": [1.0],
+        "cam_focus_fluctuation_in": [0.2],
+        "cam_focus_fluctuation_out": [0.5],
+
+        "texture_alpha_binary_start_ratio": [0.5],
+        "texture_alpha_binary_weight": [0.02],
+
+        "body_mask_submeshes": [["body"]],
+        "body_alpha_threshold": [0.5],
+        "body_alpha_min": [0.0],
+        "body_alpha_max": [1.0],
+        "body_mask_force_layers": [4],
+
+        "save_interval": [100],
+        "print_interval": [100],
+        "eval_interval": [1000],
+        "eval_frame_max_train_set": [10],
+        "eval_frame_max_test_set": [10],
+
+        "pipeline_mode": ["one_stage"],
+
+        "rest_pose_ratio": [0.8],
+
+        "submesh_sampling_mode": ["anneal"],
+        "use_color_palette": [true],
+        "bake_isolated_ratio": [0.0],
+
+        "cam_focus_ratio": [0.6],
+        "enable_auto_center": [true],
+
+        "enable_angle_weighting": [true],
+        "angle_weight_grazing_decay": [0.5],
+
+        "loss_l1_weight": [0.0],
+        "loss_mse_weight": [1.0],
+        "loss_ssim_weight": [0.0],
+        "loss_lpips_weight": [0.0],
+
+        "body_alpha_keep_weight": [0.0],
+        "body_alpha_binary_weight": [0.0],
+
+        "relative_laplacian": [true],
+        "laplacian_factor": [1000.0],
+        "light_power": [1.5],
+        "min_roughness": [0.25],
+        "random_textures": [true]
+    }
+}

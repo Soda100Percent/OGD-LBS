@@ -25,3 +25,6 @@ KEY_BAKED_VERTICES = "baked_animation_vertices"
 KEY_BAKED_NORMALS = "baked_animation_vertex_normals"
 KEY_VERTEX_BONE_WEIGHTS = "vertex_bone_weights"
 KEY_VERTEX_BONE_WEIGHTS_MASK = "vertex_bone_weights_mask"
+
+ANIMATION_STEM = "animation_data"
+SKELETON_STEM = "skeleton_hierarchy_data"

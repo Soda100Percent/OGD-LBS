@@ -1,0 +1,17 @@
+Copyright (c) 2020-2021, NVIDIA CORPORATION. All rights reserved.
+
+NVIDIA Source Code License for nvdiffmodeling / nvdiffrast derivatives
+
+1. Definitions
+"Licensor" means any person or entity that distributes its Work.
+"Software" means the original work of authorship made available under this License.
+"Work" means the Software and any additions to or derivative works of the Software that are made available under this License.
+
+2. License Grant
+Subject to the terms and conditions of this License, each Licensor hereby grants to you a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, and distribute its Work and any resulting derivative works in any form, for non-commercial research and educational purposes only.
+
+NVIDIA CORPORATION and its licensors retain all intellectual property and proprietary rights in and to this software, related documentation and any modifications thereto. Any commercial use, reproduction, disclosure or distribution of this software and related documentation without an express license agreement from NVIDIA CORPORATION is strictly prohibited.
+
+---
+Modification Notice:
+This directory contains a customized derivative of NVIDIA's nvdiffmodeling (and renderutils CUDA/C++ kernels) adapted by the OGD-LBS authors to support multi-component skeletal skinning (LBS), per-face mixed BSDF IDs, two-sided back-deepened diffuse shading, and body bone alpha masking.

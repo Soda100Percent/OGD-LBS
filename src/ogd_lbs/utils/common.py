@@ -25,6 +25,10 @@ except ImportError:
 # -----------------------------------------------------------------------------
 _GLOBAL_METRICS: dict[str, Any] = {}
 
+def clear_metrics() -> None:
+    """清空全局指标注册表（用于同一进程内多阶段串联）"""
+    _GLOBAL_METRICS.clear()
+
 def record_metric(key: str, value: Any) -> None:
     """记录自定义业务指标到全局注册表"""
     _GLOBAL_METRICS[key] = value
@@ -110,7 +114,7 @@ def load_data(path: str | Path) -> Any:
 def resolve_specific_file(dir_path: str | Path, stem: str, ext_priority: list[str]) -> Optional[Path]:
     dir_path = Path(dir_path)
     ext_priority_lower = [ext.lower() for ext in ext_priority]
-    
+
     for ext in ext_priority_lower:
         candidate = dir_path / f"{stem}{ext}"
         if candidate.is_file():
@@ -118,38 +122,38 @@ def resolve_specific_file(dir_path: str | Path, stem: str, ext_priority: list[st
     return None
 
 def discover_and_resolve_files(
-    dir_path: str | Path, 
-    ext_priority: list[str], 
+    dir_path: str | Path,
+    ext_priority: list[str],
     exclude_stems: Optional[Iterable[str]] = None
 ) -> list[Path]:
     dir_path = Path(dir_path)
     exclude_set = set(exclude_stems) if exclude_stems else set()
     ext_priority_lower = [ext.lower() for ext in ext_priority]
-    
+
     files_by_stem: dict[str, Path] = {}
-    
+
     if not dir_path.exists():
         return []
-        
+
     for item in dir_path.iterdir():
         if not item.is_file():
             continue
-            
+
         stem = item.stem
         ext = item.suffix.lower()
-        
+
         if stem in exclude_set:
             continue
         if ext not in ext_priority_lower:
             continue
-            
+
         if stem not in files_by_stem:
             files_by_stem[stem] = item
         else:
             current_best = files_by_stem[stem]
             if ext_priority_lower.index(ext) < ext_priority_lower.index(current_best.suffix.lower()):
                 files_by_stem[stem] = item
-                
+
     return sorted(list(files_by_stem.values()), key=lambda p: p.name)
 
 # -----------------------------------------------------------------------------
@@ -340,4 +344,3 @@ def unique_keep_order(items: Iterable[Any]) -> list[Any]:
         out.append(item)
 
     return out
-

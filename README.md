@@ -1411,3 +1411,35 @@ conda run --no-capture-output -n ogd-lbs \
   --open
 ```
 
+---
+
+## 9. 内嵌第三方源码与特殊许可声明 (Third-Party Embedded Code & Special Licensing)
+
+本仓库的可微渲染模块（`src/ogd_lbs/diff_render/`）基于 **nvdiffrast** 与 **nvdiffmodeling** 构建。由于本项目对 `nvdiffmodeling`（及其 `renderutils` CUDA/C++ 扩展算子）进行了深度定制与魔改（包括但不限于：多组件骨骼蒙皮 LBS 向量化、逐面混合材质 `t_bsdf_id`、双面背面加深漫反射 `diffuse_2sided_back_deepen`、自动骨骼遮罩 `BodyAlphaMask` 以及延迟插件编译），无法通过直接链接或包管理器安装上游原版仓库，因此我们将修改后的源码直接内嵌（Vendor）在以下路径中：
+
+```text
+src/ogd_lbs/diff_render/nvdiffmodeling/
+├── LICENSE
+├── mesh.py
+├── render.py
+├── material.py
+├── texture.py
+├── regularizer.py
+├── obj.py
+├── util.py
+└── renderutils/
+    ├── ops.py
+    ├── bsdf.py
+    ├── loss.py
+    └── c_src/
+```
+
+### 许可边界说明
+
+1. **NVIDIA Source Code License 约束**：
+   `src/ogd_lbs/diff_render/nvdiffmodeling/` 目录下的所有源码及衍生修改均保留 NVIDIA 原始版权声明（`Copyright (c) 2020-2021, NVIDIA CORPORATION. All rights reserved.`），并严格受 **NVIDIA Source Code License**（详见 [`src/ogd_lbs/diff_render/nvdiffmodeling/LICENSE`](src/ogd_lbs/diff_render/nvdiffmodeling/LICENSE)）约束，**仅限用于非商业科研与教育用途（non-commercial research and educational purposes only）**。
+2. **上游参考项目**：
+   - `NVlabs/nvdiffmodeling`: [https://github.com/NVlabs/nvdiffmodeling](https://github.com/NVlabs/nvdiffmodeling)
+   - `NVlabs/nvdiffrast`: [https://github.com/NVlabs/nvdiffrast](https://github.com/NVlabs/nvdiffrast)
+3. **代码隔离**：
+   除上述内嵌目录及直接衍生自 NVIDIA 源码的文件外，本仓库其余自研模块遵循仓库根目录 `LICENSE` 文件规定的许可协议。

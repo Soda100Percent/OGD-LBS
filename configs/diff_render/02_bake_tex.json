@@ -1,0 +1,15 @@
+{
+    "batch": 40,
+    "learning_rate": 0.03,
+    "train_res": 512,
+    "texture_res": [1024, 1024],
+    "layers": 3,
+    "random_textures": true,
+    "loss": "mse",
+    "light_power": 1.5,
+    "min_roughness": 0.25,
+    "opt_bsdf": "ambient_2sided",
+    "ref_bsdf": "ambient_2sided",
+
+    "fixed_submeshes": []
+}

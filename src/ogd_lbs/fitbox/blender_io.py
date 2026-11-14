@@ -621,6 +621,9 @@ def normalize_fitbox_import_mode(value: str) -> str:
 
 def load_fitbox_pkl(path: str | Path) -> Any:
     path = Path(path)
+    if path.suffix.lower() == ".json":
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
     with path.open("rb") as f:
         return pickle.load(f)
 
@@ -644,12 +647,19 @@ def discover_fitbox_mesh_pkl(input_dir: str | Path, mesh_name: str | None = None
         return require_fitbox_file(input_dir / f"{mesh_name}.pkl", role=f"mesh {mesh_name}")
 
     candidates: list[Path] = []
-    for path in sorted(input_dir.glob("*.pkl"), key=lambda p: p.name):
-        if path.stem in FITBOX_IMPORT_CORE_STEMS:
-            continue
-        if path.stem in FITBOX_IMPORT_SUMMARY_STEMS:
-            continue
-        candidates.append(path)
+    seen_stems: set[str] = set()
+    for ext in ("*.pkl", "*.pickle", "*.json"):
+        for path in sorted(input_dir.glob(ext), key=lambda p: p.name):
+            if path.stem in FITBOX_IMPORT_CORE_STEMS or path.stem in FITBOX_IMPORT_SUMMARY_STEMS:
+                continue
+            if path.stem.endswith("_summary") or path.stem.startswith("metrics_") or path.stem.startswith("normalized_metrics"):
+                continue
+            if path.stem in {"body_bone_alpha", "case_parameters", "fold_plan", "handoff_manifest", "config_run"}:
+                continue
+            if path.stem not in seen_stems:
+                seen_stems.add(path.stem)
+                candidates.append(path)
+    candidates.sort(key=lambda p: p.name)
 
     if not candidates:
         raise FileNotFoundError(f"No mesh .pkl file found under: {input_dir}")
@@ -688,12 +698,19 @@ def discover_fitbox_mesh_pkls(input_dir: str | Path, mesh_name: str | None = Non
         raise FileNotFoundError(f"Input directory does not exist or is not a directory: {input_dir}")
 
     candidates: list[Path] = []
-    for path in sorted(input_dir.glob("*.pkl"), key=lambda p: p.name):
-        if path.stem in FITBOX_IMPORT_CORE_STEMS:
-            continue
-        if path.stem in FITBOX_IMPORT_SUMMARY_STEMS:
-            continue
-        candidates.append(path)
+    seen_stems: set[str] = set()
+    for ext in ("*.pkl", "*.pickle", "*.json"):
+        for path in sorted(input_dir.glob(ext), key=lambda p: p.name):
+            if path.stem in FITBOX_IMPORT_CORE_STEMS or path.stem in FITBOX_IMPORT_SUMMARY_STEMS:
+                continue
+            if path.stem.endswith("_summary") or path.stem.startswith("metrics_") or path.stem.startswith("normalized_metrics"):
+                continue
+            if path.stem in {"body_bone_alpha", "case_parameters", "fold_plan", "handoff_manifest", "config_run"}:
+                continue
+            if path.stem not in seen_stems:
+                seen_stems.add(path.stem)
+                candidates.append(path)
+    candidates.sort(key=lambda p: p.name)
 
     if not candidates:
         raise FileNotFoundError(f"No mesh .pkl file found under: {input_dir}")
@@ -702,9 +719,10 @@ def discover_fitbox_mesh_pkls(input_dir: str | Path, mesh_name: str | None = Non
         return candidates
 
     assert mesh_name is not None
-    exact = input_dir / f"{mesh_name}.pkl"
-    if exact.is_file():
-        return [exact.resolve(strict=False)]
+    for ext in (".pkl", ".pickle", ".json"):
+        exact = input_dir / f"{mesh_name}{ext}"
+        if exact.is_file():
+            return [exact.resolve(strict=False)]
 
     candidate_names = [p.stem for p in candidates]
 
@@ -734,14 +752,10 @@ def _fitbox_load_stage_objects_multi(
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Input directory does not exist or is not a directory: {input_dir}")
 
-    skeleton_path = require_fitbox_file(
-        input_dir / "skeleton_hierarchy_data.pkl",
-        role="skeleton_hierarchy_data.pkl",
-    )
-    animation_path = require_fitbox_file(
-        input_dir / "animation_data.pkl",
-        role="animation_data.pkl",
-    )
+    skel_cand = next((input_dir / f"skeleton_hierarchy_data{ext}" for ext in (".pkl", ".pickle", ".json") if (input_dir / f"skeleton_hierarchy_data{ext}").is_file()), input_dir / "skeleton_hierarchy_data.pkl")
+    anim_cand = next((input_dir / f"animation_data{ext}" for ext in (".pkl", ".pickle", ".json") if (input_dir / f"animation_data{ext}").is_file()), input_dir / "animation_data.pkl")
+    skeleton_path = require_fitbox_file(skel_cand, role="skeleton_hierarchy_data")
+    animation_path = require_fitbox_file(anim_cand, role="animation_data")
 
     mesh_paths = discover_fitbox_mesh_pkls(input_dir, mesh_name)
 
@@ -825,6 +839,7 @@ def clear_blender_scene_for_fitbox_import() -> None:
         bpy.data.meshes,
         bpy.data.armatures,
         bpy.data.materials,
+        bpy.data.images,
         bpy.data.actions,
         bpy.data.cameras,
         bpy.data.lights,
@@ -1181,10 +1196,160 @@ def coerce_fitbox_faces_to_numpy_2d(
 
     return faces
 
+
+
+def apply_smart_textures_to_mesh_object(
+    *,
+    obj: bpy.types.Object,
+    search_dirs: Sequence[str | Path],
+    pack_images: bool = True,
+    use_emission_unlit: bool = True,
+    alpha_clip_threshold: float = 0.5,
+) -> dict[str, Any]:
+    """
+    Smart texture importer aligned with MaterialImporter20260806.py:
+      1. If object has no materials, auto-create one named after obj.name.
+      2. Search for textures by:
+           - <dir>/{mat.name}.png           (e.g. main_mesh_VDB_mtl1.png or body.png)
+           - <dir>/{obj.name}.png           (object name fallback)
+           - <dir>/textures/{obj.name}_texture_kd.png (diff_render opt_out layout)
+           - <dir>/{obj.name}_texture_kd.png
+      3. Build Principled BSDF node tree with Emission Strength=1.0 (unlit, zero specular/roughness/IOR)
+         and Alpha CLIP (plus optional body_mask multiplication if <dir>/masks/{obj.name}_body_mask.png exists).
+    """
+    dirs = [Path(d).expanduser().resolve(strict=False) for d in search_dirs if d and Path(d).expanduser().is_dir()]
+    if not dirs:
+        return {"hit_count": 0, "miss_count": 0, "linked_textures": []}
+
+    if len(obj.data.materials) == 0:
+        new_mat = bpy.data.materials.new(name=obj.name)
+        obj.data.materials.append(new_mat)
+
+    hit_count = 0
+    miss_count = 0
+    linked_textures: list[str] = []
+
+    for mat_idx, mat in enumerate(obj.data.materials):
+        if not mat:
+            continue
+
+        candidates: list[Path] = []
+        for d in dirs:
+            candidates.extend([
+                d / f"{mat.name}.png",
+                d / f"{obj.name}_mtl{mat_idx + 1}.png",
+                d / f"{obj.name}.png",
+                d / "textures" / f"{obj.name}_texture_kd.png",
+                d / f"{obj.name}_texture_kd.png",
+            ])
+
+        img_path = next((p for p in candidates if p.is_file()), None)
+        if img_path is None:
+            miss_count += 1
+            continue
+
+        if img_path.stem == obj.name and mat.name != obj.name and len(obj.data.materials) == 1:
+            mat.name = obj.name
+
+        hit_count += 1
+        linked_textures.append(str(img_path))
+
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        nodes.clear()
+
+        texture_node = nodes.new(type="ShaderNodeTexImage")
+        texture_node.location = (-350, 0)
+        image = bpy.data.images.load(str(img_path), check_existing=True)
+        if pack_images and image.packed_file is None:
+            try:
+                image.pack()
+            except Exception:
+                pass
+        texture_node.image = image
+
+        bsdf_node = nodes.new(type="ShaderNodeBsdfPrincipled")
+        bsdf_node.location = (0, 0)
+
+        def _set_val(socket_name: str, value: Any) -> None:
+            if socket_name in bsdf_node.inputs:
+                try:
+                    bsdf_node.inputs[socket_name].default_value = value
+                except Exception:
+                    pass
+
+        for zero_sock in (
+            "Metallic", "Roughness", "IOR",
+            "Subsurface", "Specular", "Clearcoat", "Clearcoat Roughness", "Transmission", "Sheen",
+            "Subsurface Weight", "Specular IOR Level", "Coat Weight", "Coat Roughness", "Transmission Weight", "Sheen Weight",
+        ):
+            _set_val(zero_sock, 0.0)
+
+        if use_emission_unlit:
+            _set_val("Base Color", (0.0, 0.0, 0.0, 1.0))
+            _set_val("Emission Strength", 1.0)
+            emission_socket = bsdf_node.inputs.get("Emission Color") or bsdf_node.inputs.get("Emission")
+            if emission_socket is not None:
+                links.new(emission_socket, texture_node.outputs["Color"])
+            elif "Base Color" in bsdf_node.inputs:
+                links.new(bsdf_node.inputs["Base Color"], texture_node.outputs["Color"])
+        else:
+            _set_val("Roughness", 0.8)
+            if "Base Color" in bsdf_node.inputs:
+                links.new(bsdf_node.inputs["Base Color"], texture_node.outputs["Color"])
+
+        # Check if an optional body mask exists (e.g. from diff_render BodyAlphaMask)
+        mask_cands = [d / "masks" / f"{obj.name}_body_mask.png" for d in dirs] + [d / f"{obj.name}_body_mask.png" for d in dirs]
+        mask_path = next((p for p in mask_cands if p.is_file()), None)
+
+        if "Alpha" in bsdf_node.inputs:
+            if mask_path is not None:
+                mask_node = nodes.new(type="ShaderNodeTexImage")
+                mask_node.location = (-350, -280)
+                mask_img = bpy.data.images.load(str(mask_path), check_existing=True)
+                if pack_images and mask_img.packed_file is None:
+                    try:
+                        mask_img.pack()
+                    except Exception:
+                        pass
+                mask_node.image = mask_img
+
+                math_mul = nodes.new(type="ShaderNodeMath")
+                math_mul.operation = "MULTIPLY"
+                math_mul.location = (-150, -180)
+                links.new(math_mul.inputs[0], texture_node.outputs["Alpha"])
+                links.new(math_mul.inputs[1], mask_node.outputs["Color"])
+                links.new(bsdf_node.inputs["Alpha"], math_mul.outputs["Value"])
+            else:
+                links.new(bsdf_node.inputs["Alpha"], texture_node.outputs["Alpha"])
+
+        output_node = nodes.new(type="ShaderNodeOutputMaterial")
+        output_node.location = (300, 0)
+        links.new(output_node.inputs["Surface"], bsdf_node.outputs["BSDF"])
+
+        try:
+            mat.blend_method = "CLIP"
+            mat.alpha_threshold = float(alpha_clip_threshold)
+        except Exception:
+            pass
+        if hasattr(mat, "surface_render_method"):
+            try:
+                mat.surface_render_method = "DITHERED"
+            except Exception:
+                pass
+
+    if hit_count > 0:
+        print(f"   🎨 Linked {hit_count} texture(s) for mesh '{obj.name}' (miss={miss_count})", flush=True)
+    return {"hit_count": hit_count, "miss_count": miss_count, "linked_textures": linked_textures}
+
+
 def create_fitbox_mesh_object_plugin_style(
     *,
     mesh_obj: dict[str, Any],
     object_name: str | None = None,
+    texture_search_dirs: Sequence[str | Path] | None = None,
+    pack_textures: bool = True,
 ) -> bpy.types.Object:
     mesh_name = object_name or str(mesh_obj.get("name", "FitboxMesh"))
 
@@ -1212,7 +1377,16 @@ def create_fitbox_mesh_object_plugin_style(
     import_fitbox_uvs_plugin_style(obj=obj, mesh_data=mesh_obj)
     import_fitbox_materials_plugin_style(obj=obj, mesh_data=mesh_obj)
 
-    if len(obj.data.materials) == 0:
+    tex_hit = 0
+    if texture_search_dirs:
+        tex_rep = apply_smart_textures_to_mesh_object(
+            obj=obj,
+            search_dirs=texture_search_dirs,
+            pack_images=pack_textures,
+        )
+        tex_hit = int(tex_rep.get("hit_count", 0))
+
+    if len(obj.data.materials) == 0 and tex_hit == 0:
         mat = bpy.data.materials.new("Fitbox_Debug_Material")
         mat.diffuse_color = (0.72, 0.72, 0.78, 1.0)
         obj.data.materials.append(mat)
@@ -1684,6 +1858,7 @@ def import_fitbox_stage_to_blend(
             mesh_bl_obj = create_fitbox_mesh_object_plugin_style(
                 mesh_obj=mesh_obj,
                 object_name=object_name_resolved,
+                texture_search_dirs=[input_dir],
             )
             mesh_bl_objects.append(mesh_bl_obj)
 
@@ -1725,6 +1900,7 @@ def import_fitbox_stage_to_blend(
             mesh_bl_obj = create_fitbox_mesh_object_plugin_style(
                 mesh_obj=mesh_obj,
                 object_name=object_name_resolved,
+                texture_search_dirs=[input_dir],
             )
             mesh_bl_objects.append(mesh_bl_obj)
 
