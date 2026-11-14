@@ -61,7 +61,8 @@ def _get_plugin():
         'c_src/torch_bindings.cpp'
     ]
 
-    os.environ['TORCH_CUDA_ARCH_LIST'] = ''
+    if not os.environ.get('TORCH_CUDA_ARCH_LIST'):
+        os.environ['TORCH_CUDA_ARCH_LIST'] = ''
 
     source_paths = [os.path.join(os.path.dirname(__file__), fn) for fn in source_files]
     torch.utils.cpp_extension.load(name='renderutils_plugin', sources=source_paths, extra_ldflags=ldflags, with_cuda=True, verbose=False)
