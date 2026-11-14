@@ -27,6 +27,8 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in os.sys.path:
     os.sys.path.insert(0, str(HERE))
 
+import report_core  # noqa: E402
+report_core.ensure_pdrew_python_env(__file__)
 import aggregate_metrics  # noqa: E402
 from generate_pdrew_gamma_report import (  # noqa: E402
     DEFAULT_ALIASES,
@@ -905,7 +907,7 @@ def generate_cv_dashboard(
 
     strict_json_write(output_dir / "cv_dashboard_data.json", dashboard_payload)
 
-    html_text = render_cv_dashboard_html(title=title, payload=dashboard_payload)
+    html_text = render_cv_dashboard_html(title=title, payload=dashboard_payload, output_dir=output_dir)
     html_path = output_dir / "CV_Report.html"
     html_path.write_text(html_text, encoding="utf-8")
 
@@ -991,7 +993,7 @@ a {{ color: #1C328A; font-weight: 600; }}
 """
 
 
-def render_cv_dashboard_html(*, title: str, payload: dict[str, Any]) -> str:
+def render_cv_dashboard_html(*, title: str, payload: dict[str, Any], output_dir: Path | None = None) -> str:
     def _clean(v: Any) -> Any:
         if isinstance(v, float):
             return v if math.isfinite(v) else None
@@ -1001,10 +1003,19 @@ def render_cv_dashboard_html(*, title: str, payload: dict[str, Any]) -> str:
             return [_clean(x) for x in v]
         return v
 
+    shared_assets = report_core.load_shared_frontend_assets(output_dir)
+    suite_nav_html = report_core.build_suite_nav_html("CV_Report.html")
     data_json = json.dumps(_clean(payload), ensure_ascii=False, allow_nan=False)
     tpl_path = HERE / "report_templates" / "ogd_cv_dashboard_template.html"
     tpl = tpl_path.read_text(encoding="utf-8")
-    return tpl.replace("__TITLE_HTML__", html.escape(title)).replace("__DATA_JSON__", data_json)
+    return (
+        tpl.replace("__TITLE_HTML__", html.escape(title))
+        .replace("__SUITE_NAV_HTML__", suite_nav_html)
+        .replace("__SHARED_CORE_CSS__", shared_assets["core_css"])
+        .replace("__SHARED_CHART_ENGINE_JS__", shared_assets["chart_engine_js"])
+        .replace("__SHARED_RENDER_DOCK_JS__", shared_assets["render_dock_js"])
+        .replace("__DATA_JSON__", data_json)
+    )
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate redesigned OGD-LBS 4-Fold CV & t-test report.")

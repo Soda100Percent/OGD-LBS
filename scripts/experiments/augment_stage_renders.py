@@ -778,10 +778,14 @@ def render_stage_to_png(
     l2_errors = stage_geom["l2_errors"]
     faces = stage_geom["faces"]
 
-    # Include 100% of triangle-referenced GT vertices (no percentile clipping so long weapons never clip!)
+    # Include union of triangle-referenced posed_vertices, gt_vertices, and skeleton joints
+    # so clay, l2_heatmap, wireframe, and bone ALWAYS solve to the exact same camera on attempt=1!
     used_v_idx = np.unique(faces.reshape(-1)) if faces.size else np.arange(gt_v.shape[0])
-    ref_pts = gt_v[used_v_idx] if used_v_idx.size else gt_v
+    gt_used = gt_v[used_v_idx] if used_v_idx.size else gt_v
+    posed_used = posed_v[used_v_idx] if used_v_idx.size else posed_v
     rest_used = rest_v[used_v_idx] if used_v_idx.size else rest_v
+    joints_pts = np.asarray(stage_geom["pose_matrices"][:, :3, 3], dtype=np.float64)
+    ref_pts = np.vstack([posed_used, gt_used, joints_pts]) if joints_pts.size else np.vstack([posed_used, gt_used])
 
     ref_min = np.min(ref_pts, axis=0)
     ref_max = np.max(ref_pts, axis=0)

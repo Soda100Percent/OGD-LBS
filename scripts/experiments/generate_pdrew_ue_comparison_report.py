@@ -62,8 +62,6 @@ METRICS_META = [
     {"key": "hausdorff_max", "short": "HD Max ↓", "label": "Hausdorff Max ↓", "fstat_key": "hausdorff", "scaled": True},
     {"key": "org_loss", "short": "SO (Org Loss) ↓", "label": "SO / Bone Org Loss ↓", "fstat_key": "org_loss", "scaled": False},
     {"key": "arap_ratio", "short": "ARAP Ratio ↓", "label": "Mesh ARAP Ratio ↓", "fstat_key": "arap_ratio", "scaled": False},
-    {"key": "edge_excess", "short": "Edge Excess ↓", "label": "Edge Log-Ratio p99 Excess ↓", "fstat_key": None, "scaled": False},
-    {"key": "normal_flip", "short": "Normal Flip ↓", "label": "Normal Flip Ratio ↓", "fstat_key": None, "scaled": False},
     {"key": "max_roll", "short": "Max Roll (°) ↓", "label": "Bone Max Roll (°) ↓", "fstat_key": "max_roll", "scaled": False},
     {"key": "max_swing", "short": "Max Swing (°) ↓", "label": "Bone Max Swing (°) ↓", "fstat_key": "max_swing", "scaled": False},
 ]
@@ -180,10 +178,11 @@ def _collect_in_pool_renders_for_entry(
             rel_png = f"{rel_dir}/render.png"
             dst_png = output_dir / rel_png
             dst_png.parent.mkdir(parents=True, exist_ok=True)
-            if dst_png.exists() or dst_png.is_symlink():
-                dst_png.unlink()
-            shutil.copyfile(png_path, dst_png)
-            dst_png.chmod(0o644)
+            if not dst_png.is_file():
+                if dst_png.exists() or dst_png.is_symlink():
+                    dst_png.unlink()
+                shutil.copyfile(png_path, dst_png)
+                dst_png.chmod(0o644)
             if rel_png not in bundled_rel_files:
                 bundled_rel_files.append(rel_png)
 
@@ -398,14 +397,7 @@ def generate_ue_comparison_dashboard(
             "stage_statuses": st_map,
         }
 
-    if output_dir.exists():
-        for root_p, _dirs, files in os.walk(output_dir):
-            for fn in files:
-                try:
-                    os.chmod(os.path.join(root_p, fn), 0o644)
-                except Exception:
-                    pass
-        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     agg_dir = output_dir / "aggregate"
     agg_dir.mkdir(parents=True, exist_ok=True)
@@ -699,10 +691,19 @@ def generate_ue_comparison_dashboard(
 
     strict_json_write(output_dir / "ue_comparison_dashboard_data.json", payload)
 
+    import report_core
+    shared_assets = report_core.load_shared_frontend_assets(output_dir)
+    suite_nav_html = report_core.build_suite_nav_html("UE_Comparison_Report.html")
+
     tpl_path = HERE / "report_templates" / "ogd_ue_comparison_template.html"
     tpl_text = tpl_path.read_text(encoding="utf-8")
-    html_text = tpl_text.replace("__TITLE_HTML__", html.escape(title)).replace(
-        "__DATA_JSON__", json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    html_text = (
+        tpl_text.replace("__TITLE_HTML__", html.escape(title))
+        .replace("__SUITE_NAV_HTML__", suite_nav_html)
+        .replace("__SHARED_CORE_CSS__", shared_assets["core_css"])
+        .replace("__SHARED_CHART_ENGINE_JS__", shared_assets["chart_engine_js"])
+        .replace("__SHARED_RENDER_DOCK_JS__", shared_assets["render_dock_js"])
+        .replace("__DATA_JSON__", json.dumps(payload, ensure_ascii=False, allow_nan=False))
     )
     report_html_path = output_dir / "UE_Comparison_Report.html"
     report_html_path.write_text(html_text, encoding="utf-8")
@@ -777,14 +778,53 @@ a {{ color: #1C328A; font-weight: 600; }}
     }
 
 
+
+def render_ue_html_from_cached_payload(
+    *,
+    output_dir: Path = Path("/workspace/ogd_reports/pdrew_ue_comparison_report_latest"),
+) -> dict[str, Any]:
+    import report_core
+
+    json_path = output_dir / "ue_comparison_dashboard_data.json"
+    if not json_path.is_file():
+        return generate_ue_comparison_dashboard(output_dir=output_dir)
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    title = str((payload.get("meta") or {}).get("title") or "OGD-LBS vs. UE5 Equal-Bone-Budget Report")
+    shared_assets = report_core.load_shared_frontend_assets(output_dir)
+    suite_nav_html = report_core.build_suite_nav_html("UE_Comparison_Report.html")
+
+    tpl_path = HERE / "report_templates" / "ogd_ue_comparison_template.html"
+    tpl_text = tpl_path.read_text(encoding="utf-8")
+    html_text = (
+        tpl_text.replace("__TITLE_HTML__", html.escape(title))
+        .replace("__SUITE_NAV_HTML__", suite_nav_html)
+        .replace("__SHARED_CORE_CSS__", shared_assets["core_css"])
+        .replace("__SHARED_CHART_ENGINE_JS__", shared_assets["chart_engine_js"])
+        .replace("__SHARED_RENDER_DOCK_JS__", shared_assets["render_dock_js"])
+        .replace("__DATA_JSON__", json.dumps(payload, ensure_ascii=False, allow_nan=False))
+    )
+    report_html_path = output_dir / "UE_Comparison_Report.html"
+    report_html_path.write_text(html_text, encoding="utf-8")
+    return {
+        "output_dir": str(output_dir),
+        "report_html": str(report_html_path),
+        "index_html": str(output_dir / "index.html"),
+        "zip_path": str(output_dir / "downloads" / "ogd_lbs_ue5_equal_bone_budget_report_bundle.zip"),
+        "total_render_images": int((payload.get("meta") or {}).get("total_render_images") or 0),
+        "mode": "UI_ONLY_CACHED_DATA",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate OGD-LBS vs UE5 Equal-Bone-Budget Report with Render Dock.")
     parser.add_argument("--output-dir", type=Path, default=Path("/workspace/ogd_reports/pdrew_ue_comparison_report_latest"))
+    parser.add_argument("--ui-only", action="store_true", help="Fast-update HTML/JS/CSS only from cached ue_comparison_dashboard_data.json (<0.1s).")
     parser.add_argument("--serve-daemon", action="store_true")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
 
-    res = generate_ue_comparison_dashboard(output_dir=args.output_dir)
+    res = render_ue_html_from_cached_payload(output_dir=args.output_dir) if args.ui_only else generate_ue_comparison_dashboard(output_dir=args.output_dir)
     print("=" * 92, flush=True)
     print("EQUAL-BONE-BUDGET & UE5 ABLATION REPORT GENERATED (WITH MULTI-CARD RENDER DOCK)", flush=True)
     print(f"REPORT HTML     : {res['report_html']}", flush=True)

@@ -374,7 +374,10 @@ def build_contact_sheets(
 
     tpl_path = _THIS_DIR / "report_templates" / "ogd_render_qa_template.html"
     tpl_text = tpl_path.read_text(encoding="utf-8")
+    import report_core
     html_text = tpl_text.replace("__TITLE_HTML__", html.escape(title)).replace(
+        "__SUITE_NAV_HTML__", report_core.build_suite_nav_html("Render_QA.html")
+    ).replace(
         "__DATA_JSON__", json.dumps(index_obj, ensure_ascii=False)
     )
 
@@ -495,6 +498,7 @@ def main() -> int:
     parser.add_argument("--cols", type=int, default=5, help="Columns per static contact sheet page.")
     parser.add_argument("--rows", type=int, default=3, help="Rows per static contact sheet page.")
     parser.add_argument("--build-sheet", action="store_true", help="Scan pool renders and build QA dashboard.")
+    parser.add_argument("--ui-only", action="store_true", help="Fast-rebuild Render_QA.html from cached contact_sheet_index.json.")
     parser.add_argument("--lookup", nargs="+", default=None, help="Reverse-lookup thumbnail ID(s), e.g. --lookup 1 5 or #0002.")
     parser.add_argument("--invalidate", nargs="+", default=None, help="Purge faulty thumbnail ID(s) from pool so they re-render.")
     parser.add_argument("--serve-daemon", action="store_true", help="Start background LAN HTTP server on --port.")
@@ -504,6 +508,23 @@ def main() -> int:
 
     sheet_dir = args.sheet_dir.expanduser().resolve(strict=False)
     index_path = sheet_dir / "contact_sheet_index.json"
+
+    if args.ui_only and index_path.is_file():
+        import report_core
+        idx_obj = json.loads(index_path.read_text(encoding="utf-8"))
+        title = str(idx_obj.get("title") or "OGD-LBS Render QA Inspector")
+        tpl_path = _THIS_DIR / "report_templates" / "ogd_render_qa_template.html"
+        tpl_text = tpl_path.read_text(encoding="utf-8")
+        html_text = (
+            tpl_text.replace("__TITLE_HTML__", html.escape(title))
+            .replace("__SUITE_NAV_HTML__", report_core.build_suite_nav_html("Render_QA.html"))
+            .replace("__DATA_JSON__", json.dumps(idx_obj, ensure_ascii=False))
+        )
+        for html_name in ("Render_QA.html", "contact_sheet.html"):
+            (sheet_dir / html_name).write_text(html_text, encoding="utf-8")
+        if args.json:
+            print(json.dumps({"total_thumbnails": idx_obj.get("total_thumbnails", 0), "mode": "UI_ONLY"}))
+        return 0
 
     if args.build_sheet or (not args.lookup and not args.invalidate):
         items = discover_pool_renders(

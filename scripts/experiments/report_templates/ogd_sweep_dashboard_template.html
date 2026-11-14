@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE_HTML__</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2/dist/jspdf.umd.min.js"></script>
+<style>
+__SHARED_CORE_CSS__
+</style>
+</head>
+<body>
+
+__SUITE_NAV_HTML__
+
+<div class="top-bar">
+  <h1>📈 __TITLE_HTML__</h1>
+  <div class="top-controls">
+    <div class="ctrl-group">
+      <strong>Distance Scale:</strong>
+      <select id="global-scale-mode">
+        <option value="scaled" selected>Model-Scaled (Griffin×0.3, Winter×10, Vroid×1)</option>
+        <option value="raw">Raw Unscaled</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <strong>Chart Y-Axis:</strong>
+      <select id="global-axis-mode">
+        <option value="auto" selected>Auto Pseudo-Log (Large Dynamic Range)</option>
+        <option value="linear">Linear</option>
+      </select>
+    </div>
+    <button class="btn btn-outline" onclick="OGDRenderDock.toggleDock()">🖼️ Toggle Render Dock</button>
+    <a class="btn btn-primary" href="index.html">🏠 Suite Hub</a>
+  </div>
+</div>
+
+<div class="workspace-layout" id="workspace-layout">
+  <div class="main-column">
+
+    <!-- MODULE 1: Parameter Sweep Table -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>1️⃣ Module 1: Parameter Sweep Summary &amp; Complexity Table (__PARAM_LABEL__)</h2>
+        <div class="ctrl-group">
+          <strong>Filter Model:</strong>
+          <select id="sweep-table-model">
+            <option value="ALL" selected>All Models</option>
+          </select>
+        </div>
+      </div>
+      <div class="note-box">
+        <b>Default baseline parameter values are marked with ★.</b>
+        Hover over any row or bar to preview its 3D render on the right; click to Pin to History.
+      </div>
+      <div class="table-wrap" id="table-sweep-main"></div>
+    </section>
+
+    <!-- MODULE 2: Model-Grouped Metric Bar Charts with Per-Frame [Min, Max] Whiskers -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>2️⃣ Module 2: Model-Grouped Metric Bar Charts (+ Per-Frame [Min, Max] Whiskers)</h2>
+      </div>
+      <div class="note-box">
+        Bars are grouped by model and ordered by swept parameter value (<b>★ marks the default parameter setting</b>).
+        Vertical black whiskers show the per-frame [min, max] fluctuation range across the 200-frame sequence.
+      </div>
+      <div class="charts-grid-2" id="charts-sweep-bars"></div>
+    </section>
+
+    <!-- MODULE 3: Multi-Metric Trade-off Pareto Scatter (Connected by Parameter Value) -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>3️⃣ Module 3: Multi-Metric Trade-off Pareto Scatter (Connected Across Parameter Values)</h2>
+        <div style="display:flex;gap:8px;align-items:center;font-size:0.82rem;flex-wrap:wrap;">
+          <label class="ctrl-group"><strong>Model:</strong>
+            <select id="pareto-model">
+              <option value="ALL" selected>All Models</option>
+            </select>
+          </label>
+          <label class="ctrl-group"><strong>X-Axis:</strong> <select id="pareto-x"></select></label>
+          <label class="ctrl-group"><strong>Y-Axis:</strong> <select id="pareto-y"></select></label>
+          <label class="ctrl-group"><strong>Line:</strong>
+            <select id="pareto-connect">
+              <option value="param_order" selected>Connect by Parameter Value Order</option>
+              <option value="x_order">Connect by X-Axis Order</option>
+              <option value="none">Scatter Points Only</option>
+            </select>
+          </label>
+          <div>
+            <button class="btn btn-outline btn-sm" onclick="exportChart('chart-sweep-pareto', 'svg')">SVG</button>
+            <button class="btn btn-outline btn-sm" onclick="exportChart('chart-sweep-pareto', 'png')">PNG</button>
+            <button class="btn btn-outline btn-sm" onclick="exportChart('chart-sweep-pareto', 'pdf')">PDF</button>
+          </div>
+        </div>
+      </div>
+      <div class="shared-legend-banner" id="legend-sweep-pareto"></div>
+      <div class="chart-card">
+        <div id="chart-sweep-pareto" style="width:100%;height:450px;overflow:hidden;"></div>
+      </div>
+    </section>
+
+    <!-- MODULE 4: Parameter Response Curve -->
+    <section class="section-card">
+      <div class="section-header">
+        <h2>4️⃣ Module 4: Parameter Sensitivity Response Curve (__PARAM_LABEL__ → Metric)</h2>
+        <div style="display:flex;gap:8px;align-items:center;font-size:0.82rem;flex-wrap:wrap;">
+          <label class="ctrl-group"><strong>Metric:</strong> <select id="curve-metric"></select></label>
+          <label class="ctrl-group"><strong>Model:</strong>
+            <select id="curve-model">
+              <option value="ALL" selected>All Models</option>
+            </select>
+          </label>
+          <div>
+            <button class="btn btn-outline btn-sm" onclick="exportChart('chart-sweep-curve', 'svg')">SVG</button>
+            <button class="btn btn-outline btn-sm" onclick="exportChart('chart-sweep-curve', 'png')">PNG</button>
+            <button class="btn btn-outline btn-sm" onclick="exportChart('chart-sweep-curve', 'pdf')">PDF</button>
+          </div>
+        </div>
+      </div>
+      <div class="shared-legend-banner" id="legend-sweep-curve"></div>
+      <div class="chart-card">
+        <div id="chart-sweep-curve" style="width:100%;height:420px;overflow:hidden;"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- RIGHT COLUMN: Shared Sticky Multi-Card Render Dock -->
+  <aside class="render-dock" id="render-dock"></aside>
+</div>
+
+<script>
+window.SWEEP_DATA = __DATA_JSON__;
+</script>
+<script>
+__SHARED_CHART_ENGINE_JS__
+</script>
+<script>
+__SHARED_RENDER_DOCK_JS__
+</script>
+<script>
+(function() {
+  var D = window.SWEEP_DATA;
+  var E = window.OGDChartEngine;
+  var Dock = window.OGDRenderDock;
+  var METRICS = (D.metricsMeta || []).filter(function(m) {
+    return m.key !== 'edge_excess' && m.key !== 'normal_flip';
+  });
+  var ROWS = D.rows || [];
+  var MODELS = D.models || [];
+  var NL = String.fromCharCode(10);
+
+  var MODEL_STYLE = {
+    Griffin_A2:     { color: '#1C328A', symbol: 'circle',   symbolText: '●' },
+    Winter_Samurai: { color: '#D97706', symbol: 'diamond',  symbolText: '◆' },
+    Vroid_18:       { color: '#0F766E', symbol: 'triangle', symbolText: '▲' },
+    Vroid_19:       { color: '#7C3AED', symbol: 'rect',     symbolText: '■' },
+    Vroid_20:       { color: '#DC2626', symbol: 'pin',      symbolText: '★' }
+  };
+
+  function getScaleMode() { return document.getElementById('global-scale-mode').value; }
+  function getAxisMode() { return document.getElementById('global-axis-mode').value; }
+
+  function renderSweepTable() {
+    var mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+    var modFilter = document.getElementById('sweep-table-model').value || 'ALL';
+    var filtered = ROWS.filter(function(r) {
+      return modFilter === 'ALL' || r.model === modFilter;
+    });
+
+    var parts = [
+      '<table><thead><tr>',
+      '<th>Model</th>',
+      '<th>Swept Parameter</th>',
+      '<th>Value</th>',
+      '<th>Entry</th>',
+      '<th class="num-col">Verts (V)</th>',
+      '<th class="num-col">Tris (F)</th>',
+      '<th class="num-col">Bones (B)</th>',
+      '<th class="num-col">Max K</th>'
+    ];
+    METRICS.forEach(function(m) {
+      parts.push('<th class="num-col">' + E.esc(m.short) + '</th>');
+    });
+    parts.push('</tr></thead><tbody>');
+
+    MODELS.forEach(function(modelName) {
+      var mRows = filtered.filter(function(r) { return r.model === modelName; });
+      if (!mRows.length) return;
+
+      var bestByMetric = {};
+      METRICS.forEach(function(m) {
+        var vals = mRows.map(function(r) { return E.num((r[mField] || {})[m.key]); }).filter(function(v) { return v !== null; });
+        if (vals.length) bestByMetric[m.key] = Math.min.apply(null, vals);
+      });
+
+      mRows.forEach(function(r, idx) {
+        var c = r.complexity || {};
+        var mt = r[mField] || {};
+        var dd = E.esc(r.render_data_dir || r.data_dir);
+        var entryShort = (r.data_dir || '').split('/').pop();
+        var valBadge = E.esc(r.param_value_display) + (r.is_default ? ' <b style="color:#1C328A;">★ default</b>' : '');
+
+        var rowHtml = '<tr class="hoverable-row ' + (r.is_default ? 'row-ours' : '') + '" data-dir="' + dd + '" ' +
+          'onmouseenter="OGDRenderDock.hover(\'' + dd + '\')" ' +
+          'onclick="OGDRenderDock.pin(\'' + dd + '\')">' +
+          '<td><b>' + (idx === 0 ? E.esc(r.model) : '') + '</b></td>' +
+          '<td><code>' + E.esc(D.param_display) + '</code></td>' +
+          '<td>' + valBadge + '</td>' +
+          '<td><code>' + E.esc(entryShort) + '</code></td>' +
+          '<td class="num-col">' + E.fmtInt(c.num_vertices) + '</td>' +
+          '<td class="num-col">' + E.fmtInt(c.num_triangles) + '</td>' +
+          '<td class="num-col">' + E.fmtInt(c.num_bones_total) + '</td>' +
+          '<td class="num-col">' + E.fmtInt(c.max_bones_per_vertex) + '</td>';
+
+        METRICS.forEach(function(m) {
+          var val = E.num(mt[m.key]);
+          var isBest = val !== null && bestByMetric[m.key] !== undefined && Math.abs(val - bestByMetric[m.key]) <= 1e-12;
+          rowHtml += '<td class="num-col ' + (isBest ? 'best-cell' : '') + '">' + E.fmt(val) + '</td>';
+        });
+        rowHtml += '</tr>';
+        parts.push(rowHtml);
+      });
+    });
+
+    parts.push('</tbody></table>');
+    document.getElementById('table-sweep-main').innerHTML = parts.join('');
+  }
+
+  function renderSweepBarCharts() {
+    var container = document.getElementById('charts-sweep-bars');
+    container.innerHTML = '';
+    var mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+    var fField = getScaleMode() === 'scaled' ? 'frame_stats_scaled' : 'frame_stats_raw';
+
+    METRICS.forEach(function(m) {
+      var domId = 'chart-sweep-bar-' + m.key;
+      var card = document.createElement('div');
+      card.className = 'chart-card';
+      card.innerHTML =
+        '<div class="chart-card-header">' +
+          '<h3>' + E.esc(m.label) + '</h3>' +
+          '<div>' +
+            '<button class="btn btn-outline btn-sm" onclick="exportChart(\'' + domId + '\', \'svg\')">SVG</button> ' +
+            '<button class="btn btn-outline btn-sm" onclick="exportChart(\'' + domId + '\', \'png\')">PNG</button> ' +
+            '<button class="btn btn-outline btn-sm" onclick="exportChart(\'' + domId + '\', \'pdf\')">PDF</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="' + domId + '" class="chart-box"></div>';
+      container.appendChild(card);
+
+      var allVals = [];
+      ROWS.forEach(function(r) {
+        var v = E.num((r[mField] || {})[m.key]);
+        if (v !== null) allVals.push(v);
+        var fs = m.fstat_key ? ((r[fField] || {})[m.fstat_key] || null) : null;
+        if (fs && E.num(fs.max) !== null) allVals.push(E.num(fs.max));
+      });
+      var cLog = E.choosePseudoLogC(allVals, getAxisMode());
+
+      var maxTx = 0;
+      allVals.forEach(function(v) {
+        var tv = E.txY(Math.max(0, v), cLog);
+        if (tv !== null && tv > maxTx) maxTx = tv;
+      });
+      if (maxTx <= 0) maxTx = 1.0;
+      var stubHeight = maxTx * 0.055;
+
+      var categories = [];
+      var barData = [];
+      var whiskerData = [];
+
+      MODELS.forEach(function(modelName, mIdx) {
+        var mRows = ROWS.filter(function(r) { return r.model === modelName; });
+        var mColor = (MODEL_STYLE[modelName] || { color: '#1C328A' }).color;
+
+        mRows.forEach(function(r) {
+          var xIdx = categories.length;
+          categories.push(modelName.replace('Winter_Samurai', 'Winter').replace('Griffin_A2', 'Griffin') + NL + r.param_value_display);
+
+          var rawVal = E.num((r[mField] || {})[m.key]);
+          var txVal = rawVal !== null ? E.txY(Math.max(0, rawVal), cLog) : 0;
+          var isStub = rawVal === null || rawVal <= 0 || txVal <= stubHeight * 0.35;
+          var fs = m.fstat_key ? ((r[fField] || {})[m.fstat_key] || null) : null;
+
+          barData.push({
+            value: isStub ? stubHeight : txVal,
+            rawVal: rawVal,
+            isStub: isStub,
+            dataDir: r.render_data_dir || r.data_dir,
+            model: r.model,
+            paramVal: r.param_value_display,
+            isDefault: r.is_default,
+            fstat: fs,
+            label: {
+              show: Boolean(r.is_default),
+              position: 'top',
+              formatter: '★',
+              color: '#0f172a',
+              fontWeight: 'bold'
+            },
+            itemStyle: isStub
+              ? { color: mColor, opacity: 0.16, borderColor: mColor, borderWidth: 1.5, borderType: 'dashed', borderRadius: [3, 3, 0, 0] }
+              : { color: mColor, opacity: r.is_default ? 1.0 : 0.78, borderColor: r.is_default ? '#0f172a' : mColor, borderWidth: r.is_default ? 2.0 : 0, borderRadius: [3, 3, 0, 0] },
+            emphasis: {
+              itemStyle: { color: mColor, opacity: 1.0, borderColor: '#0f172a', borderWidth: 2.0, borderType: 'solid' }
+            }
+          });
+
+          if (fs && E.num(fs.min) !== null && E.num(fs.max) !== null) {
+            whiskerData.push([xIdx, E.txY(Math.max(0, E.num(fs.min)), cLog), E.txY(Math.max(0, E.num(fs.max)), cLog)]);
+          }
+        });
+
+        if (mIdx < MODELS.length - 1) {
+          categories.push('');
+          barData.push({ value: null, isGap: true });
+        }
+      });
+
+      var series = [{
+        name: m.short,
+        type: 'bar',
+        barMaxWidth: 26,
+        barMinHeight: 14,
+        data: barData
+      }];
+      if (whiskerData.length > 0) {
+        series.push(E.makeWhiskerSeries(whiskerData, 4.5, '#0f172a'));
+      }
+
+      var chart = E.init(domId);
+      chart.setOption({
+        animation: false,
+        tooltip: {
+          trigger: 'item',
+          formatter: function(p) {
+            var d = p.data || {};
+            if (d.isGap || !d.model) return '';
+            var defTag = d.isDefault ? ' <b>(★ default)</b>' : '';
+            var s = '<b>' + E.esc(d.model) + ' | ' + E.esc(D.param_display) + '=' + E.esc(d.paramVal) + '</b>' + defTag + '<br/>' +
+                    E.esc(m.short) + ': <b>' + E.fmt(d.rawVal) + '</b>';
+            if (d.fstat && d.fstat.min !== undefined) {
+              s += '<br/>Frame [min, max]: [' + E.fmt(d.fstat.min) + ', ' + E.fmt(d.fstat.max) + ']';
+            }
+            return s;
+          }
+        },
+        grid: { top: 28, left: 66, right: 18, bottom: 72 },
+        xAxis: { type: 'category', data: categories, axisLabel: { interval: 0, rotate: 40, fontSize: 9.5 } },
+        yAxis: {
+          type: 'value',
+          min: 0,
+          name: cLog !== null ? (m.short + ' (pseudo-log)') : m.short,
+          nameLocation: 'middle',
+          nameGap: 50,
+          axisLabel: { formatter: function(v) { return E.fmt(E.invTxY(v, cLog), 3); } }
+        },
+        series: series
+      }, true);
+      E.bindRenderDock(chart, function(p) { return p.data && p.data.dataDir; });
+    });
+  }
+
+  function renderSweepPareto() {
+    var mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+    var modFilter = document.getElementById('pareto-model').value || 'ALL';
+    var xKey = document.getElementById('pareto-x').value;
+    var yKey = document.getElementById('pareto-y').value;
+    var connMode = document.getElementById('pareto-connect').value || 'param_order';
+    var xMeta = METRICS.find(function(m) { return m.key === xKey; }) || METRICS[0];
+    var yMeta = METRICS.find(function(m) { return m.key === yKey; }) || METRICS[3];
+
+    var activeModels = MODELS.filter(function(mName) {
+      if (modFilter === 'ALL') return true;
+      if (modFilter === 'VROID_ALL') return mName.indexOf('Vroid_') === 0;
+      return mName === modFilter;
+    });
+
+    E.renderLegendBanner(
+      'legend-sweep-pareto',
+      activeModels.map(function(mName) {
+        var st = MODEL_STYLE[mName] || { color: '#1C328A', symbolText: '●' };
+        return { label: mName, color: st.color, symbolText: st.symbolText };
+      })
+    );
+
+    var pSeries = activeModels.map(function(mName) {
+      var st = MODEL_STYLE[mName] || { color: '#1C328A', symbol: 'circle', symbolText: '●' };
+      var mRows = ROWS.filter(function(r) { return r.model === mName; });
+      var pts = [];
+      mRows.forEach(function(r) {
+        var xv = E.num((r[mField] || {})[xKey]);
+        var yv = E.num((r[mField] || {})[yKey]);
+        if (xv !== null && yv !== null) {
+          pts.push({
+            value: [xv, yv],
+            dataDir: r.render_data_dir || r.data_dir,
+            model: r.model,
+            paramVal: r.param_value_display,
+            isDefault: r.is_default,
+            symbolSize: r.is_default ? 16 : 11
+          });
+        }
+      });
+
+      if (connMode === 'x_order') {
+        pts.sort(function(a, b) { return a.value[0] - b.value[0]; });
+      }
+
+      return {
+        name: st.symbolText + ' ' + mName,
+        type: connMode === 'none' ? 'scatter' : 'line',
+        symbol: st.symbol,
+        symbolSize: 12,
+        showAllSymbol: true,
+        itemStyle: { color: st.color, borderColor: '#fff', borderWidth: 1.2 },
+        lineStyle: { width: 2.3, color: st.color, opacity: 0.85 },
+        label: {
+          show: true,
+          position: 'top',
+          fontSize: 9.5,
+          fontWeight: 'bold',
+          color: st.color,
+          formatter: function(p) { return p.data ? (p.data.paramVal + (p.data.isDefault ? '★' : '')) : ''; }
+        },
+        data: pts
+      };
+    });
+
+    var chart = E.init('chart-sweep-pareto');
+    chart.setOption({
+      animation: false,
+      tooltip: {
+        trigger: 'item',
+        formatter: function(p) {
+          var d = p.data || {};
+          if (!d.model) return '';
+          return '<b>' + E.esc(d.model) + ' | ' + E.esc(D.param_display) + '=' + E.esc(d.paramVal) + (d.isDefault ? ' ★' : '') + '</b><br/>' +
+                 E.esc(xMeta.short) + ': <b>' + E.fmt(d.value[0]) + '</b><br/>' +
+                 E.esc(yMeta.short) + ': <b>' + E.fmt(d.value[1]) + '</b>';
+        }
+      },
+      legend: { top: 4, left: 'center' },
+      grid: { top: 42, left: 72, right: 32, bottom: 52 },
+      xAxis: { type: 'value', name: xMeta.label, nameLocation: 'middle', nameGap: 32, scale: true },
+      yAxis: { type: 'value', name: yMeta.label, nameLocation: 'middle', nameGap: 52, scale: true },
+      series: pSeries
+    }, true);
+    E.bindRenderDock(chart, function(p) { return p.data && p.data.dataDir; });
+  }
+
+  function renderSweepResponseCurve() {
+    var mField = getScaleMode() === 'scaled' ? 'metrics_scaled' : 'metrics_raw';
+    var mKey = document.getElementById('curve-metric').value || 'l2_err';
+    var modFilter = document.getElementById('curve-model').value || 'ALL';
+    var mMeta = METRICS.find(function(m) { return m.key === mKey; }) || METRICS[0];
+
+    var activeModels = MODELS.filter(function(mName) {
+      return modFilter === 'ALL' || mName === modFilter;
+    });
+
+    E.renderLegendBanner(
+      'legend-sweep-curve',
+      activeModels.map(function(mName) {
+        var st = MODEL_STYLE[mName] || { color: '#1C328A', symbolText: '●' };
+        return { label: mName, color: st.color, symbolText: st.symbolText };
+      })
+    );
+
+    var xSet = [];
+    ROWS.forEach(function(r) {
+      if (activeModels.indexOf(r.model) >= 0 && xSet.indexOf(r.param_value_display) < 0) {
+        xSet.push(r.param_value_display);
+      }
+    });
+
+    var series = activeModels.map(function(mName) {
+      var st = MODEL_STYLE[mName] || { color: '#1C328A', symbol: 'circle', symbolText: '●' };
+      var mRows = ROWS.filter(function(r) { return r.model === mName; });
+      var data = xSet.map(function(xVal) {
+        var r = mRows.find(function(item) { return item.param_value_display === xVal; });
+        if (!r) return null;
+        var v = E.num((r[mField] || {})[mKey]);
+        return {
+          value: v,
+          rawVal: v,
+          dataDir: r.render_data_dir || r.data_dir,
+          model: r.model,
+          paramVal: r.param_value_display,
+          isDefault: r.is_default
+        };
+      });
+      return {
+        name: st.symbolText + ' ' + mName,
+        type: 'line',
+        symbol: st.symbol,
+        symbolSize: 11,
+        connectNulls: true,
+        itemStyle: { color: st.color },
+        lineStyle: { width: 2.5, color: st.color },
+        data: data
+      };
+    });
+
+    var chart = E.init('chart-sweep-curve');
+    chart.setOption({
+      animation: false,
+      tooltip: {
+        trigger: 'item',
+        formatter: function(p) {
+          var d = p.data || {};
+          if (!d.model) return '';
+          return '<b>' + E.esc(d.model) + ' | ' + E.esc(D.param_display) + '=' + E.esc(d.paramVal) + (d.isDefault ? ' ★' : '') + '</b><br/>' +
+                 E.esc(mMeta.short) + ': <b>' + E.fmt(d.rawVal) + '</b>';
+        }
+      },
+      legend: { show: false },
+      grid: { top: 24, left: 72, right: 32, bottom: 52 },
+      xAxis: { type: 'category', data: xSet, name: D.param_display, nameLocation: 'middle', nameGap: 32 },
+      yAxis: { type: 'value', name: mMeta.label, nameLocation: 'middle', nameGap: 52, scale: true },
+      series: series
+    }, true);
+    E.bindRenderDock(chart, function(p) { return p.data && p.data.dataDir; });
+  }
+
+  function renderAll() {
+    renderSweepTable();
+    renderSweepBarCharts();
+    renderSweepPareto();
+    renderSweepResponseCurve();
+    Dock.refresh();
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var px = document.getElementById('pareto-x');
+    var py = document.getElementById('pareto-y');
+    var cm = document.getElementById('curve-metric');
+
+    METRICS.forEach(function(m, idx) {
+      var o1 = document.createElement('option');
+      o1.value = m.key; o1.textContent = m.short;
+      if (idx === 0) o1.selected = true;
+      px.appendChild(o1);
+
+      var o2 = document.createElement('option');
+      o2.value = m.key; o2.textContent = m.short;
+      if (m.key === 'org_loss') o2.selected = true;
+      py.appendChild(o2);
+
+      var o3 = document.createElement('option');
+      o3.value = m.key; o3.textContent = m.label;
+      if (idx === 0) o3.selected = true;
+      cm.appendChild(o3);
+    });
+
+    var tMod = document.getElementById('sweep-table-model');
+    var pMod = document.getElementById('pareto-model');
+    var cMod = document.getElementById('curve-model');
+    if (MODELS.some(function(m) { return m.indexOf('Vroid_') === 0; })) {
+      var vOpt = document.createElement('option');
+      vOpt.value = 'VROID_ALL'; vOpt.textContent = 'All Vroid Models (V18/V19/V20)';
+      pMod.appendChild(vOpt);
+    }
+    MODELS.forEach(function(mName) {
+      [tMod, pMod, cMod].forEach(function(sel) {
+        var opt = document.createElement('option');
+        opt.value = mName; opt.textContent = mName;
+        sel.appendChild(opt);
+      });
+    });
+
+    Dock.init({
+      mountId: 'render-dock',
+      rendersByDataDir: D.rendersByDataDir || {},
+      summaryByDataDir: D.entrySummaryByDataDir || {},
+      getScaleMode: getScaleMode
+    });
+
+    document.getElementById('global-scale-mode').addEventListener('change', renderAll);
+    document.getElementById('global-axis-mode').addEventListener('change', renderAll);
+    tMod.addEventListener('change', renderSweepTable);
+    pMod.addEventListener('change', renderSweepPareto);
+    px.addEventListener('change', renderSweepPareto);
+    py.addEventListener('change', renderSweepPareto);
+    document.getElementById('pareto-connect').addEventListener('change', renderSweepPareto);
+    cm.addEventListener('change', renderSweepResponseCurve);
+    cMod.addEventListener('change', renderSweepResponseCurve);
+
+    renderAll();
+  });
+})();
+</script>
+</body>
+</html>

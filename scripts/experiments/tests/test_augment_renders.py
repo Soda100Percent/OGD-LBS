@@ -252,5 +252,23 @@ class TestAugmentStageRendersBase(unittest.TestCase):
             self.assertEqual(looked_up[0]["s03_version"], "ue_v1")
 
 
+    def test_shared_report_core_assets_and_nav(self) -> None:
+        import report_core
+        with tempfile.TemporaryDirectory(prefix="ogd_lbs_shared_core_") as td:
+            out_dir = Path(td)
+            assets = report_core.load_shared_frontend_assets(out_dir)
+            self.assertIn("ResizeObserver", assets["chart_engine_js"])
+            self.assertIn("UNIFIED RENDER SETTINGS", assets["render_dock_js"])
+            self.assertIn("charts-grid-2", assets["core_css"])
+            self.assertTrue((out_dir / "shared" / "ogd_core_styles.css").is_file())
+            self.assertTrue((out_dir / "shared" / "ogd_chart_engine.js").is_file())
+            self.assertTrue((out_dir / "shared" / "ogd_render_dock.js").is_file())
+
+            nav_html = report_core.build_suite_nav_html("UE_Comparison_Report.html")
+            self.assertIn("UE_Comparison_Report.html", nav_html)
+            self.assertIn("CV_Report.html", nav_html)
+            self.assertIn("Render_QA.html", nav_html)
+
+
 if __name__ == "__main__":
     unittest.main()
