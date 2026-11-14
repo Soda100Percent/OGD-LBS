@@ -279,7 +279,8 @@ class DifferentiableTrainer:
             self.config.ignore_suffixes,
             use_face_materials=self.config.use_target_textures,
             material_indices=rmesh2bmesh,
-            bsdf_rules=self.config.ref_submesh_bsdf if self.ref_use_mixed else None
+            bsdf_rules=self.config.ref_submesh_bsdf if self.ref_use_mixed else None,
+            target_frames=poses_count,
         )
 
         if len(self.ref_mesh_sequence) > 0:

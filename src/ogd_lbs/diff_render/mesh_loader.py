@@ -261,10 +261,36 @@ class MeshLoader:
         log(f"基础网格加载完成！总顶点数: {vertices.shape[0]}, 总面数: {faces.shape[0]}")
         return base_mesh, mesh_names, v_offset, f_offset, full_face_uvs
 
+    @staticmethod
+    def _compute_step01_sample_indices(frame_count: int, target_frames: int) -> np.ndarray:
+        frame_count_i = int(frame_count)
+        target_frames_i = int(target_frames)
+        if frame_count_i == target_frames_i or target_frames_i <= 0:
+            return np.arange(frame_count_i, dtype=np.int64)
+        if target_frames_i == 1:
+            return np.asarray([0], dtype=np.int64)
+        raw = np.rint(np.linspace(0, frame_count_i - 1, num=target_frames_i)).astype(np.int64)
+        selected_list: list[int] = []
+        used: set[int] = set()
+        for raw_idx in raw.tolist():
+            idx = max(0, min(int(raw_idx), frame_count_i - 1))
+            if idx not in used:
+                selected_list.append(idx)
+                used.add(idx)
+        if len(selected_list) < target_frames_i:
+            for idx in range(frame_count_i):
+                if idx not in used:
+                    selected_list.append(idx)
+                    used.add(idx)
+                    if len(selected_list) >= target_frames_i:
+                        break
+        return np.asarray(sorted(selected_list[:target_frames_i]), dtype=np.int64)
+
     def load_ref_mesh_sequence(self, folder: str | Path, mats: list, ignore_suffixes: List[str],
                                use_face_materials: bool = False,
                                material_indices: Optional[List[int]] = None,
-                               bsdf_rules: Optional[List[List[str]]] = None):
+                               bsdf_rules: Optional[List[List[str]]] = None,
+                               target_frames: Optional[int] = None):
         folder = Path(folder)
         log(f"开始加载目标网格序列 (Target Sequence) 从: {folder} | 启用多材质贴图: {use_face_materials}")
 
@@ -275,7 +301,16 @@ class MeshLoader:
 
         a_obj = load_data(a_path)
         poses = np.array(a_obj["animation_poses"])
-        poses_count = poses.shape[0]
+        raw_poses_count = int(poses.shape[0])
+        sample_indices: Optional[np.ndarray] = None
+        if target_frames is not None and int(target_frames) > 0 and raw_poses_count != int(target_frames):
+            sample_indices = self._compute_step01_sample_indices(raw_poses_count, int(target_frames))
+            poses = poses[sample_indices]
+            log(
+                f"Target 序列帧数 ({raw_poses_count}) 与 Source 帧数 ({int(target_frames)}) 不一致，"
+                f"已按 Step 01 均匀索引映射对齐至 {len(sample_indices)} 帧。"
+            )
+        poses_count = int(poses.shape[0])
 
         sm_paths = self._get_mesh_paths(folder)
 
@@ -301,6 +336,9 @@ class MeshLoader:
 
             sub_ba_v = np.array(sm_obj['baked_animation_vertices'])
             sub_ba_n = np.array(sm_obj['baked_animation_vertex_normals'])
+            if sample_indices is not None:
+                sub_ba_v = sub_ba_v[sample_indices]
+                sub_ba_n = sub_ba_n[sample_indices]
             face_uvs = np.array(sm_obj['face_uvs'])
             sub_f = np.array(sm_obj['faces'])
 
