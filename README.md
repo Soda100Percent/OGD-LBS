@@ -141,6 +141,24 @@ pip install -e . numpy==1.23.5
 pip install bpy==4.4.0
 ```
 
+### 2.3.1 可选：安装可微渲染模块依赖 (Differentiable Rendering)
+
+如需运行 `scripts/diff_render/` 下的可微渲染阶段，请在激活环境后按顺序安装 CUDA 11.8 版 PyTorch 与 `nvdiffrast`：
+
+```bash
+# 1. 安装严格匹配 CUDA 11.8 的 PyTorch 核心库
+pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu118
+
+# 2. 安装渲染、UV 展开及图像感知损失依赖
+pip install PyOpenGL glfw lpips pytorch-msssim xatlas>=0.0.11 imageio Pillow -c <(echo "numpy==1.23.5")
+
+# 3. 安装 C++/CUDA 构建工具
+pip install setuptools wheel ninja
+
+# 4. 编译安装 nvdiffrast (使用 --no-build-isolation 以调用当前环境的 ninja 和 torch)
+pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
+```
+
 ### 2.4 Winter Samurai custom clean
 
 设置 custom clean 使用的环境名：
