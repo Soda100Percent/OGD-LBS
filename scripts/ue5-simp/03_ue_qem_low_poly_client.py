@@ -369,6 +369,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--simp_rate_base", type=float, default=0.1)
     parser.add_argument("--specific_rates", type=str, default="{}")
     parser.add_argument("--min_target_faces", type=int, default=100)
+    parser.add_argument("--remesh_meshes", type=str, default="[]")
+    parser.add_argument("--unmerged_meshes", type=str, default="[]")
+    parser.add_argument("--voxel_resolution", type=int, default=128)
 
     parser.add_argument("--url", type=str, default="http://10.241.1.178:9999/api/qem_skeletal")
     parser.add_argument("--timeout", type=int, default=900)
