@@ -370,7 +370,8 @@ def build_unified_suite_hub_index(output_dir: Path, total_renders: int) -> Path:
       <a class="btn btn-teal" href="UE_Comparison_Report.html">⚔️ Open UE5 Comparison</a>
       <a class="btn btn-primary" href="CV_Report.html">🧪 Open 4-Fold CV Report</a>
       <a class="btn btn-outline" href="Render_QA.html" style="background:#334155;color:#fff;border-color:#475569;">🔍 Open Render QA (#ID)</a>
-      <a class="btn btn-outline" href="downloads/ogd_lbs_ue5_equal_bone_budget_report_bundle.zip" download>📦 Download Full ZIP Bundle</a>
+      <a class="btn btn-outline" href="downloads/ogd_lbs_ue5_equal_bone_budget_report_bundle.zip" download>📦 Download UE5 Suite ZIP</a>
+      <a class="btn btn-outline" href="downloads/ogd_lbs_diff_render_3d_report_bundle.zip" download style="border-color:#38bdf8;color:#38bdf8;">📦 Download Diff-Render 3D Bundle (.zip)</a>
     </div>
   </div>
 

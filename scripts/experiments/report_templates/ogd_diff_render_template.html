@@ -1,0 +1,1868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OGD-LBS Step 05 &amp; UE5 Baselines — Triple 3D Viewport Comparison &amp; Live Texture Filter Lab</title>
+<style>
+__CORE_CSS__
+.dr-container {
+  max-width: 1920px;
+  margin: 0 auto;
+  padding: 14px 18px 60px;
+}
+.model-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.model-tab-btn {
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #1e293b;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s;
+}
+.model-tab-btn:hover { background: #e2e8f0; }
+.model-tab-btn.active {
+  background: #1C328A;
+  color: #fff;
+  border-color: #1C328A;
+  box-shadow: 0 2px 8px rgba(28, 50, 138, 0.25);
+}
+.preset-bar {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.preset-btn {
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #94a3b8;
+  background: #ffffff;
+  color: #0f172a;
+  transition: all 0.12s;
+}
+.preset-btn:hover { background: #e0f2fe; border-color: #0284c7; }
+.preset-btn.active { background: #0284c7; color: #fff; border-color: #0284c7; }
+.filter-lab-bar {
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: #f8fafc;
+  border: 1px solid #38bdf8;
+  border-radius: 10px;
+  padding: 11px 15px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.filter-lab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.fl-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.78);
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  font-size: 0.78rem;
+}
+.fl-item label { color: #94a3b8; font-weight: 600; }
+.fl-item select, .vp-method-select {
+  background: #0f172a;
+  color: #38bdf8;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  max-width: 260px;
+}
+.fl-item input[type="range"] {
+  width: 86px;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+.fl-val {
+  font-family: ui-monospace, monospace;
+  color: #38bdf8;
+  font-weight: 700;
+  min-width: 32px;
+  text-align: right;
+}
+.tri-viewport-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+@media (max-width: 1280px) {
+  .tri-viewport-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.viewport-panel {
+  border: 2px solid #334155;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0b1120;
+  display: flex;
+  flex-direction: column;
+}
+.viewport-panel.ue-panel { border-color: #f59e0b; }
+.viewport-panel.ours-panel { border-color: #0284c7; }
+.vp-header {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 8px 11px;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.vp-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.vp-title { font-weight: 700; font-size: 0.84rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vp-stats { font-size: 0.74rem; color: #94a3b8; font-family: ui-monospace, monospace; }
+.vp-stats b { color: #38bdf8; }
+.vp-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 520px;
+  cursor: grab;
+  overflow: hidden;
+}
+.vp-canvas-wrap:active { cursor: grabbing; }
+.vp-canvas-wrap canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.vp-overlay-status {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #f8fafc;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border: 1px solid #475569;
+  pointer-events: none;
+}
+.timeline-bar {
+  margin-top: 12px;
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.timeline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.frame-slider {
+  flex: 1;
+  min-width: 220px;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+.frame-readout {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86rem;
+  font-weight: 700;
+  background: #1e293b;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  min-width: 215px;
+  text-align: center;
+}
+.split-tag-train { color: #38bdf8; }
+.split-tag-test { color: #f59e0b; }
+.tex-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.tex-card {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 0.75rem;
+}
+.tex-card canvas {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: block;
+  image-rendering: pixelated;
+}
+.tex-card-meta {
+  padding: 6px 8px;
+  border-top: 1px solid #334155;
+}
+.mini-vp-btn {
+  padding: 2px 6px;
+  font-size: 0.70rem;
+  font-weight: 700;
+  border-radius: 4px;
+  border: 1px solid #94a3b8;
+  background: #f8fafc;
+  color: #0f172a;
+  cursor: pointer;
+}
+.mini-vp-btn:hover { background: #0284c7; color: #fff; border-color: #0284c7; }
+</style>
+<script>
+window.DIFF_RENDER_DATA = __DIFF_RENDER_DATA_JSON__;
+</script>
+</head>
+<body>
+__SUITE_NAV_HTML__
+
+<div class="top-bar">
+  <h1>🎨 Step 05 Differentiable Rendering &amp; UE5 Baselines — Triple 3D Viewport Comparison</h1>
+  <div class="top-controls" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <div id="model-tabs-mount" class="model-tabs"></div>
+    <a class="btn btn-teal" href="downloads/ogd_lbs_diff_render_3d_report_bundle.zip" download style="text-decoration:none;font-weight:800;">
+      📦 Download Standalone Diff-Render 3D Bundle (.zip)
+    </a>
+  </div>
+</div>
+
+<div class="dr-container">
+  <div class="section-card">
+    <div class="section-header">
+      <h2>🕹️ Synchronized Triple 3D WebGL Inspector (Left: Target GT · Center: UE5 Baseline · Right: Ours Step 05)</h2>
+      <div class="top-controls">
+        <div class="ctrl-group">
+          <label>Shading:</label>
+          <select id="sel-shading-mode">
+            <option value="albedo" selected>🎨 Pure Albedo (Unlit Base Texture)</option>
+            <option value="albedo_wire">🕸️ Albedo + Wireframe Overlay</option>
+            <option value="clay_wire">🗿 Clay + Wireframe (Geometry Only)</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label>Left Sampling:</label>
+          <select id="sel-left-sampling">
+            <option value="trilinear" selected>✨ Trilinear + Aniso 8x</option>
+            <option value="bilinear">🌊 Bilinear</option>
+            <option value="nearest_mip">🎯 Nearest + Mip</option>
+            <option value="nearest">🔲 Nearest Point</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label>Center Sampling:</label>
+          <select id="sel-center-sampling">
+            <option value="trilinear" selected>✨ Trilinear + Aniso 8x</option>
+            <option value="bilinear">🌊 Bilinear</option>
+            <option value="nearest_mip">🎯 Nearest + Mip</option>
+            <option value="nearest">🔲 Nearest Point</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label>Right Sampling:</label>
+          <select id="sel-right-sampling">
+            <option value="trilinear">✨ Trilinear + Aniso 8x</option>
+            <option value="bilinear">🌊 Bilinear</option>
+            <option value="nearest_mip">🎯 Nearest + Mip</option>
+            <option value="nearest" selected>🔲 Nearest Point</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label>Alpha / Cull:</label>
+          <select id="sel-alpha-cull">
+            <option value="bsdf_clip" selected>🎯 BSDF 1/2-Sided + Alpha Clip</option>
+            <option value="bsdf_blend">💧 BSDF 1/2-Sided + Alpha Blend</option>
+            <option value="double_clip">DoubleSide + Alpha Clip</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label>BG:</label>
+          <select id="sel-bg-mode">
+            <option value="bg-checker" selected>Checkerboard</option>
+            <option value="bg-dark">Dark Studio</option>
+            <option value="bg-white">Paper White</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <button class="btn btn-sm" data-cam="front">Front 0°</button>
+          <button class="btn btn-sm" data-cam="iso45">Iso 45°</button>
+          <button class="btn btn-sm" data-cam="side90">Side 90°</button>
+          <button class="btn btn-sm" data-cam="back180">Back 180°</button>
+          <button class="btn btn-sm" data-cam="closeup">🔍 Close-up</button>
+          <button class="btn btn-sm btn-primary" data-cam="reset">↺ Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- QUICK TRIPLE PRESETS -->
+    <div class="preset-bar">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span style="font-weight:800;color:#1e293b;font-size:0.82rem;">⚡ Triple Viewport Presets (Left | Center | Right):</span>
+        <button class="preset-btn" data-triple="target|ue_qem_cons|ours">1. ★ Target (GT) | UE-qem-lod | Ours</button>
+        <button class="preset-btn active" data-triple="target|ue_remesh_cons|ours">2. ★ Target (GT) | UE-remesh-lod | Ours</button>
+        <button class="preset-btn" data-triple="ue_qem_cons|ue_remesh_cons|ours">3. UE-qem-lod | UE-remesh-lod | Ours</button>
+        <button class="preset-btn" data-triple="target|ue_qem_mod|ue_remesh_mod">4. Target (GT) | UE-qem (Mod) | UE-remesh (Mod)</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <label style="font-size:0.76rem;color:#334155;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="chk-export-hide-grid" checked> Hide Grid
+        </label>
+        <label style="font-size:0.76rem;color:#334155;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="chk-export-labels" checked> Bottom Labels
+        </label>
+        <select id="sel-export-label-color" style="background:#fff;color:#0f172a;border:1px solid #94a3b8;border-radius:4px;padding:3px 6px;font-size:0.76rem;font-weight:700;">
+          <option value="#0f172a" selected>Label: Dark (Paper)</option>
+          <option value="#f8fafc">Label: Light (Dark BG)</option>
+        </select>
+        <select id="sel-export-scale" style="background:#fff;color:#0f172a;border:1px solid #94a3b8;border-radius:4px;padding:3px 6px;font-size:0.76rem;font-weight:700;">
+          <option value="1">1x Native Size</option>
+          <option value="2" selected>2x Hi-Res (Paper)</option>
+        </select>
+        <button class="btn btn-sm btn-primary" id="btn-export-stitched-png" style="background:#0284c7;border-color:#0284c7;font-weight:800;">
+          📸 Export 3-Viewport Transparent PNG
+        </button>
+      </div>
+    </div>
+
+    <!-- LIVE FRONTEND TEXTURE FILTER LAB -->
+    <div class="filter-lab-bar">
+      <div class="filter-lab-row">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-weight:800;color:#38bdf8;font-size:0.86rem;">🧪 LIVE TEXTURE FILTER LAB (Applied to Ours Step 05):</span>
+          <div class="fl-item">
+            <label>Tex Source:</label>
+            <select id="sel-tex-source">
+              <option value="stage1" selected>★ Stage 1 Isolated Bake (it=14000 — Clean Alpha)</option>
+              <option value="stage2">Stage 2 Final (it=20000 — Multi-Layer Alpha)</option>
+            </select>
+          </div>
+          <div class="fl-item">
+            <label>Filter Mode:</label>
+            <select id="sel-filter-algo">
+              <option value="local_window_avg">1. ★ Local Valid Ring Diffusion (Preserves Details)</option>
+              <option value="cc_pinhole_pyramid">2. Pinhole CC + Rainbow Ring Pull-Push Pyramid</option>
+              <option value="all_holes_pyramid">3. All-Holes Pull-Push Multi-Scale Pyramid</option>
+              <option value="opaque_only">4. Force Opaque Alpha=255 Only (Keep Raw RGB)</option>
+              <option value="raw" selected>0. Raw Unfiltered (Exact Stage Output)</option>
+            </select>
+          </div>
+          <label class="fl-item" style="cursor:pointer;border-color:#f59e0b;">
+            <input type="checkbox" id="chk-show-defects">
+            <span style="color:#fbbf24;font-weight:700;">🔴 Highlight Holes (Red) &amp; Rings/Spikes (Yellow)</span>
+          </label>
+        </div>
+        <div id="lbl-filter-perf" style="font-size:0.77rem;color:#38bdf8;font-family:ui-monospace,monospace;">Filter ready</div>
+      </div>
+
+      <div class="filter-lab-row" style="justify-content:flex-start;">
+        <div class="fl-item" title="Texels with raw Alpha below this threshold are detected as transparent hole cores">
+          <label>Hole Alpha &lt;</label>
+          <input type="range" id="rng-hole-alpha" min="10" max="240" step="5" value="128">
+          <span class="fl-val" id="val-hole-alpha">128</span>
+        </div>
+        <div class="fl-item" title="Width (in pixels) of the rainbow ring around each transparent hole to strip and heal">
+          <label>Rainbow Ring:</label>
+          <input type="range" id="rng-ring-px" min="0" max="4" step="1" value="1">
+          <span class="fl-val" id="val-ring-px">1 px</span>
+        </div>
+        <div class="fl-item" title="Maximum connected-component area (in texels) of a pinhole to heal in Mode 2">
+          <label>Max Pinhole Area:</label>
+          <input type="range" id="rng-max-area" min="20" max="5000" step="20" value="1200">
+          <span class="fl-val" id="val-max-area">1200</span>
+        </div>
+        <div class="fl-item" title="Color jump threshold vs. local 5x5 valid neighborhood to catch isolated opaque rainbow speckles (set 120 to disable)">
+          <label>RGB Spike Thr:</label>
+          <input type="range" id="rng-spike-thr" min="15" max="120" step="5" value="42">
+          <span class="fl-val" id="val-spike-thr">42</span>
+        </div>
+        <button class="btn btn-sm" id="btn-reset-filter" style="background:#334155;color:#fff;border-color:#475569;">↺ Default Filter</button>
+      </div>
+    </div>
+
+    <!-- TRIPLE 3D VIEWPORTS (LEFT / CENTER / RIGHT) -->
+    <div class="tri-viewport-grid">
+      <div class="viewport-panel">
+        <div class="vp-header">
+          <div class="vp-header-top">
+            <div class="vp-title">
+              <span class="rc-badge" style="background:#475569;color:#fff;">LEFT</span>
+              <select id="sel-left-method" class="vp-method-select"></select>
+            </div>
+          </div>
+          <div class="vp-stats" id="lbl-left-stats">V: - | F: - | Bones: -</div>
+        </div>
+        <div class="vp-canvas-wrap bg-checker" id="vp-left-wrap">
+          <div class="vp-overlay-status" id="vp-left-status">Loading Left GLB...</div>
+        </div>
+      </div>
+
+      <div class="viewport-panel ue-panel">
+        <div class="vp-header">
+          <div class="vp-header-top">
+            <div class="vp-title">
+              <span class="rc-badge" style="background:#d97706;color:#fff;">CENTER · UE5</span>
+              <select id="sel-center-method" class="vp-method-select"></select>
+            </div>
+          </div>
+          <div class="vp-stats" id="lbl-center-stats">V: - | F: - | Bones: -</div>
+        </div>
+        <div class="vp-canvas-wrap bg-checker" id="vp-center-wrap">
+          <div class="vp-overlay-status" id="vp-center-status">Loading Center GLB...</div>
+        </div>
+      </div>
+
+      <div class="viewport-panel ours-panel">
+        <div class="vp-header">
+          <div class="vp-header-top">
+            <div class="vp-title">
+              <span class="rc-badge rc-badge-current">RIGHT · OURS</span>
+              <select id="sel-right-method" class="vp-method-select"></select>
+            </div>
+          </div>
+          <div class="vp-stats" id="lbl-right-stats">V: - | F: - | Bones: -</div>
+        </div>
+        <div class="vp-canvas-wrap bg-checker" id="vp-right-wrap">
+          <div class="vp-overlay-status" id="vp-right-status">Loading Right GLB...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Animation Timeline Scrubber -->
+    <div class="timeline-bar">
+      <div class="timeline-row">
+        <button class="btn btn-teal" id="btn-play-toggle" style="min-width:95px;">⏸ Pause</button>
+        <button class="btn btn-sm" id="btn-prev-frame">⏮ -1 Frame</button>
+        <button class="btn btn-sm" id="btn-next-frame">⏭ +1 Frame</button>
+        <input type="range" id="slider-frame" class="frame-slider" min="0" max="199" step="1" value="0">
+        <div class="frame-readout" id="lbl-frame-readout">Frame: 000 / 199 (TRAIN)</div>
+      </div>
+      <div class="timeline-row" style="justify-content:space-between;font-size:0.79rem;color:#cbd5e1;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span>Quick Jump Frame:</span>
+          <button class="btn btn-sm" data-jump-frame="0">Frame 0</button>
+          <button class="btn btn-sm" data-jump-frame="50">Frame 50</button>
+          <button class="btn btn-sm" data-jump-frame="100">Frame 100</button>
+          <button class="btn btn-sm" data-jump-frame="150">Frame 150</button>
+          <button class="btn btn-sm" data-jump-frame="190" style="background:#f59e0b;color:#0f172a;border-color:#f59e0b;">★ Frame 190 (Unseen Test Split)</button>
+          <button class="btn btn-sm" data-jump-frame="195" style="background:#f59e0b;color:#0f172a;border-color:#f59e0b;">★ Frame 195 (Test)</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span>Speed:</span>
+          <select id="sel-speed" style="background:#1e293b;color:#fff;border:1px solid #475569;border-radius:4px;padding:2px 6px;">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.50x</option>
+            <option value="1.0" selected>1.00x (24 FPS)</option>
+            <option value="1.5">1.50x</option>
+          </select>
+          <a id="link-dl-left-glb" class="btn btn-sm" href="#" download>📥 Left .glb</a>
+          <a id="link-dl-center-glb" class="btn btn-sm" href="#" download>📥 Center .glb</a>
+          <a id="link-dl-right-glb" class="btn btn-sm" href="#" download>📥 Right .glb</a>
+          <a class="btn btn-sm btn-primary" href="downloads/ogd_lbs_diff_render_3d_report_bundle.zip" download style="text-decoration:none;">📦 Full 3D Page .zip</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active Model Multi-Method Comparison Table -->
+  <div class="section-card">
+    <div class="section-header">
+      <h2 id="hdr-method-comp-section">⚖️ Multi-Method Quantitative Comparison (Target vs. UE-qem-lod vs. UE-remesh-lod vs. Ours)</h2>
+    </div>
+    <div class="table-wrap" id="table-method-comp-mount"></div>
+  </div>
+
+  <!-- Live 2D Filtered Texture Cards -->
+  <div class="section-card">
+    <div class="section-header">
+      <h2 id="hdr-submesh-section">🧩 Live 2D Submesh Texture Inspector (Ours Step 05)</h2>
+    </div>
+    <div class="tex-grid" id="tex-grid-mount"></div>
+    <div class="table-wrap" id="table-submesh-mount" style="margin-top:16px;"></div>
+  </div>
+
+  <!-- Cross-Model Quantitative Summary Table -->
+  <div class="section-card">
+    <div class="section-header">
+      <h2>📊 All-Model Cross-Pipeline Summary (Ours vs. UE-qem-lod vs. UE-remesh-lod)</h2>
+    </div>
+    <div class="table-wrap" id="table-all-models-mount"></div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from './shared/three/three.module.min.js';
+import { OrbitControls } from './shared/three/OrbitControls.js';
+import { GLTFLoader } from './shared/three/GLTFLoader.js';
+
+const DATA = window.DIFF_RENDER_DATA || { models: [] };
+const models = DATA.models || [];
+const readyModels = models.filter(m => m.status === 'READY');
+let activeModelName = (readyModels[0] && readyModels[0].model) || (models[0] && models[0].model) || 'Winter_Samurai';
+let leftMethodKey = 'target';
+let centerMethodKey = 'ue_remesh_cons';
+let rightMethodKey = 'ours';
+
+const TOTAL_FRAMES = 200;
+const FPS = 24.0;
+let currentFrame = 0;
+let isPlaying = true;
+let playbackSpeed = 1.0;
+let shadingMode = 'albedo';
+let leftSamplingMode = 'trilinear';
+let centerSamplingMode = 'trilinear';
+let rightSamplingMode = 'nearest';
+let alphaCullMode = 'bsdf_clip';
+let lastTimeMs = performance.now();
+let frameAccumulator = 0.0;
+
+const filterCfg = {
+  texSource: 'stage1',
+  algo: 'raw',
+  holeAlpha: 128,
+  ringPx: 1,
+  maxArea: 1200,
+  spikeThr: 42,
+  showDefects: false,
+};
+
+let activeSubmeshAssets = {};
+let activeModelRec = null;
+
+const wrapL = document.getElementById('vp-left-wrap');
+const wrapC = document.getElementById('vp-center-wrap');
+const wrapR = document.getElementById('vp-right-wrap');
+const statusL = document.getElementById('vp-left-status');
+const statusC = document.getElementById('vp-center-status');
+const statusR = document.getElementById('vp-right-status');
+
+function createViewport(container, slotName) {
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, container.clientWidth / Math.max(1, container.clientHeight), 0.01, 500);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(renderer.domElement);
+
+  const ambLight = new THREE.AmbientLight(0xffffff, 1.1);
+  const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.4);
+  dirLight1.position.set(2, 4, 3);
+  const dirLight2 = new THREE.DirectionalLight(0x94a3b8, 0.8);
+  dirLight2.position.set(-2, 2, -3);
+  scene.add(ambLight, dirLight1, dirLight2);
+
+  const grid = new THREE.GridHelper(2.4, 12, 0x38bdf8, 0x334155);
+  grid.position.y = -0.9;
+  scene.add(grid);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = false;
+  controls.target.set(0, 0, 0);
+  camera.position.set(0, 0.15, 2.45);
+  controls.update();
+
+  return { slot: slotName, container, scene, camera, renderer, controls, grid, rootGroup: null, mixer: null, methodKey: null };
+}
+
+const vpL = createViewport(wrapL, 'left');
+const vpC = createViewport(wrapC, 'center');
+const vpR = createViewport(wrapR, 'right');
+const allViewports = [vpL, vpC, vpR];
+
+let syncingCamera = false;
+function syncCamerasFrom(srcVp) {
+  if (syncingCamera) return;
+  syncingCamera = true;
+  allViewports.forEach(dstVp => {
+    if (dstVp === srcVp) return;
+    dstVp.camera.position.copy(srcVp.camera.position);
+    dstVp.camera.quaternion.copy(srcVp.camera.quaternion);
+    dstVp.camera.zoom = srcVp.camera.zoom;
+    dstVp.camera.updateProjectionMatrix();
+    dstVp.controls.target.copy(srcVp.controls.target);
+    dstVp.controls.update();
+  });
+  syncingCamera = false;
+}
+
+vpL.controls.addEventListener('change', () => syncCamerasFrom(vpL));
+vpC.controls.addEventListener('change', () => syncCamerasFrom(vpC));
+vpR.controls.addEventListener('change', () => syncCamerasFrom(vpR));
+
+function setCameraPreset(preset) {
+  const dist = 2.45;
+  let pos = new THREE.Vector3(0, 0.12, dist);
+  let tgt = new THREE.Vector3(0, 0.0, 0);
+  if (preset === 'iso45') pos.set(dist * Math.sin(Math.PI / 4), 0.22, dist * Math.cos(Math.PI / 4));
+  else if (preset === 'side90') pos.set(dist, 0.12, 0);
+  else if (preset === 'back180') pos.set(0, 0.12, -dist);
+  else if (preset === 'closeup') {
+    pos.set(0, 0.42, 1.05);
+    tgt.set(0, 0.38, 0);
+  }
+  vpL.camera.position.copy(pos);
+  vpL.controls.target.copy(tgt);
+  vpL.controls.update();
+  syncCamerasFrom(vpL);
+}
+
+// ============================================================================
+// REAL-TIME JAVASCRIPT TEXTURE FILTER ENGINE
+// ============================================================================
+
+function findConnectedHoleMask(alphaArr, w, h, holeThr, maxArea, useMaxArea) {
+  const n = w * h;
+  const isHole = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (alphaArr[i] < holeThr) isHole[i] = 1;
+  }
+  if (!useMaxArea) return isHole;
+
+  const visited = new Uint8Array(n);
+  const outPinholes = new Uint8Array(n);
+  const queue = new Int32Array(n);
+
+  for (let i = 0; i < n; i++) {
+    if (!isHole[i] || visited[i]) continue;
+    let head = 0, tail = 0;
+    queue[tail++] = i;
+    visited[i] = 1;
+
+    while (head < tail) {
+      const cur = queue[head++];
+      const cx = cur % w;
+      const cy = (cur / w) | 0;
+      if (cx > 0) { const nb = cur - 1; if (isHole[nb] && !visited[nb]) { visited[nb] = 1; queue[tail++] = nb; } }
+      if (cx + 1 < w) { const nb = cur + 1; if (isHole[nb] && !visited[nb]) { visited[nb] = 1; queue[tail++] = nb; } }
+      if (cy > 0) { const nb = cur - w; if (isHole[nb] && !visited[nb]) { visited[nb] = 1; queue[tail++] = nb; } }
+      if (cy + 1 < h) { const nb = cur + w; if (isHole[nb] && !visited[nb]) { visited[nb] = 1; queue[tail++] = nb; } }
+    }
+
+    if (tail <= maxArea) {
+      for (let k = 0; k < tail; k++) outPinholes[queue[k]] = 1;
+    }
+  }
+  return outPinholes;
+}
+
+function dilateBinaryMask(mask, w, h, radius) {
+  if (radius <= 0) return new Uint8Array(mask);
+  let cur = new Uint8Array(mask);
+  let nxt = new Uint8Array(w * h);
+  for (let it = 0; it < radius; it++) {
+    nxt.fill(0);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const idx = row + x;
+        if (
+          cur[idx] ||
+          (x > 0 && cur[idx - 1]) ||
+          (x + 1 < w && cur[idx + 1]) ||
+          (y > 0 && cur[idx - w]) ||
+          (y + 1 < h && cur[idx + w]) ||
+          (x > 0 && y > 0 && cur[idx - w - 1]) ||
+          (x + 1 < w && y > 0 && cur[idx - w + 1]) ||
+          (x > 0 && y + 1 < h && cur[idx + w - 1]) ||
+          (x + 1 < w && y + 1 < h && cur[idx + w + 1])
+        ) {
+          nxt[idx] = 1;
+        }
+      }
+    }
+    cur.set(nxt);
+  }
+  return cur;
+}
+
+function pullPushPyramidInpaint(rgbaBytes, defectMask, w, h) {
+  const levels = [];
+  const l0_r = new Float32Array(w * h);
+  const l0_g = new Float32Array(w * h);
+  const l0_b = new Float32Array(w * h);
+  const l0_w = new Float32Array(w * h);
+
+  for (let i = 0; i < w * h; i++) {
+    if (defectMask[i] === 0 && rgbaBytes[i * 4 + 3] >= 32) {
+      l0_r[i] = rgbaBytes[i * 4];
+      l0_g[i] = rgbaBytes[i * 4 + 1];
+      l0_b[i] = rgbaBytes[i * 4 + 2];
+      l0_w[i] = 1.0;
+    }
+  }
+  levels.push({ w, h, r: l0_r, g: l0_g, b: l0_b, wt: l0_w });
+
+  for (let lv = 0; lv < 8; lv++) {
+    const prev = levels[lv];
+    if (prev.w <= 4 || prev.h <= 4) break;
+    const nw = prev.w >> 1;
+    const nh = prev.h >> 1;
+    const nr = new Float32Array(nw * nh);
+    const ng = new Float32Array(nw * nh);
+    const nb = new Float32Array(nw * nh);
+    const nwt = new Float32Array(nw * nh);
+
+    for (let y = 0; y < nh; y++) {
+      const py0 = y * 2, py1 = py0 + 1;
+      for (let x = 0; x < nw; x++) {
+        const px0 = x * 2, px1 = px0 + 1;
+        const i00 = py0 * prev.w + px0;
+        const i10 = py0 * prev.w + px1;
+        const i01 = py1 * prev.w + px0;
+        const i11 = py1 * prev.w + px1;
+        const wSum = prev.wt[i00] + prev.wt[i10] + prev.wt[i01] + prev.wt[i11];
+        const dstIdx = y * nw + x;
+        if (wSum > 0) {
+          nr[dstIdx] = (prev.r[i00] * prev.wt[i00] + prev.r[i10] * prev.wt[i10] + prev.r[i01] * prev.wt[i01] + prev.r[i11] * prev.wt[i11]) / wSum;
+          ng[dstIdx] = (prev.g[i00] * prev.wt[i00] + prev.g[i10] * prev.wt[i10] + prev.g[i01] * prev.wt[i01] + prev.g[i11] * prev.wt[i11]) / wSum;
+          nb[dstIdx] = (prev.b[i00] * prev.wt[i00] + prev.b[i10] * prev.wt[i10] + prev.b[i01] * prev.wt[i01] + prev.b[i11] * prev.wt[i11]) / wSum;
+          nwt[dstIdx] = 1.0;
+        }
+      }
+    }
+    levels.push({ w: nw, h: nh, r: nr, g: ng, b: nb, wt: nwt });
+  }
+
+  for (let lv = levels.length - 2; lv >= 0; lv--) {
+    const fine = levels[lv];
+    const coarse = levels[lv + 1];
+    for (let y = 0; y < fine.h; y++) {
+      const cy = Math.min(coarse.h - 1, y >> 1);
+      for (let x = 0; x < fine.w; x++) {
+        const idx = y * fine.w + x;
+        if (fine.wt[idx] > 0) continue;
+        let sr = 0, sg = 0, sb = 0, sw = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= fine.h) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= fine.w) continue;
+            const nIdx = ny * fine.w + nx;
+            if (fine.wt[nIdx] > 0) {
+              sr += fine.r[nIdx]; sg += fine.g[nIdx]; sb += fine.b[nIdx]; sw += 1.0;
+            }
+          }
+        }
+        const cx = Math.min(coarse.w - 1, x >> 1);
+        const cIdx = cy * coarse.w + cx;
+        if (sw > 0 && coarse.wt[cIdx] > 0) {
+          fine.r[idx] = 0.65 * (sr / sw) + 0.35 * coarse.r[cIdx];
+          fine.g[idx] = 0.65 * (sg / sw) + 0.35 * coarse.g[cIdx];
+          fine.b[idx] = 0.65 * (sb / sw) + 0.35 * coarse.b[cIdx];
+          fine.wt[idx] = 1.0;
+        } else if (sw > 0) {
+          fine.r[idx] = sr / sw; fine.g[idx] = sg / sw; fine.b[idx] = sb / sw; fine.wt[idx] = 1.0;
+        } else if (coarse.wt[cIdx] > 0) {
+          fine.r[idx] = coarse.r[cIdx]; fine.g[idx] = coarse.g[cIdx]; fine.b[idx] = coarse.b[cIdx]; fine.wt[idx] = 1.0;
+        }
+      }
+    }
+  }
+  return levels[0];
+}
+
+function applyLiveFilterToSubmesh(asset) {
+  const srcImgData = (filterCfg.texSource === 'stage1' && asset.stage1ImgData) ? asset.stage1ImgData : asset.rawImgData;
+  const rawData = srcImgData.data;
+  const w = srcImgData.width;
+  const h = srcImgData.height;
+  const n = w * h;
+  const outImg = asset.ctx.createImageData(w, h);
+  const out = outImg.data;
+
+  const algo = filterCfg.algo;
+  const holeThr = filterCfg.holeAlpha;
+  const ringPx = filterCfg.ringPx;
+  const maxArea = filterCfg.maxArea;
+  const spikeThr = filterCfg.spikeThr;
+  const showDefects = filterCfg.showDefects;
+  const maskGray = asset.maskGray;
+
+  if (algo === 'raw' && !showDefects) {
+    out.set(rawData);
+    if (maskGray) {
+      for (let i = 0; i < n; i++) {
+        out[i * 4 + 3] = ((out[i * 4 + 3] * maskGray[i]) / 255) | 0;
+      }
+    }
+    asset.ctx.putImageData(outImg, 0, 0);
+    asset.threeTextures.forEach(t => { t.needsUpdate = true; });
+    return { holeCnt: 0, ringCnt: 0 };
+  }
+
+  if (algo === 'opaque_only' && !showDefects) {
+    out.set(rawData);
+    for (let i = 0; i < n; i++) {
+      out[i * 4 + 3] = maskGray ? maskGray[i] : 255;
+    }
+    asset.ctx.putImageData(outImg, 0, 0);
+    asset.threeTextures.forEach(t => { t.needsUpdate = true; });
+    return { holeCnt: 0, ringCnt: 0 };
+  }
+
+  const alphaArr = new Uint8Array(n);
+  for (let i = 0; i < n; i++) alphaArr[i] = rawData[i * 4 + 3];
+
+  const useCC = (algo === 'cc_pinhole_pyramid');
+  const holeCore = findConnectedHoleMask(alphaArr, w, h, holeThr, maxArea, useCC);
+  const dilatedHole = dilateBinaryMask(holeCore, w, h, ringPx);
+  const defectMask = new Uint8Array(dilatedHole);
+
+  if (spikeThr < 115) {
+    const thrSq = spikeThr * spikeThr * 3.0;
+    for (let y = 2; y < h - 2; y++) {
+      const row = y * w;
+      for (let x = 2; x < w - 2; x++) {
+        const i = row + x;
+        if (defectMask[i] || alphaArr[i] < 64) continue;
+        let sr = 0, sg = 0, sb = 0, cnt = 0;
+        for (let dy = -2; dy <= 2; dy += 2) {
+          for (let dx = -2; dx <= 2; dx += 2) {
+            if (dx === 0 && dy === 0) continue;
+            const ni = (y + dy) * w + (x + dx);
+            if (!defectMask[ni] && alphaArr[ni] >= holeThr) {
+              sr += rawData[ni * 4]; sg += rawData[ni * 4 + 1]; sb += rawData[ni * 4 + 2]; cnt++;
+            }
+          }
+        }
+        if (cnt >= 3) {
+          const dr = rawData[i * 4] - sr / cnt;
+          const dg = rawData[i * 4 + 1] - sg / cnt;
+          const db = rawData[i * 4 + 2] - sb / cnt;
+          if (dr * dr + dg * dg + db * db > thrSq) {
+            defectMask[i] = 1;
+          }
+        }
+      }
+    }
+  }
+
+  let holeCnt = 0, ringCnt = 0;
+  for (let i = 0; i < n; i++) {
+    if (holeCore[i]) holeCnt++;
+    else if (defectMask[i]) ringCnt++;
+  }
+
+  if (showDefects) {
+    for (let i = 0; i < n; i++) {
+      if (holeCore[i]) {
+        out[i * 4] = 255; out[i * 4 + 1] = 20; out[i * 4 + 2] = 60; out[i * 4 + 3] = 255;
+      } else if (defectMask[i]) {
+        out[i * 4] = 255; out[i * 4 + 1] = 230; out[i * 4 + 2] = 0; out[i * 4 + 3] = 255;
+      } else {
+        out[i * 4] = rawData[i * 4];
+        out[i * 4 + 1] = rawData[i * 4 + 1];
+        out[i * 4 + 2] = rawData[i * 4 + 2];
+        out[i * 4 + 3] = maskGray ? maskGray[i] : 255;
+      }
+    }
+    asset.ctx.putImageData(outImg, 0, 0);
+    asset.threeTextures.forEach(t => { t.needsUpdate = true; });
+    return { holeCnt, ringCnt };
+  }
+
+  if (algo === 'local_window_avg') {
+    const rArr = new Float32Array(n);
+    const gArr = new Float32Array(n);
+    const bArr = new Float32Array(n);
+    const valid = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      rArr[i] = rawData[i * 4]; gArr[i] = rawData[i * 4 + 1]; bArr[i] = rawData[i * 4 + 2];
+      valid[i] = (defectMask[i] === 0 && alphaArr[i] >= holeThr) ? 1 : 0;
+    }
+    for (let pass = 0; pass < 16; pass++) {
+      let changed = 0;
+      for (let y = 1; y < h - 1; y++) {
+        const row = y * w;
+        for (let x = 1; x < w - 1; x++) {
+          const i = row + x;
+          if (valid[i]) continue;
+          let sr = 0, sg = 0, sb = 0, c = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const ni = (y + dy) * w + (x + dx);
+              if (valid[ni] === 1) { sr += rArr[ni]; sg += gArr[ni]; sb += bArr[ni]; c++; }
+            }
+          }
+          if (c > 0) {
+            rArr[i] = sr / c; gArr[i] = sg / c; bArr[i] = sb / c;
+            valid[i] = 2; changed++;
+          }
+        }
+      }
+      for (let i = 0; i < n; i++) if (valid[i] === 2) valid[i] = 1;
+      if (changed === 0) break;
+    }
+    for (let i = 0; i < n; i++) {
+      out[i * 4] = rArr[i] | 0; out[i * 4 + 1] = gArr[i] | 0; out[i * 4 + 2] = bArr[i] | 0;
+      const baseA = valid[i] ? 255 : rawData[i * 4 + 3];
+      out[i * 4 + 3] = maskGray ? (((baseA * maskGray[i]) / 255) | 0) : baseA;
+    }
+  } else {
+    const allLowAlphaAndDefects = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      if (defectMask[i] || alphaArr[i] < holeThr) allLowAlphaAndDefects[i] = 1;
+    }
+    const filled = pullPushPyramidInpaint(rawData, allLowAlphaAndDefects, w, h);
+    for (let i = 0; i < n; i++) {
+      if (defectMask[i]) {
+        out[i * 4] = filled.r[i] | 0;
+        out[i * 4 + 1] = filled.g[i] | 0;
+        out[i * 4 + 2] = filled.b[i] | 0;
+        out[i * 4 + 3] = maskGray ? maskGray[i] : 255;
+      } else if (alphaArr[i] < holeThr) {
+        out[i * 4] = filled.r[i] | 0;
+        out[i * 4 + 1] = filled.g[i] | 0;
+        out[i * 4 + 2] = filled.b[i] | 0;
+        const baseA = (algo === 'all_holes_pyramid') ? 255 : rawData[i * 4 + 3];
+        out[i * 4 + 3] = maskGray ? (((baseA * maskGray[i]) / 255) | 0) : baseA;
+      } else {
+        out[i * 4] = rawData[i * 4];
+        out[i * 4 + 1] = rawData[i * 4 + 1];
+        out[i * 4 + 2] = rawData[i * 4 + 2];
+        out[i * 4 + 3] = maskGray ? maskGray[i] : 255;
+      }
+    }
+  }
+
+  asset.ctx.putImageData(outImg, 0, 0);
+  asset.threeTextures.forEach(t => { t.needsUpdate = true; });
+  return { holeCnt, ringCnt };
+}
+
+function runLiveFilterOnAllActiveSubmeshes() {
+  const t0 = performance.now();
+  let totHoles = 0, totRings = 0, count = 0;
+  for (const stem of Object.keys(activeSubmeshAssets)) {
+    const st = applyLiveFilterToSubmesh(activeSubmeshAssets[stem]);
+    totHoles += st.holeCnt;
+    totRings += st.ringCnt;
+    count++;
+  }
+  const dtMs = (performance.now() - t0).toFixed(0);
+  const perfEl = document.getElementById('lbl-filter-perf');
+  if (perfEl) {
+    perfEl.textContent = `Filtered ${count} textures in ${dtMs}ms | Healed: ${(totHoles/1000).toFixed(1)}k hole px + ${(totRings/1000).toFixed(1)}k ring/spike px`;
+  }
+}
+
+function getSamplingModeForSlot(slot) {
+  if (slot === 'left') return leftSamplingMode;
+  if (slot === 'center') return centerSamplingMode;
+  return rightSamplingMode;
+}
+
+function applyShadingToViewport(vp) {
+  if (!vp.rootGroup) return;
+  const sMode = getSamplingModeForSlot(vp.slot);
+
+  vp.rootGroup.traverse((child) => {
+    if (!child.isMesh || child.userData.isWireOverlay) return;
+    if (!child.userData.origMaterial) {
+      child.userData.origMaterial = child.material;
+    }
+    const map = child.userData.liveCanvasTex || (child.userData.origMaterial && child.userData.origMaterial.map) || null;
+    if (map) {
+      map.colorSpace = THREE.SRGBColorSpace;
+      let wantMag = THREE.LinearFilter;
+      let wantMin = THREE.LinearMipmapLinearFilter;
+      let wantMips = true;
+      let wantAniso = 8;
+      if (sMode === 'bilinear') {
+        wantMag = THREE.LinearFilter;
+        wantMin = THREE.LinearFilter;
+        wantMips = false;
+        wantAniso = 1;
+      } else if (sMode === 'nearest_mip') {
+        wantMag = THREE.NearestFilter;
+        wantMin = THREE.LinearMipmapLinearFilter;
+        wantMips = true;
+        wantAniso = 4;
+      } else if (sMode === 'nearest') {
+        wantMag = THREE.NearestFilter;
+        wantMin = THREE.NearestFilter;
+        wantMips = false;
+        wantAniso = 1;
+      }
+      if (map.magFilter !== wantMag || map.minFilter !== wantMin || map.generateMipmaps !== wantMips) {
+        map.magFilter = wantMag;
+        map.minFilter = wantMin;
+        map.generateMipmaps = wantMips;
+        map.anisotropy = wantAniso;
+        map.needsUpdate = true;
+      }
+    }
+
+    const bsdf = child.userData.bsdfRule || 'ambient_2sided';
+    const isOneSided = bsdf.includes('1sided');
+    const useFrontCull = (alphaCullMode !== 'double_clip') && isOneSided;
+    const sideMode = useFrontCull ? THREE.FrontSide : THREE.DoubleSide;
+    const useBlend = (alphaCullMode === 'bsdf_blend');
+
+    if (shadingMode === 'albedo' || shadingMode === 'albedo_wire') {
+      child.material = new THREE.MeshBasicMaterial({
+        map: map,
+        color: map ? 0xffffff : 0xcccccc,
+        alphaTest: useBlend ? 0.02 : 0.5,
+        transparent: useBlend,
+        depthWrite: true,
+        side: sideMode,
+      });
+    } else if (shadingMode === 'clay_wire') {
+      child.material = new THREE.MeshStandardMaterial({
+        color: 0x94a3b8,
+        roughness: 0.65,
+        metalness: 0.08,
+        side: sideMode,
+      });
+    }
+
+    if (shadingMode === 'albedo_wire' || shadingMode === 'clay_wire') {
+      if (!child.userData.wireClone) {
+        const wireMat = new THREE.MeshBasicMaterial({
+          color: shadingMode === 'clay_wire' ? 0x0f172a : 0x38bdf8,
+          wireframe: true,
+          transparent: true,
+          opacity: shadingMode === 'clay_wire' ? 0.55 : 0.38,
+          depthTest: true,
+        });
+        let wMesh = child.isSkinnedMesh
+          ? new THREE.SkinnedMesh(child.geometry, wireMat)
+          : new THREE.Mesh(child.geometry, wireMat);
+        if (child.isSkinnedMesh) wMesh.bind(child.skeleton, child.bindMatrix);
+        wMesh.userData.isWireOverlay = true;
+        child.add(wMesh);
+        child.userData.wireClone = wMesh;
+      } else {
+        child.userData.wireClone.visible = true;
+        child.userData.wireClone.material.color.setHex(shadingMode === 'clay_wire' ? 0x0f172a : 0x38bdf8);
+        child.userData.wireClone.material.opacity = shadingMode === 'clay_wire' ? 0.55 : 0.38;
+      }
+    } else if (child.userData.wireClone) {
+      child.userData.wireClone.visible = false;
+    }
+  });
+}
+
+function seekAllToFrame(frameIdx) {
+  currentFrame = Math.max(0, Math.min(TOTAL_FRAMES - 1, Math.round(frameIdx)));
+  const slider = document.getElementById('slider-frame');
+  if (slider) slider.value = String(currentFrame);
+
+  const isTest = currentFrame >= 190;
+  const readout = document.getElementById('lbl-frame-readout');
+  if (readout) {
+    const splitBadge = isTest
+      ? '<span class="split-tag-test">TEST SPLIT</span>'
+      : '<span class="split-tag-train">TRAIN SPLIT</span>';
+    readout.innerHTML = `Frame: ${String(currentFrame).padStart(3, '0')} / 199 (${splitBadge})`;
+  }
+
+  const timeSec = currentFrame / FPS;
+  allViewports.forEach(vp => {
+    if (vp.mixer) vp.mixer.setTime(timeSec);
+  });
+}
+
+const loader = new GLTFLoader();
+let loadToken = 0;
+
+function clearViewportModel(vp) {
+  if (vp.mixer) {
+    vp.mixer.stopAllAction();
+    vp.mixer = null;
+  }
+  if (vp.rootGroup) {
+    vp.scene.remove(vp.rootGroup);
+    vp.rootGroup = null;
+  }
+}
+
+function loadGltfPromise(url, onProgress) {
+  return new Promise((resolve, reject) => {
+    loader.load(url, resolve, onProgress, reject);
+  });
+}
+
+function loadImageElement(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+async function prepareOursFilterAssets(rec) {
+  activeSubmeshAssets = {};
+  const subs = rec.submesh_metrics || [];
+  const texMount = document.getElementById('tex-grid-mount');
+  texMount.innerHTML = '';
+
+  const tmpCanvas = document.createElement('canvas');
+  const tmpCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
+
+  await Promise.all(subs.map(async (s) => {
+    const stem = s.submesh;
+    const rawImg = await loadImageElement(s.rel_raw_texture);
+    const w = rawImg.width, h = rawImg.height;
+    tmpCanvas.width = w; tmpCanvas.height = h;
+    tmpCtx.clearRect(0, 0, w, h);
+    tmpCtx.drawImage(rawImg, 0, 0);
+    const rawImgData = tmpCtx.getImageData(0, 0, w, h);
+
+    let stage1ImgData = null;
+    if (s.rel_stage1_texture) {
+      try {
+        const s1Img = await loadImageElement(s.rel_stage1_texture);
+        tmpCtx.clearRect(0, 0, w, h);
+        tmpCtx.drawImage(s1Img, 0, 0, w, h);
+        stage1ImgData = tmpCtx.getImageData(0, 0, w, h);
+      } catch (_) {}
+    }
+
+    let maskGray = null;
+    if (s.rel_body_mask) {
+      try {
+        const mImg = await loadImageElement(s.rel_body_mask);
+        tmpCtx.clearRect(0, 0, w, h);
+        tmpCtx.drawImage(mImg, 0, 0, w, h);
+        const mData = tmpCtx.getImageData(0, 0, w, h).data;
+        maskGray = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) maskGray[i] = mData[i * 4];
+      } catch (_) {}
+    }
+
+    const card = document.createElement('div');
+    card.className = 'tex-card';
+    const dispCanvas = document.createElement('canvas');
+    dispCanvas.width = w;
+    dispCanvas.height = h;
+    dispCanvas.className = 'bg-checker';
+    const dispCtx = dispCanvas.getContext('2d');
+
+    const meta = document.createElement('div');
+    meta.className = 'tex-card-meta';
+    meta.innerHTML = `<div style="font-weight:700;color:#38bdf8;">${stem}.png (${s.opt_bsdf})</div>
+      <div>V=${s.vertices} | F=${s.faces}${s.body_mask_applied ? ' | 🎭 Mask' : ''}</div>
+      <div>PSNR: <b>${fmtNum(s.stage02_test_psnr, 2)} dB</b></div>`;
+
+    card.appendChild(dispCanvas);
+    card.appendChild(meta);
+    texMount.appendChild(card);
+
+    activeSubmeshAssets[stem] = {
+      stem,
+      optBsdf: s.opt_bsdf || 'ambient_2sided',
+      refBsdf: s.ref_bsdf || 'ambient_2sided',
+      rawImgData,
+      stage1ImgData,
+      maskGray,
+      canvas: dispCanvas,
+      ctx: dispCtx,
+      threeTextures: [],
+    };
+  }));
+}
+
+function bindViewportToSubmeshRulesAndFilter(root, methodKey) {
+  const norm = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const isOurs = (methodKey === 'ours');
+
+  root.traverse((child) => {
+    if (!child.isMesh || child.userData.isWireOverlay) return;
+    const cName = child.name || '';
+    const matName = (child.material && child.material.name) || '';
+    let matchedAsset = activeSubmeshAssets[cName] || activeSubmeshAssets[matName];
+    if (!matchedAsset) {
+      for (const k of Object.keys(activeSubmeshAssets)) {
+        if (norm(cName).includes(norm(k)) || norm(matName).includes(norm(k))) {
+          matchedAsset = activeSubmeshAssets[k];
+          break;
+        }
+      }
+    }
+    if (matchedAsset) {
+      child.userData.bsdfRule = isOurs ? matchedAsset.optBsdf : matchedAsset.refBsdf;
+      if (isOurs) {
+        const origMap = (child.material && child.material.map) || null;
+        const cTex = new THREE.CanvasTexture(matchedAsset.canvas);
+        cTex.colorSpace = THREE.SRGBColorSpace;
+        cTex.flipY = origMap ? origMap.flipY : false;
+        cTex.wrapS = origMap ? origMap.wrapS : THREE.RepeatWrapping;
+        cTex.wrapT = origMap ? origMap.wrapT : THREE.RepeatWrapping;
+        child.userData.liveCanvasTex = cTex;
+        matchedAsset.threeTextures.push(cTex);
+      }
+    }
+  });
+}
+
+function updateViewportStatsHeader(slot, rec, methodKey) {
+  const methodsMap = rec.methods || {};
+  const mObj = methodsMap[methodKey] || {};
+  const tSt = (methodsMap.target && methodsMap.target.stats) || rec.target_stats || {};
+  const st = mObj.stats || {};
+  const fRed = (tSt.faces > 0 && methodKey !== 'target')
+    ? ` (-${((1.0 - (st.faces || 0) / tSt.faces) * 100.0).toFixed(1)}%)`
+    : '';
+  const looseStr = st.loose_parts !== undefined && st.loose_parts !== null ? ` | Loose: <b>${st.loose_parts}</b>` : '';
+  const el = document.getElementById(`lbl-${slot}-stats`);
+  if (el) {
+    el.innerHTML = `V: <b>${(st.vertices||0).toLocaleString()}</b> | F: <b>${(st.faces||0).toLocaleString()}${fRed}</b> | Bones: <b>${st.bones||0}</b>${looseStr}`;
+  }
+  const dlLink = document.getElementById(`link-dl-${slot}-glb`);
+  if (dlLink) dlLink.href = mObj.glb || '#';
+}
+
+function populateMethodSelectDropdowns(rec) {
+  const methodsMap = rec.methods || {};
+  const keys = Object.keys(methodsMap);
+  if (!methodsMap[leftMethodKey]) leftMethodKey = keys.includes('target') ? 'target' : keys[0];
+  if (!methodsMap[centerMethodKey]) centerMethodKey = keys.includes('ue_qem_cons') ? 'ue_qem_cons' : (keys.includes('ue_remesh_cons') ? 'ue_remesh_cons' : keys[0]);
+  if (!methodsMap[rightMethodKey]) rightMethodKey = keys.includes('ours') ? 'ours' : keys[keys.length - 1];
+
+  const selL = document.getElementById('sel-left-method');
+  const selC = document.getElementById('sel-center-method');
+  const selR = document.getElementById('sel-right-method');
+  const optsHtml = keys.map(k => `<option value="${k}">${methodsMap[k].label}</option>`).join('');
+  selL.innerHTML = optsHtml;
+  selC.innerHTML = optsHtml;
+  selR.innerHTML = optsHtml;
+  selL.value = leftMethodKey;
+  selC.value = centerMethodKey;
+  selR.value = rightMethodKey;
+
+  const curTriple = `${leftMethodKey}|${centerMethodKey}|${rightMethodKey}`;
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-triple') === curTriple);
+  });
+}
+
+async function reloadAllThreeViewports(rec) {
+  const myToken = ++loadToken;
+  const methodsMap = rec.methods || {};
+  const leftObj = methodsMap[leftMethodKey];
+  const centerObj = methodsMap[centerMethodKey];
+  const rightObj = methodsMap[rightMethodKey];
+
+  updateViewportStatsHeader('left', rec, leftMethodKey);
+  updateViewportStatsHeader('center', rec, centerMethodKey);
+  updateViewportStatsHeader('right', rec, rightMethodKey);
+
+  allViewports.forEach(vp => clearViewportModel(vp));
+
+  if (!leftObj || !leftObj.glb || !centerObj || !centerObj.glb || !rightObj || !rightObj.glb) {
+    [statusL, statusC, statusR].forEach(st => {
+      st.style.display = 'block';
+      st.textContent = 'GLB not available';
+    });
+    return;
+  }
+
+  statusL.style.display = 'block';
+  statusC.style.display = 'block';
+  statusR.style.display = 'block';
+  statusL.textContent = `Loading ${leftObj.short_label} ...`;
+  statusC.textContent = `Loading ${centerObj.short_label} ...`;
+  statusR.textContent = `Loading ${rightObj.short_label} ...`;
+
+  try {
+    for (const k of Object.keys(activeSubmeshAssets)) {
+      activeSubmeshAssets[k].threeTextures = [];
+    }
+
+    const [gltfL, gltfC, gltfR] = await Promise.all([
+      loadGltfPromise(leftObj.glb, (ev) => {
+        if (ev.total) statusL.textContent = `Loading ${leftObj.short_label} (${Math.round(ev.loaded/ev.total*100)}%)...`;
+      }),
+      loadGltfPromise(centerObj.glb, (ev) => {
+        if (ev.total) statusC.textContent = `Loading ${centerObj.short_label} (${Math.round(ev.loaded/ev.total*100)}%)...`;
+      }),
+      loadGltfPromise(rightObj.glb, (ev) => {
+        if (ev.total) statusR.textContent = `Loading ${rightObj.short_label} (${Math.round(ev.loaded/ev.total*100)}%)...`;
+      }),
+    ]);
+    if (myToken !== loadToken) return;
+
+    function setupLoadedScene(vp, gltf, mKey) {
+      const root = gltf.scene;
+      vp.rootGroup = new THREE.Group();
+      vp.rootGroup.add(root);
+      vp.scene.add(vp.rootGroup);
+      vp.methodKey = mKey;
+      if (gltf.animations && gltf.animations.length > 0) {
+        vp.mixer = new THREE.AnimationMixer(root);
+        gltf.animations.forEach(clip => {
+          vp.mixer.clipAction(clip).play();
+        });
+        vp.mixer.setTime(0);
+      }
+      root.updateMatrixWorld(true);
+      return root;
+    }
+
+    const rootL = setupLoadedScene(vpL, gltfL, leftMethodKey);
+    const rootC = setupLoadedScene(vpC, gltfC, centerMethodKey);
+    const rootR = setupLoadedScene(vpR, gltfR, rightMethodKey);
+
+    const box = new THREE.Box3().setFromObject(rootR);
+    if (box.isEmpty()) box.setFromObject(rootL);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 1e-4);
+    const normScale = 1.75 / maxDim;
+
+    [rootL, rootC, rootR].forEach(r => {
+      r.scale.setScalar(normScale);
+      r.position.set(-center.x * normScale, -center.y * normScale, -center.z * normScale);
+    });
+
+    bindViewportToSubmeshRulesAndFilter(rootL, leftMethodKey);
+    bindViewportToSubmeshRulesAndFilter(rootC, centerMethodKey);
+    bindViewportToSubmeshRulesAndFilter(rootR, rightMethodKey);
+    runLiveFilterOnAllActiveSubmeshes();
+
+    allViewports.forEach(vp => applyShadingToViewport(vp));
+    seekAllToFrame(currentFrame);
+
+    statusL.style.display = 'none';
+    statusC.style.display = 'none';
+    statusR.style.display = 'none';
+  } catch (err) {
+    console.error('GLB Load error:', err);
+    [statusL, statusC, statusR].forEach(st => {
+      st.textContent = 'Failed to load GLB: ' + err.message;
+    });
+  }
+}
+
+async function selectModel(modelName) {
+  const rec = models.find(m => m.model === modelName);
+  if (!rec) return;
+  activeModelName = modelName;
+  activeModelRec = rec;
+
+  document.querySelectorAll('.model-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-model') === modelName);
+  });
+
+  populateMethodSelectDropdowns(rec);
+  renderMethodComparisonTable(rec);
+  renderSubmeshTableOnly(rec);
+
+  await prepareOursFilterAssets(rec);
+  await reloadAllThreeViewports(rec);
+}
+
+function fmtNum(v, d = 2) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '-';
+  return Number(v).toFixed(d);
+}
+
+function renderMethodComparisonTable(rec) {
+  document.getElementById('hdr-method-comp-section').textContent =
+    `⚖️ ${rec.model} — Multi-Method Quantitative Comparison (Equal Bone & Face Quota)`;
+  const mount = document.getElementById('table-method-comp-mount');
+  const methodsMap = rec.methods || {};
+  const keys = Object.keys(methodsMap);
+
+  const rowsHtml = keys.map(k => {
+    const m = methodsMap[k];
+    const st = m.stats || {};
+    const g = m.geom_metrics || {};
+    const r = m.render_metrics || {};
+    const isOurs = (k === 'ours');
+    const isTarget = (k === 'target');
+    const rowStyle = isOurs ? 'background:#f0f9ff;font-weight:600;' : '';
+    return `<tr class="hoverable-row" style="${rowStyle}">
+      <td onclick="window.setViewportMethod('center', '${k}')"><b>${m.label}</b></td>
+      <td>
+        <button class="mini-vp-btn" onclick="window.setViewportMethod('left', '${k}')">→Left</button>
+        <button class="mini-vp-btn" onclick="window.setViewportMethod('center', '${k}')">→Center</button>
+        <button class="mini-vp-btn" onclick="window.setViewportMethod('right', '${k}')">→Right</button>
+      </td>
+      <td><code>${m.pipeline_tag || k}</code></td>
+      <td class="num-col">${(st.vertices||0).toLocaleString()}</td>
+      <td class="num-col">${(st.faces||0).toLocaleString()}</td>
+      <td class="num-col">${st.bones||0}</td>
+      <td class="num-col">${st.loose_parts !== undefined && st.loose_parts !== null ? st.loose_parts : '-'}</td>
+      <td class="num-col ${isOurs ? 'best-cell' : ''}">${isTarget ? 'N/A (GT)' : fmtNum(g.l2_err, 4)}</td>
+      <td class="num-col ${isOurs ? 'best-cell' : ''}">${isTarget ? 'N/A (GT)' : fmtNum(g.hausdorff_mean, 4)}</td>
+      <td class="num-col ${isOurs ? 'best-cell' : ''}">${isTarget ? 'N/A (GT)' : fmtNum(g.hausdorff_max, 4)}</td>
+      <td class="num-col">${isTarget ? 'N/A (GT)' : fmtNum(g.arap_ratio, 4)}</td>
+      <td class="num-col ${isOurs ? 'best-cell' : ''}">${r.stage02_test_psnr ? fmtNum(r.stage02_test_psnr, 2) + ' dB' : '-'}</td>
+      <td class="num-col ${isOurs ? 'best-cell' : ''}">${r.stage02_test_lpips ? fmtNum(r.stage02_test_lpips, 4) : '-'}</td>
+    </tr>`;
+  }).join('');
+
+  mount.innerHTML = `<table>
+    <thead>
+      <tr>
+        <th>Method Variant</th>
+        <th>Send to Viewport</th>
+        <th>Pipeline</th>
+        <th class="num-col">Vertices (V)</th>
+        <th class="num-col">Triangles (F)</th>
+        <th class="num-col">Bones (B)</th>
+        <th class="num-col">Loose Parts ↓</th>
+        <th class="num-col">3D L2 Error ↓</th>
+        <th class="num-col">Hausdorff Mean ↓</th>
+        <th class="num-col">Hausdorff Max ↓</th>
+        <th class="num-col">ARAP Ratio ↓</th>
+        <th class="num-col">Step 05 Test PSNR ↑</th>
+        <th class="num-col">Step 05 Test LPIPS ↓</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>`;
+}
+
+function renderModelTabsAndAllModelsTable() {
+  const tabsMount = document.getElementById('model-tabs-mount');
+  tabsMount.innerHTML = models.map(m => {
+    const badge = m.status === 'READY' ? '✅' : '⏳';
+    const cls = m.model === activeModelName ? 'model-tab-btn active' : 'model-tab-btn';
+    return `<button class="${cls}" data-model="${m.model}">${badge} ${m.model}</button>`;
+  }).join('');
+
+  tabsMount.querySelectorAll('.model-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => selectModel(btn.getAttribute('data-model')));
+  });
+
+  const tblMount = document.getElementById('table-all-models-mount');
+  const rowsHtml = models.map(m => {
+    const mm = m.methods || {};
+    const t = (mm.target && mm.target.stats) || m.target_stats || {};
+    const o = (mm.ours && mm.ours.stats) || m.ours_stats || {};
+    const oG = (mm.ours && mm.ours.geom_metrics) || {};
+    const qemG = (mm.ue_qem_cons && mm.ue_qem_cons.geom_metrics) || {};
+    const remG = (mm.ue_remesh_cons && mm.ue_remesh_cons.geom_metrics) || {};
+    const mt = m.metrics || {};
+    return `<tr class="hoverable-row" onclick="window.selectDiffRenderModel('${m.model}')">
+      <td><b>${m.model}</b></td>
+      <td class="num-col">${(t.vertices||0).toLocaleString()} / ${(t.faces||0).toLocaleString()}</td>
+      <td class="num-col"><b>${(o.vertices||0).toLocaleString()} / ${(o.faces||0).toLocaleString()}</b></td>
+      <td class="num-col">${t.bones||0} → <b>${o.bones||0}</b></td>
+      <td class="num-col best-cell">${fmtNum(oG.hausdorff_mean, 4)}</td>
+      <td class="num-col">${fmtNum(qemG.hausdorff_mean, 4)}</td>
+      <td class="num-col">${fmtNum(remG.hausdorff_mean, 4)}</td>
+      <td class="num-col best-cell">${fmtNum(oG.l2_err, 4)}</td>
+      <td class="num-col">${fmtNum(qemG.l2_err, 4)}</td>
+      <td class="num-col">${fmtNum(remG.l2_err, 4)}</td>
+      <td class="num-col best-cell">${fmtNum(mt.stage02_test_psnr, 2)} dB</td>
+      <td class="num-col best-cell">${fmtNum(mt.stage02_test_lpips, 4)}</td>
+    </tr>`;
+  }).join('');
+
+  tblMount.innerHTML = `<table>
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th class="num-col">Target V / F</th>
+        <th class="num-col">Low-Poly V / F</th>
+        <th class="num-col">Bones (GT → Low)</th>
+        <th class="num-col">Ours HausMean ↓</th>
+        <th class="num-col">UE-qem-lod HausMean ↓</th>
+        <th class="num-col">UE-remesh-lod HausMean ↓</th>
+        <th class="num-col">Ours L2 ↓</th>
+        <th class="num-col">UE-qem-lod L2 ↓</th>
+        <th class="num-col">UE-remesh-lod L2 ↓</th>
+        <th class="num-col">Ours Test PSNR ↑</th>
+        <th class="num-col">Ours Test LPIPS ↓</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>`;
+}
+
+function renderSubmeshTableOnly(rec) {
+  document.getElementById('hdr-submesh-section').textContent =
+    `🧩 ${rec.model} — Live Filtered 2D Submesh Textures (${(rec.submesh_metrics||[]).length} Submeshes)`;
+  const subMount = document.getElementById('table-submesh-mount');
+  const subs = rec.submesh_metrics || [];
+  if (!subs.length) {
+    subMount.innerHTML = '<div style="padding:14px;color:#64748b;">Waiting for training completion...</div>';
+    return;
+  }
+  subMount.innerHTML = `<table>
+    <thead>
+      <tr>
+        <th>Submesh Name</th>
+        <th>Opt BSDF</th>
+        <th>Ref BSDF</th>
+        <th class="num-col">Vertices</th>
+        <th class="num-col">Triangles</th>
+        <th>Body Alpha Mask</th>
+        <th class="num-col">Stage 01 Test PSNR (dB) ↑</th>
+        <th class="num-col">Stage 02 Test PSNR (dB) ↑</th>
+        <th class="num-col">Stage 02 Test LPIPS ↓</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${subs.map(s => `<tr>
+        <td><b>${s.submesh}</b></td>
+        <td><code>${s.opt_bsdf}</code></td>
+        <td><code>${s.ref_bsdf}</code></td>
+        <td class="num-col">${(s.vertices||0).toLocaleString()}</td>
+        <td class="num-col">${(s.faces||0).toLocaleString()}</td>
+        <td>${s.body_mask_applied ? '<span class="badge badge-ready">YES (Body Cutout Mask)</span>' : '-'}</td>
+        <td class="num-col">${fmtNum(s.stage01_test_psnr, 2)}</td>
+        <td class="num-col best-cell">${fmtNum(s.stage02_test_psnr, 2)}</td>
+        <td class="num-col">${fmtNum(s.stage02_test_lpips, 4)}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+window.selectDiffRenderModel = selectModel;
+window.setViewportMethod = async (slot, mKey) => {
+  if (!activeModelRec || !activeModelRec.methods || !activeModelRec.methods[mKey]) return;
+  if (slot === 'left') leftMethodKey = mKey;
+  else if (slot === 'center') centerMethodKey = mKey;
+  else rightMethodKey = mKey;
+  populateMethodSelectDropdowns(activeModelRec);
+  await reloadAllThreeViewports(activeModelRec);
+};
+
+document.getElementById('sel-left-method').addEventListener('change', async (e) => {
+  leftMethodKey = e.target.value;
+  populateMethodSelectDropdowns(activeModelRec);
+  await reloadAllThreeViewports(activeModelRec);
+});
+
+document.getElementById('sel-center-method').addEventListener('change', async (e) => {
+  centerMethodKey = e.target.value;
+  populateMethodSelectDropdowns(activeModelRec);
+  await reloadAllThreeViewports(activeModelRec);
+});
+
+document.getElementById('sel-right-method').addEventListener('change', async (e) => {
+  rightMethodKey = e.target.value;
+  populateMethodSelectDropdowns(activeModelRec);
+  await reloadAllThreeViewports(activeModelRec);
+});
+
+document.querySelectorAll('.preset-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const parts = (btn.getAttribute('data-triple') || 'target|ue_qem_cons|ours').split('|');
+    if (parts.length === 3 && activeModelRec) {
+      const mm = activeModelRec.methods || {};
+      leftMethodKey = mm[parts[0]] ? parts[0] : 'target';
+      centerMethodKey = mm[parts[1]] ? parts[1] : (mm.ue_qem_cons ? 'ue_qem_cons' : 'target');
+      rightMethodKey = mm[parts[2]] ? parts[2] : 'ours';
+      populateMethodSelectDropdowns(activeModelRec);
+      await reloadAllThreeViewports(activeModelRec);
+    }
+  });
+});
+
+document.getElementById('sel-tex-source').addEventListener('change', (e) => {
+  filterCfg.texSource = e.target.value;
+  runLiveFilterOnAllActiveSubmeshes();
+});
+
+document.getElementById('sel-filter-algo').addEventListener('change', (e) => {
+  filterCfg.algo = e.target.value;
+  runLiveFilterOnAllActiveSubmeshes();
+});
+
+document.getElementById('chk-show-defects').addEventListener('change', (e) => {
+  filterCfg.showDefects = Boolean(e.target.checked);
+  runLiveFilterOnAllActiveSubmeshes();
+});
+
+function bindRangeControl(id, valId, key, suffix = '') {
+  const el = document.getElementById(id);
+  const vEl = document.getElementById(valId);
+  el.addEventListener('input', () => {
+    filterCfg[key] = Number(el.value);
+    vEl.textContent = el.value + suffix;
+    runLiveFilterOnAllActiveSubmeshes();
+  });
+}
+bindRangeControl('rng-hole-alpha', 'val-hole-alpha', 'holeAlpha', '');
+bindRangeControl('rng-ring-px', 'val-ring-px', 'ringPx', ' px');
+bindRangeControl('rng-max-area', 'val-max-area', 'maxArea', '');
+bindRangeControl('rng-spike-thr', 'val-spike-thr', 'spikeThr', '');
+
+document.getElementById('btn-reset-filter').addEventListener('click', () => {
+  filterCfg.texSource = 'stage1';
+  filterCfg.algo = 'raw';
+  filterCfg.holeAlpha = 128;
+  filterCfg.ringPx = 1;
+  filterCfg.maxArea = 1200;
+  filterCfg.spikeThr = 42;
+  filterCfg.showDefects = false;
+  document.getElementById('sel-tex-source').value = 'stage1';
+  document.getElementById('sel-filter-algo').value = 'raw';
+  document.getElementById('chk-show-defects').checked = false;
+  document.getElementById('rng-hole-alpha').value = '128';
+  document.getElementById('val-hole-alpha').textContent = '128';
+  document.getElementById('rng-ring-px').value = '1';
+  document.getElementById('val-ring-px').textContent = '1 px';
+  document.getElementById('rng-max-area').value = '1200';
+  document.getElementById('val-max-area').textContent = '1200';
+  document.getElementById('rng-spike-thr').value = '42';
+  document.getElementById('val-spike-thr').textContent = '42';
+  runLiveFilterOnAllActiveSubmeshes();
+});
+
+document.getElementById('sel-shading-mode').addEventListener('change', (e) => {
+  shadingMode = e.target.value;
+  allViewports.forEach(vp => applyShadingToViewport(vp));
+});
+
+document.getElementById('sel-left-sampling').addEventListener('change', (e) => {
+  leftSamplingMode = e.target.value;
+  applyShadingToViewport(vpL);
+});
+
+document.getElementById('sel-center-sampling').addEventListener('change', (e) => {
+  centerSamplingMode = e.target.value;
+  applyShadingToViewport(vpC);
+});
+
+document.getElementById('sel-right-sampling').addEventListener('change', (e) => {
+  rightSamplingMode = e.target.value;
+  applyShadingToViewport(vpR);
+});
+
+document.getElementById('sel-alpha-cull').addEventListener('change', (e) => {
+  alphaCullMode = e.target.value;
+  allViewports.forEach(vp => applyShadingToViewport(vp));
+});
+
+document.getElementById('sel-bg-mode').addEventListener('change', (e) => {
+  const cls = e.target.value;
+  [wrapL, wrapC, wrapR].forEach(w => {
+    w.classList.remove('bg-checker', 'bg-dark', 'bg-white');
+    w.classList.add(cls);
+  });
+});
+
+document.querySelectorAll('[data-cam]').forEach(btn => {
+  btn.addEventListener('click', () => setCameraPreset(btn.getAttribute('data-cam')));
+});
+
+const btnPlay = document.getElementById('btn-play-toggle');
+btnPlay.addEventListener('click', () => {
+  isPlaying = !isPlaying;
+  btnPlay.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+});
+
+document.getElementById('btn-prev-frame').addEventListener('click', () => {
+  isPlaying = false;
+  btnPlay.textContent = '▶ Play';
+  seekAllToFrame((currentFrame - 1 + TOTAL_FRAMES) % TOTAL_FRAMES);
+});
+
+document.getElementById('btn-next-frame').addEventListener('click', () => {
+  isPlaying = false;
+  btnPlay.textContent = '▶ Play';
+  seekAllToFrame((currentFrame + 1) % TOTAL_FRAMES);
+});
+
+document.getElementById('slider-frame').addEventListener('input', (e) => {
+  isPlaying = false;
+  btnPlay.textContent = '▶ Play';
+  seekAllToFrame(Number(e.target.value));
+});
+
+document.querySelectorAll('[data-jump-frame]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    isPlaying = false;
+    btnPlay.textContent = '▶ Play';
+    seekAllToFrame(Number(btn.getAttribute('data-jump-frame')));
+  });
+});
+
+document.getElementById('sel-speed').addEventListener('change', (e) => {
+  playbackSpeed = Number(e.target.value) || 1.0;
+});
+
+
+function formatViewportPlainStatsText(rec, methodKey) {
+  const methodsMap = rec.methods || {};
+  const mObj = methodsMap[methodKey] || {};
+  const tSt = (methodsMap.target && methodsMap.target.stats) || rec.target_stats || {};
+  const st = mObj.stats || {};
+  const fRed = (tSt.faces > 0 && methodKey !== 'target')
+    ? ` (-${((1.0 - (st.faces || 0) / tSt.faces) * 100.0).toFixed(1)}%)`
+    : '';
+  const looseStr = (st.loose_parts !== undefined && st.loose_parts !== null)
+    ? ` | Loose: ${st.loose_parts}`
+    : '';
+  return `V: ${(st.vertices||0).toLocaleString()} | F: ${(st.faces||0).toLocaleString()}${fRed} | Bones: ${st.bones||0}${looseStr}`;
+}
+
+function exportStitchedTransparentPng() {
+  if (!activeModelRec) return;
+  const hideGrid = Boolean(document.getElementById('chk-export-hide-grid')?.checked);
+  const addLabels = Boolean(document.getElementById('chk-export-labels')?.checked);
+  const labelColor = document.getElementById('sel-export-label-color')?.value || '#0f172a';
+  const scaleMult = Math.max(1, Math.min(3, Number(document.getElementById('sel-export-scale')?.value || 2)));
+
+  const methodsMap = activeModelRec.methods || {};
+  const mKeys = [leftMethodKey, centerMethodKey, rightMethodKey];
+  const origGridVis = allViewports.map(vp => vp.grid ? vp.grid.visible : true);
+  const origSizes = allViewports.map(vp => ({
+    w: vp.container.clientWidth,
+    h: Math.max(1, vp.container.clientHeight),
+    pr: vp.renderer.getPixelRatio(),
+  }));
+
+  try {
+    allViewports.forEach((vp, i) => {
+      if (vp.grid && hideGrid) vp.grid.visible = false;
+      vp.renderer.setClearColor(0x000000, 0);
+      vp.renderer.setPixelRatio(scaleMult);
+      vp.renderer.setSize(origSizes[i].w, origSizes[i].h, false);
+      vp.renderer.render(vp.scene, vp.camera);
+    });
+
+    const canvases = allViewports.map(vp => vp.renderer.domElement);
+    const w0 = canvases[0].width, h0 = canvases[0].height;
+    const w1 = canvases[1].width, h1 = canvases[1].height;
+    const w2 = canvases[2].width, h2 = canvases[2].height;
+    const maxCanvasH = Math.max(h0, h1, h2);
+    const footerH = addLabels ? Math.round(58 * scaleMult) : 0;
+    const totalW = w0 + w1 + w2;
+    const totalH = maxCanvasH + footerH;
+
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = totalW;
+    outCanvas.height = totalH;
+    const ctx = outCanvas.getContext('2d');
+    ctx.clearRect(0, 0, totalW, totalH);
+
+    const xOffsets = [0, w0, w0 + w1];
+    const widths = [w0, w1, w2];
+
+    canvases.forEach((c, idx) => {
+      ctx.drawImage(c, xOffsets[idx], 0);
+    });
+
+    if (addLabels) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = labelColor;
+
+      const titleY = maxCanvasH + Math.round(18 * scaleMult);
+      const statsY = maxCanvasH + Math.round(41 * scaleMult);
+
+      mKeys.forEach((k, idx) => {
+        const mObj = methodsMap[k] || {};
+        const centerX = xOffsets[idx] + widths[idx] / 2;
+        const titleText = String(mObj.label || mObj.short_label || k).replace(/^★\s*/, '');
+        const statsText = formatViewportPlainStatsText(activeModelRec, k);
+
+        ctx.font = `bold ${Math.round(16 * scaleMult)}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
+        ctx.fillText(titleText, centerX, titleY);
+
+        ctx.font = `600 ${Math.round(13.5 * scaleMult)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.fillText(statsText, centerX, statsY);
+      });
+    }
+
+    outCanvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const fStr = String(currentFrame).padStart(3, '0');
+      a.href = url;
+      a.download = `${activeModelName}_${leftMethodKey}_vs_${centerMethodKey}_vs_${rightMethodKey}_f${fStr}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    }, 'image/png');
+  } finally {
+    allViewports.forEach((vp, i) => {
+      if (vp.grid) vp.grid.visible = origGridVis[i];
+      vp.renderer.setPixelRatio(origSizes[i].pr);
+      vp.renderer.setSize(origSizes[i].w, origSizes[i].h);
+      vp.renderer.render(vp.scene, vp.camera);
+    });
+  }
+}
+
+document.getElementById('btn-export-stitched-png')?.addEventListener('click', exportStitchedTransparentPng);
+
+window.addEventListener('resize', () => {
+  allViewports.forEach(vp => {
+    const w = vp.container.clientWidth;
+    const h = Math.max(1, vp.container.clientHeight);
+    vp.camera.aspect = w / h;
+    vp.camera.updateProjectionMatrix();
+    vp.renderer.setSize(w, h);
+  });
+});
+
+function animate(nowMs) {
+  requestAnimationFrame(animate);
+  const dtSec = Math.min(0.1, Math.max(0.0, (nowMs - lastTimeMs) / 1000.0));
+  lastTimeMs = nowMs;
+
+  if (isPlaying) {
+    frameAccumulator += dtSec * FPS * playbackSpeed;
+    if (frameAccumulator >= 1.0) {
+      const step = Math.floor(frameAccumulator);
+      frameAccumulator -= step;
+      seekAllToFrame((currentFrame + step) % TOTAL_FRAMES);
+    }
+  }
+
+  vpL.renderer.render(vpL.scene, vpL.camera);
+  vpC.renderer.render(vpC.scene, vpC.camera);
+  vpR.renderer.render(vpR.scene, vpR.camera);
+}
+
+renderModelTabsAndAllModelsTable();
+selectModel(activeModelName);
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
