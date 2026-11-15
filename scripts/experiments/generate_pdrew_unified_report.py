@@ -284,6 +284,12 @@ def build_unified_suite_hub_index(output_dir: Path, total_renders: int) -> Path:
             "#1C328A",
         ),
         (
+            "🎨 Step 05 Differentiable Rendering: Target vs. Ours 3D Interactive Compare",
+            "Diff_Render_Report.html",
+            "Side-by-side synchronized 3D WebGL comparison of Ground Truth High-Poly Target vs. Ours (QEM + SSDR + Diff-Render) with 200-frame timeline freeze, Pure Albedo Unlit shading, and per-submesh PSNR/LPIPS.",
+            "#0284c7",
+        ),
+        (
             "🧪 4-Fold Cross-Validation & Paired t-Test",
             "CV_Report.html",
             "60-case held-out unseen test frame evaluation comparing ssdr12, ssdr14, and ssdr14v ★ with Holm-Bonferroni p-values, Cohen's dz, and Win-Rate Pareto.",
@@ -469,6 +475,10 @@ def generate_unified_suite(
         qa_cmd.append("--ui-only")
     qa_proc = subprocess.run(qa_cmd, check=True, capture_output=True, text=True)
     qa_idx = json.loads((output_dir / "contact_sheet_index.json").read_text(encoding="utf-8"))
+
+    # 4b. Step 05 Differentiable Rendering 3D Interactive Report (Diff_Render_Report.html)
+    from generate_pdrew_diff_render_report import generate_diff_render_report
+    dr_res = generate_diff_render_report(pool_dir=DEFAULT_POOL, output_dir=output_dir, export_glb=True, overwrite_glb=False)
 
     # 5. Rebuild unified Suite Hub index.html (since build_contact_sheets wrote index.html, overwrite index.html with Suite Hub!)
     hub_index = build_unified_suite_hub_index(output_dir, total_renders=qa_idx["total_thumbnails"])

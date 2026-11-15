@@ -27,6 +27,7 @@ SHARED_TPL_DIR = HERE / "report_templates" / "shared"
 SUITE_PAGES = [
     ("index.html", "🏠 Suite Hub"),
     ("UE_Comparison_Report.html", "⚔️ UE5 Equal-Bone-Budget (Step 02/03/04)"),
+    ("Diff_Render_Report.html", "🎨 Diff-Render 3D Compare (Step 05)"),
     ("CV_Report.html", "🧪 4-Fold CV & Paired t-Test"),
     ("Delta_Report.html", "📈 OFAT: δ (VDB Offset)"),
     ("Gamma_Report.html", "📈 OFAT: α/β/γ (Weights)"),
