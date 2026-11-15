@@ -267,7 +267,9 @@ def main() -> None:
         cand_model_dir = Path(args.dataset_root).expanduser().resolve(strict=False) / model_name
         if cand_model_dir.is_dir():
             dataset_model_dir = cand_model_dir
-            if (cand_model_dir / "target").is_dir():
+            if (cand_model_dir / "target_200").is_dir():
+                textured_source_dir = cand_model_dir / "target_200"
+            elif (cand_model_dir / "target").is_dir():
                 textured_source_dir = cand_model_dir / "target"
     else:
         # Infer model_name if input_tree has a target_export_summary or parent model name
@@ -277,7 +279,9 @@ def main() -> None:
                 cand_model_dir = Path(args.dataset_root).expanduser().resolve(strict=False) / model_name
                 if cand_model_dir.is_dir():
                     dataset_model_dir = cand_model_dir
-                    if (cand_model_dir / "target").is_dir():
+                    if (cand_model_dir / "target_200").is_dir():
+                        textured_source_dir = cand_model_dir / "target_200"
+                    elif (cand_model_dir / "target").is_dir():
                         textured_source_dir = cand_model_dir / "target"
                 break
 
